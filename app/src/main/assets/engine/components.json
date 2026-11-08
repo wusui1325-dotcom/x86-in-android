@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-proot-v1.3-electron",
+  "runtimeId": "wine-gpustack-v0.1",
   "approxDownloadBytes": 450000000,
   "components": [
     {
@@ -57,5 +57,7 @@
       "sha256": "88b3f74e7e6173620b0a3be5adbbe7e59c6bcd484a597f9876fc78fe9cea2b64",
       "extract": "rootfs"
     }
-  ]
+  ],
+  "graphicsDefault": "gpu",
+  "notes": "GpuStack default; x11/input overlays optional SoftLegacy only"
 }

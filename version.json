@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.6",
-  "versionCode": 7,
-  "notes": "0.1.6: Electron／GUI 庫 overlay＋wine-mono/gecko；啟動自動補齊；軟渲／DXVK 文件化"
+  "versionName": "0.1.7",
+  "versionCode": 8,
+  "notes": "0.1.7: 定案 A — GpuStack 預設（Turnip／DXVK）；砍預設 Xvfb 軟渲；架構＋文件＋可編譯"
 }

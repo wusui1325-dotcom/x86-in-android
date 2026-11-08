@@ -39,6 +39,8 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
+import com.wusper.x86.engine.GpuStack
+import com.wusper.x86.engine.GraphicsBackend
 import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.graphics.SurfaceFrameBridge
 import com.wusper.x86.graphics.X11InputBridge
@@ -102,14 +104,12 @@ class SessionActivity : ComponentActivity() {
                     logFile = plan.logFile
                     logText += "目標：${plan.targetFile.absolutePath}\n"
                     logText += "類型：${plan.kindMessage}\n"
-                    logText += "模式：${plan.mode}\n"
+                    logText += "模式：${plan.mode}／圖形：${plan.graphicsBackend}\n"
                     if (plan.needsRuntimeInstall || (plan.mode == LaunchPipeline.Mode.WineProot && !ComponentInstaller.isReady(this@SessionActivity))) {
                         status = "安裝運行時"
-                        logText += "首次 PE 啟動：下載 Wine／Ubuntu rootfs／glibc Box64（約 160MB+）…\n"
+                        logText += "首次 PE：下載 Wine／glibc rootfs／Box64…\n"
                         val install = withContext(Dispatchers.IO) {
-                            ComponentInstaller.install(this@SessionActivity) { p ->
-                                // 進度回寫在 IO；簡化：只記 message
-                            }
+                            ComponentInstaller.install(this@SessionActivity) { }
                         }
                         if (install.isFailure) {
                             status = "安裝失敗"
@@ -117,28 +117,59 @@ class SessionActivity : ComponentActivity() {
                             EngineForegroundService.stop(this@SessionActivity)
                             return@LaunchedEffect
                         }
-                        logText += "運行時就緒，重建啟動計畫…\n"
+                        logText += "Wine 運行時就緒，重建計畫…\n"
                         plan = LaunchPipeline.buildWineProotPlan(
                             this@SessionActivity, ws, plan.targetFile, plan.logFile,
                         )
-                        logText += "模式：${plan.mode}\n${plan.kindMessage}\n"
+                        logText += "模式：${plan.mode}／${plan.graphicsBackend}\n${plan.kindMessage}\n"
                     }
-                    if (plan.mode == LaunchPipeline.Mode.WineProot && !plan.needsRuntimeInstall) {
+                    // GpuStack：先備料 Turnip／DXVK（Present 橋未就緒也下）
+                    if (plan.needsGpuStackInstall ||
+                        (plan.graphicsBackend == GraphicsBackend.GpuStack && !GpuStack.componentsInstalled(this@SessionActivity))
+                    ) {
+                        status = "安裝 GPU 棧"
+                        logText += "下載 Turnip＋DXVK（GpuStack 組件）…\n"
+                        val gpu = withContext(Dispatchers.IO) {
+                            GpuStack.installComponents(this@SessionActivity) { msg ->
+                                // IO 執行緒；最終以 statusMessage 為準
+                            }
+                        }
+                        if (gpu.isFailure) {
+                            logText += "GPU 組件下載失敗：${gpu.exceptionOrNull()?.message}\n（可稍後重試）\n"
+                        } else {
+                            logText += "GPU 組件：${GpuStack.statusMessage(this@SessionActivity)}\n"
+                            plan = LaunchPipeline.buildWineProotPlan(
+                                this@SessionActivity, ws, plan.targetFile, plan.logFile,
+                            )
+                            logText += "重建：${plan.mode}\n${plan.kindMessage}\n"
+                        }
+                    }
+                    // SoftLegacy 才接 xdotool／XWD；GpuStack 等 Present 橋
+                    if (plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.SoftLegacy &&
+                        !plan.needsRuntimeInstall
+                    ) {
                         val input = X11InputBridge(ws.dataDir)
                         input.prepareFifo()
-                        // 客體 agent fallback 腳本
                         val agentCopy = java.io.File(ws.dataDir, "x11-input-agent.sh")
                         this@SessionActivity.assets.open("engine/x11-input-agent.sh").use { inp ->
                             agentCopy.outputStream().use { out -> inp.copyTo(out) }
                         }
                         agentCopy.setExecutable(true, false)
                         inputBridgeRef.set(input)
-                        logText += "輸入橋：cmd佇列 ${java.io.File(ws.dataDir, "x11input.cmd").absolutePath}\n"
+                        logText += "【SoftLegacy】輸入橋 xdotool\n"
                     }
                     val result = LaunchPipeline.start(plan)
-                    status = if (result.ok) "執行中 pid=${result.pid}" else "失敗"
+                    status = when {
+                        result.ok -> "執行中 pid=${result.pid}"
+                        plan.mode == LaunchPipeline.Mode.WineGpuPending -> "GpuStack 待 Present"
+                        else -> "失敗"
+                    }
                     logText += result.message + "\n"
-                    if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot) {
+                    if (result.ok &&
+                        plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.SoftLegacy
+                    ) {
                         val fbDir = java.io.File(ws.dataDir, "xfb").also { it.mkdirs() }
                         var waited = 0
                         while (surfaceHolderRef.get() == null && waited < 50) {
@@ -153,8 +184,13 @@ class SessionActivity : ComponentActivity() {
                             )
                             frameBridge = bridge
                             bridge.start()
-                            logText += "圖形橋：Xvfb fbdir → Surface；觸控→xdotool\n"
+                            logText += "【SoftLegacy】Xvfb XWD → Surface（非產品預設）\n"
                         }
+                    }
+                    // GpuStack pending：不輪詢客體進程，停在缺口說明
+                    if (plan.mode == LaunchPipeline.Mode.WineGpuPending || plan.gpuBlocked) {
+                        EngineForegroundService.stop(this@SessionActivity)
+                        return@LaunchedEffect
                     }
                     while (true) {
                         delay(400)

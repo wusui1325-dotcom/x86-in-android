@@ -253,3 +253,11 @@ com.wusper.x86（暫名）
 ### 進度（2026-11-09 ~00:30 HKT）
 
 - 輸入：Surface 觸控→1280×720→xdotool（cmd 佇列）；目標 Codex 可點。
+
+### Boss 定案 A（2026-11-09 ~00:51+ HKT）
+
+- 真 **x86** 主線（Codex 只是例子）；殼留 `com.wusper.x86`。
+- 引擎改 **Winlator／glibc 級 GPU 棧**（Turnip／DXVK／真 Surface）。
+- **砍掉預設** Xvfb→XWD 軟渲；軟渲僅工程 `forceSoftLegacy`。
+- 最短路徑：組件級重用（MIT Turnip、Zlib DXVK）＋自研 Session Surface；不整叉 Winlator。
+- 見 docs/GPU_STACK.md；0.1.7＝架構切換＋文件＋可編譯；Present 橋＝下一缺口。

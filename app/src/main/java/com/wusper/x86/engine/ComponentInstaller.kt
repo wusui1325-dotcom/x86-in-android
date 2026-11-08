@@ -17,6 +17,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * 首次 PE 啟動時下載／解壓 Wine＋glibc rootfs＋glibc Box64。
  * PRoot 本體隨 APK（assets/engine/proot）。
+ * 圖形預設走 GpuStack（Turnip／DXVK）；Xvfb 軟渲非預設。
  */
 object ComponentInstaller {
     private val busy = AtomicBoolean(false)
@@ -50,6 +51,11 @@ object ComponentInstaller {
         File(rootfs, "opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi").exists() ||
             File(rootfs, "opt/wine/share/wine/gecko/wine-gecko-2.47.4-x86_64").isDirectory
 
+    /**
+     * Wine／glibc 基底就緒。
+     * 不再把 Xvfb／xdotool 當硬依賴（GpuStack 預設不走軟渲）；
+     * SoftLegacy 另查 [isSoftLegacyReady]。
+     */
     fun isReady(ctx: Context): Boolean {
         val root = runtimeRoot(ctx)
         val ver = File(root, "VERSION.json")
@@ -59,12 +65,16 @@ object ComponentInstaller {
         val rootfs = File(root, "rootfs")
         val wine = File(rootfs, "opt/wine/bin/wine")
         val box = File(rootfs, "usr/local/bin/box64")
-        val xvfb = File(rootfs, "usr/bin/Xvfb")
-        val xdotool = File(rootfs, "usr/bin/xdotool")
         val proot = File(EngineAssets.engineRoot(ctx), "proot")
-        return wine.exists() && box.exists() && xvfb.exists() && xdotool.exists() &&
+        return wine.exists() && box.exists() &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             (proot.exists() || File(root, "bin/proot").exists())
+    }
+
+    fun isSoftLegacyReady(ctx: Context): Boolean {
+        if (!isReady(ctx)) return false
+        val rootfs = File(runtimeRoot(ctx), "rootfs")
+        return File(rootfs, "usr/bin/Xvfb").exists() && File(rootfs, "usr/bin/xdotool").exists()
     }
 
     fun ensureProot(ctx: Context): File {
@@ -125,19 +135,16 @@ object ComponentInstaller {
             val rootfs = File(root, "rootfs")
             val hasWine = File(rootfs, "opt/wine/bin/wine").exists()
             val hasBox = File(rootfs, "usr/local/bin/box64").exists()
-            val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
-            val hasXdotool = File(rootfs, "usr/bin/xdotool").exists()
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
             val baseOk = hasWine && hasBox
-            // 舊運行時只補缺的 overlay，避免重下整包 rootfs／Wine
+            // GpuStack 預設：不再強制抓 Xvfb／xdotool；僅補 Electron／mono 等
             val needExtras = mutableSetOf<String>()
-            if (!hasXvfb) needExtras += "x11-overlay"
-            if (!hasXdotool) needExtras += "input-overlay"
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
+            // SoftLegacy 工程路徑仍可手動帶 x11／input（manifest 保留）
             val onlyExtras = baseOk && needExtras.isNotEmpty()
-            val stampOnly = baseOk && hasXvfb && hasXdotool && hasElectron && hasAddons
+            val stampOnly = baseOk && hasElectron && hasAddons
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }

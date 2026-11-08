@@ -7,12 +7,17 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * 真啟動管線：
+ * 真啟動管線（Boss 定案 A · 真 x86 主線）：
  * - AArch64 ELF → 直接 exec
- * - x86_64 ELF → Box64（APK 內 ANDROID=1 或 runtime glibc）
- * - PE／.exe → PRoot＋glibc rootfs＋glibc Box64＋Wine（組件首次下載）
+ * - x86_64 ELF → Box64
+ * - PE／.exe → PRoot＋glibc＋Box64＋Wine；圖形預設 [GraphicsBackend.GpuStack]
+ *   （Turnip／DXVK／真 Surface）。Xvfb→XWD 軟渲僅 [forceSoftLegacy]。
  */
 object LaunchPipeline {
+
+    /** 工程保底：強制走 SoftLegacy（Xvfb XWD）。產品預設 false。 */
+    @Volatile
+    var forceSoftLegacy: Boolean = false
 
     data class Plan(
         val argv: List<String>,
@@ -23,14 +28,20 @@ object LaunchPipeline {
         val mode: Mode,
         val targetFile: File,
         val env: List<String> = emptyList(),
-        /** PE 啟動前若為 true，Session 需先跑 ComponentInstaller */
         val needsRuntimeInstall: Boolean = false,
+        /** GpuStack 組件（Turnip／DXVK）可先下，即使 Present 未就緒 */
+        val needsGpuStackInstall: Boolean = false,
+        val graphicsBackend: GraphicsBackend = GraphicsBackend.GpuStack,
+        /** GpuStack 但 Present／組件未齊：不啟動客體，只回報缺口 */
+        val gpuBlocked: Boolean = false,
+        val gapMessage: String = "",
     )
 
     enum class Mode {
         HostExec,
         Box64,
         WineProot,
+        WineGpuPending,
         Unsupported,
     }
 
@@ -145,7 +156,7 @@ object LaunchPipeline {
                 cwd = cwd,
                 logFile = logFile,
                 kind = kind,
-                kindMessage = msg + " · 經 Box64（${box.absolutePath}）· preset=performance",
+                kindMessage = msg + " · 經 Box64（${box.name}）· preset=performance",
                 mode = Mode.Box64,
                 targetFile = local,
                 env = Box64Preset.performance.toList(),
@@ -169,7 +180,6 @@ object LaunchPipeline {
         pe: File,
         logFile: File,
     ): Plan {
-        // 保證工作區內有 app.exe
         val staged = File(ws.exeDir, "app.exe")
         if (pe.absolutePath != staged.absolutePath) {
             pe.copyTo(staged, overwrite = true)
@@ -182,10 +192,12 @@ object LaunchPipeline {
                 cwd = ws.dataDir.absolutePath,
                 logFile = logFile,
                 kind = BinaryKind.Pe,
-                kindMessage = msg + " · 需安裝 Wine／rootfs 運行時（約 160MB+）",
+                kindMessage = msg + " · 需安裝 Wine／glibc rootfs／Box64 運行時",
                 mode = Mode.WineProot,
                 targetFile = staged,
                 needsRuntimeInstall = true,
+                needsGpuStackInstall = !forceSoftLegacy,
+                graphicsBackend = if (forceSoftLegacy) GraphicsBackend.SoftLegacy else GraphicsBackend.GpuStack,
             )
         }
         return buildWineProotPlan(ctx, ws, staged, logFile)
@@ -197,34 +209,66 @@ object LaunchPipeline {
         pe: File,
         logFile: File,
     ): Plan {
+        val backend =
+            if (forceSoftLegacy) GraphicsBackend.SoftLegacy else GraphicsBackend.GpuStack
+
+        if (backend == GraphicsBackend.GpuStack) {
+            val needGpu = !GpuStack.componentsInstalled(ctx)
+            if (!GpuStack.canLaunchGpuSession(ctx)) {
+                val gaps = GpuStack.gaps(ctx).joinToString("\n• ", prefix = "• ")
+                return Plan(
+                    argv = emptyList(),
+                    cwd = ws.dataDir.absolutePath,
+                    logFile = logFile,
+                    kind = BinaryKind.Pe,
+                    kindMessage =
+                        "Windows PE · GpuStack（預設）· ${GpuStack.statusMessage(ctx)}\n" +
+                            "尚未可全螢幕跑 .exe。缺口：\n$gaps\n" +
+                            "（工程保底可設 LaunchPipeline.forceSoftLegacy=true，不建議產品使用）",
+                    mode = Mode.WineGpuPending,
+                    targetFile = pe,
+                    needsRuntimeInstall = false,
+                    needsGpuStackInstall = needGpu,
+                    graphicsBackend = GraphicsBackend.GpuStack,
+                    gpuBlocked = true,
+                    gapMessage = gaps,
+                )
+            }
+        }
+
         val proot = ComponentInstaller.ensureProot(ctx)
         ComponentInstaller.ensureWineLaunchScript(ctx)
         val runtime = ComponentInstaller.runtimeRoot(ctx)
-        val rootfs = File(runtime, "rootfs")
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
         val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
-        val launchSh = File(rootfs, "usr/local/bin/wine-launch.sh")
-        // 若舊運行時無腳本，當場補寫
-        if (!launchSh.exists()) {
-            // 觸發安裝器補腳本：簡易內嵌
-            launchSh.parentFile?.mkdirs()
-        }
+        File(ws.dataDir, "xfb").mkdirs()
         val guestExe = "/mnt/app/app.exe"
-        val fbDir = File(ws.dataDir, "xfb").also { it.mkdirs() }
-        val argv = listOf(
-            proot.absolutePath,
-            "--kill-on-exit",
-            "-r", rootfs.absolutePath,
-            "-b", "/dev",
-            "-b", "/proc",
-            "-b", "${ws.exeDir.absolutePath}:/mnt/app",
-            "-b", "${prefix.absolutePath}:/home/xuser/.wine",
-            "-b", "${ws.dataDir.absolutePath}:/mnt/data",
-            "-w", "/mnt/app",
-            "/bin/sh",
-            "/usr/local/bin/wine-launch.sh",
-            guestExe,
-        )
+
+        val bindGpu = mutableListOf<String>()
+        if (backend == GraphicsBackend.GpuStack && GpuStack.hasTurnip(ctx)) {
+            bindGpu += listOf("-b", "${GpuStack.turnipDir(ctx).absolutePath}:/mnt/gpu/turnip")
+        }
+        if (backend == GraphicsBackend.GpuStack && GpuStack.hasDxvk(ctx)) {
+            bindGpu += listOf("-b", "${GpuStack.dxvkDir(ctx).absolutePath}:/mnt/gpu/dxvk")
+            GpuStack.stageDxvkIntoPrefix(ctx, prefix)
+        }
+
+        val argv = buildList {
+            add(proot.absolutePath)
+            add("--kill-on-exit")
+            add("-r"); add(File(runtime, "rootfs").absolutePath)
+            add("-b"); add("/dev")
+            add("-b"); add("/proc")
+            add("-b"); add("${ws.exeDir.absolutePath}:/mnt/app")
+            add("-b"); add("${prefix.absolutePath}:/home/xuser/.wine")
+            add("-b"); add("${ws.dataDir.absolutePath}:/mnt/data")
+            addAll(bindGpu)
+            add("-w"); add("/mnt/app")
+            add("/bin/sh")
+            add("/usr/local/bin/wine-launch.sh")
+            add(guestExe)
+        }
+
         val env = mutableListOf(
             "PROOT_TMP_DIR=${tmp.absolutePath}",
             "HOME=/home/xuser",
@@ -235,23 +279,45 @@ object LaunchPipeline {
             "WINE_DESKTOP_W=1280",
             "WINE_DESKTOP_H=720",
             "BOX64_PATH=/opt/wine/bin",
-            "LIBGL_ALWAYS_SOFTWARE=1",
         )
         env += Box64Preset.performance.toList()
+
+        val kindMessage: String
+        when (backend) {
+            GraphicsBackend.GpuStack -> {
+                env += GpuStack.guestEnv(ctx, ws.dataDir.absolutePath)
+                kindMessage =
+                    "Windows PE · GpuStack（Turnip／DXVK／真 Surface）· PRoot→Box64→Wine ${pe.name}"
+            }
+            GraphicsBackend.SoftLegacy -> {
+                env += "GRAPHICS_BACKEND=soft"
+                env += "LIBGL_ALWAYS_SOFTWARE=1"
+                env += "GALLIUM_DRIVER=llvmpipe"
+                kindMessage =
+                    "Windows PE · 【工程 SoftLegacy】Xvfb→XWD→Surface · PRoot→Box64→Wine ${pe.name}"
+            }
+        }
+
         return Plan(
             argv = argv,
             cwd = ws.dataDir.absolutePath,
             logFile = logFile,
             kind = BinaryKind.Pe,
-            kindMessage = "Windows PE · Xvfb→XWD→Surface · PRoot→Box64→Wine ${pe.name}",
+            kindMessage = kindMessage,
             mode = Mode.WineProot,
             targetFile = pe,
             env = env,
             needsRuntimeInstall = false,
+            graphicsBackend = backend,
         )
     }
 
     fun start(plan: Plan): Result {
+        if (plan.gpuBlocked || plan.mode == Mode.WineGpuPending) {
+            val text = "GPU_STACK_PENDING:\n${plan.kindMessage}\n"
+            plan.logFile.writeText(text)
+            return Result(false, -1, plan.kindMessage, plan)
+        }
         if (plan.needsRuntimeInstall) {
             plan.logFile.writeText("NEED_RUNTIME: ${plan.kindMessage}\n")
             return Result(false, -1, plan.kindMessage, plan)
@@ -269,7 +335,7 @@ object LaunchPipeline {
             plan.env.toTypedArray().ifEmpty { null },
         )
         return if (rc > 0) {
-            Result(true, rc, "已啟動 pid=$rc（${plan.mode}）\n${plan.kindMessage}", plan)
+            Result(true, rc, "已啟動 pid=$rc（${plan.mode}／${plan.graphicsBackend}）\n${plan.kindMessage}", plan)
         } else {
             Result(false, rc, "啟動失敗 code=$rc（${plan.kindMessage}）", plan)
         }
@@ -296,7 +362,6 @@ object LaunchPipeline {
         val staged = File(ws.exeDir, "app.exe")
         if (staged.exists() && staged.length() > 0) return staged
 
-        // 兼容舊 payload.bin
         val legacy = File(ws.exeDir, "payload.bin")
         if (legacy.exists() && legacy.length() > 0) {
             legacy.copyTo(staged, overwrite = true)

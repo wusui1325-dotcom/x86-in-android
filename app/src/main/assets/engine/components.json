@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.38-box64-wine64k-holefit",
+  "runtimeId": "wine-gpustack-v0.1.40-box64-wine64k-holefit",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.39: hole-fit fix \u2014 no WINEPRELOADRESERVE=100000-1 while probing; stop+cache on first useful mid done"
+  "notes": "0.1.40: hole-fit size-outer prefer largest; FATAL on fail; WINE_LAUNCH_STAMP; clear sticky holefit marker; no 100000-1"
 }

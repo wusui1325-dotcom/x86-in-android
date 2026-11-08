@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.39",
-  "versionCode": 40,
-  "notes": "0.1.39: hole-fit stop-on-first-success; unset WINEPRELOADRESERVE during probe (100000-1 occupied 0x100000 and caused endless scan); cache marker immediately"
+  "versionName": "0.1.40",
+  "versionCode": 41,
+  "notes": "0.1.40: WINE_LAUNCH_STAMP fingerprint; size-outer prefer largest mid; FATAL if hole-fit fails; never treat 0x100000:0x1 as mid OK; bump runtimeId + clear sticky holefit marker on extractBox64/script refresh; unique APK filename"
 }

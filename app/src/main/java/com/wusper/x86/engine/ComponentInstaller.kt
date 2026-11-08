@@ -391,6 +391,18 @@ object ComponentInstaller {
             dest.outputStream().use { output -> input.copyTo(output) }
         }
         ExecBits.force(dest)
+        // 0.1.40: script stamp fingerprint; clear sticky holefit marker when APK script changes
+        val scriptStamp = File(rootfs, "usr/local/bin/.wine-launch-apk-stamp")
+        val want = "0.1.40"
+        val prev = runCatching { scriptStamp.readText().trim() }.getOrDefault("")
+        if (prev != want) {
+            File(rootfs, "usr/local/bin/.box64-wine64k-holefit").delete()
+            android.util.Log.i(
+                "ComponentInstaller",
+                "wine-launch script refresh $prev → $want; cleared .box64-wine64k-holefit",
+            )
+        }
+        scriptStamp.writeText("$want\n")
         File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) ExecBits.force(it) }
         File(rootfs, "usr/bin/xdotool").let { if (it.exists()) ExecBits.force(it) }
         ensureInputAgent(ctx)
@@ -1056,10 +1068,12 @@ object ComponentInstaller {
         } else {
             stampDest.writeText("wine64k-align-0x100000-2026-11-09\n")
         }
+        // 0.1.40: new box64 binary invalidates sticky hole-fit cache
+        File(binDir, ".box64-wine64k-holefit").delete()
         tmp.deleteRecursively()
         android.util.Log.i(
             "ComponentInstaller",
-            "installed glibc box64 wine64k → ${dest.absolutePath} (${dest.length()} bytes) stamp=${stampDest.readText().trim()}",
+            "installed glibc box64 wine64k → ${dest.absolutePath} (${dest.length()} bytes) stamp=${stampDest.readText().trim()}; cleared holefit marker",
         )
     }
 

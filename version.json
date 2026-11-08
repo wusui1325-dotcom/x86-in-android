@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.34",
-  "versionCode": 35,
-  "notes": "0.1.34: Box64 wine prereserve 0x10000 size 0x8000→0x10000 (64KB) fixes Wine11 set_mem_area_state granularity assert (exit 134)"
+  "versionName": "0.1.35",
+  "versionCode": 36,
+  "notes": "0.1.35: fix XZFormatException — wine64k.wcp was raw ustar not xz; re-upload xz + update sha256; requireXzMagic before extract"
 }

@@ -1,3 +1,21 @@
+## 0.1.35 — XZFormatException on wine64k.wcp extract
+
+**Symptom (0.1.34 cover-install / reinstall):** `安裝失敗：Input is not in the XZ format` (`XZFormatException`)
+while pulling `Box64-0.4.4-glibc-wine64k.wcp` after stamp-forced box64 reinstall.
+
+**Root cause:** `extractBox64` → `extractTarXz` requires XZ magic `FD 7zXZ`. The 0.1.34
+runtime asset was uploaded as an **uncompressed ustar** (~30.7 MiB, header name `box64`) that
+already contained the correctly patched binary + stamp. Installer opened it with `XZInputStream` → fail.
+Working `Box64-0.4.4-glibc.wcp` is xz (~3.5 MiB).
+
+**Fix:** Re-upload `runtime-v1/Box64-0.4.4-glibc-wine64k.wcp` as xz-compressed ustar
+(sha256 `2e77cd8c…`, ~3.4 MiB, magic `FD 7zXZ`). APK 0.1.35 updates embedded sha256 +
+`requireXzMagic` guard before extract. Path A / WineProot / GpuStack unchanged.
+
+**Retest:** Cover-install 0.1.35 (or 重裝運行時). Expect box64-glibc re-download ~3.4MB,
+`BOX64_WINE64K_STAMP=…`, `WINE prereserve of 0x10000:0x10000 done`, smoke ok.
+Do **not** reuse 0.1.34 alone after the asset replace — its pinned sha256 is the old raw tar.
+
 ## 0.1.34 — Wine11 `set_mem_area_state` / `granularity_mask` (exit 134)
 
 **Symptom (0.1.33):** `WINELOADER` correct (`x86_64-unix/wine`), then:

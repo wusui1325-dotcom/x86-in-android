@@ -1061,6 +1061,31 @@ object ComponentInstaller {
         )
     }
 
+    /** XZ stream magic: FD 37 7A 58 5A 00 ("\xFD7zXZ\0"). */
+    private fun requireXzMagic(archive: File) {
+        val hdr = ByteArray(6)
+        val n = FileInputStream(archive).use { it.read(hdr) }
+        val ok = n == 6 &&
+            hdr[0] == 0xFD.toByte() &&
+            hdr[1] == '7'.code.toByte() &&
+            hdr[2] == 'z'.code.toByte() &&
+            hdr[3] == 'X'.code.toByte() &&
+            hdr[4] == 'Z'.code.toByte() &&
+            hdr[5] == 0.toByte()
+        if (!ok) {
+            val preview = hdr.take(n.coerceAtLeast(0)).joinToString(" ") { "%02x".format(it) }
+            val looksTar = n >= 5 && hdr[0] == 'b'.code.toByte() // e.g. raw ustar named box64
+            val hint = if (looksTar) {
+                "下載到的是未壓縮 tar（非 .xz）。請更新 App 或重裝運行時拉正確組件。"
+            } else {
+                "下載內容不是 XZ 壓縮檔（可能是 HTML／錯誤頁或損毀檔）。請重試；$USER_HINT_REINSTALL_RUNTIME"
+            }
+            throw IllegalStateException(
+                "組件解壓失敗：Input is not in the XZ format（magic=$preview）。$hint",
+            )
+        }
+    }
+
     private fun extractTarXz(
         archive: File,
         dest: File,
@@ -1068,6 +1093,7 @@ object ComponentInstaller {
         stripPrefix: String = "",
     ) {
         dest.mkdirs()
+        requireXzMagic(archive)
         val strip = stripPrefix.trim().trim('/')
         val stripWithSlash = if (strip.isNotEmpty()) "$strip/" else ""
         FileInputStream(archive).use { fis ->

@@ -106,9 +106,10 @@ object ExitStatusMessages {
                 "請優先點「重裝運行時」（不要只改系統儲存權限）。"
             )
         132 -> (
-            "客體退出碼 132＝SIGILL（Illegal instruction）。常見於 Box64 開啟 AVX 後，" +
-                "Wine／客體庫走 AVX 路徑觸發 dynarec 宿主非法指令。0.1.27+ 已強制 BOX64_AVX=0。" +
-                "請更新 App 後直接重開；若日誌仍見 Illegal instruction，再點「重裝運行時」。"
+            "客體退出碼 132＝SIGILL（Illegal instruction）。0.1.28+ 已強制 " +
+                "BOX64_DYNAREC_NOHOSTEXT=1（dynarec 只用 ASIMD）並關閉 AVX／SSE42／AES。" +
+                "請看日誌是否有 BOX64_SELFTEST／BOX64_FLAGS；若 SELFTEST 即 132，需換 Box64 組件。" +
+                "更新 App 後重開即可（腳本會自動覆寫）；仍失敗再「重裝運行時」。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

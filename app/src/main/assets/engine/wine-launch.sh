@@ -7,6 +7,12 @@ W="${WINE_DESKTOP_W:-1280}"
 H="${WINE_DESKTOP_H:-720}"
 mkdir -p /mnt/data /tmp/.X11-unix /tmp/.sysvshm /tmp/.sound
 
+# 同時寫 session.log（stdout／stderr → nativeExec）與 gpu-stack.log
+log() {
+  echo "$@"
+  echo "$@" >> /mnt/data/gpu-stack.log
+}
+
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
 if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
    [ ! -d /opt/wine/share/wine/mono/wine-mono-10.1.0 ]; then
@@ -141,55 +147,87 @@ do
   if [ -x "$c" ] || [ -f "$c" ]; then BOX64=$c; break; fi
 done
 if [ -z "$BOX64" ]; then
-  echo "FATAL: box64 missing (expected /usr/local/bin/box64 glibc). Reinstall runtime." >> /mnt/data/gpu-stack.log
-  ls -la /usr/local/bin >> /mnt/data/gpu-stack.log 2>&1 || true
+  log "FATAL: box64 missing (expected /usr/local/bin/box64 glibc). Reinstall runtime."
+  ls -la /usr/local/bin 2>&1 | tee -a /mnt/data/gpu-stack.log || true
   exit 127
 fi
-echo "BOX64=$BOX64" >> /mnt/data/gpu-stack.log
+log "BOX64=$BOX64 $(ls -la "$BOX64" 2>&1)"
 chmod +x "$BOX64" 2>/dev/null || true
+
+# 自檢：無參數跑 box64（純 aarch64 路徑）。若此步 SIGILL＝box64 二進位／宿主 CPU 不合。
+log "BOX64_SELFTEST begin"
+set +e
+"$BOX64" >/mnt/data/box64-selftest.out 2>&1
+ST=$?
+set -e
+log "BOX64_SELFTEST exit=$ST"
+head -20 /mnt/data/box64-selftest.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+# exit 132＝SIGILL；非 0／1／255 也值得記。仍繼續試 Wine（有些 build 無參會非 0）
+if [ "$ST" = "132" ]; then
+  log "FATAL: box64 itself SIGILL (exit 132). Host CPU cannot run this Box64 build."
+  exit 132
+fi
 
 WINEBIN=/opt/wine/bin/wine
 if [ ! -x "$WINEBIN" ] && [ ! -f "$WINEBIN" ]; then
-  echo "FATAL: wine missing at $WINEBIN" >> /mnt/data/gpu-stack.log
+  log "FATAL: wine missing at $WINEBIN"
   exit 127
 fi
 
 # Wine amd64 unix libs（ntdll.so）+ Box64 模擬用 x86_64 依賴（libgcc_s 等）
-# 缺 x64lib 時 Box64 wrapped dlopen(ntdll.so) 會失敗：Cannot dlopen("...ntdll.so"/…, 2)
 NTDLL=/opt/wine/lib/wine/x86_64-unix/ntdll.so
 X64LIB_GCC=/usr/lib/box64-x86_64-linux-gnu/libgcc_s.so.1
 if [ ! -f "$NTDLL" ]; then
-  echo "FATAL: wine ntdll.so missing ($NTDLL). Reinstall runtime." >> /mnt/data/gpu-stack.log
-  ls -la /opt/wine/lib/wine/x86_64-unix 2>>/mnt/data/gpu-stack.log || true
+  log "FATAL: wine ntdll.so missing ($NTDLL). Reinstall runtime."
+  ls -la /opt/wine/lib/wine/x86_64-unix 2>&1 | tee -a /mnt/data/gpu-stack.log || true
   exit 127
 fi
 if [ ! -f "$X64LIB_GCC" ]; then
-  echo "FATAL: box64 x64lib missing ($X64LIB_GCC). Reinstall runtime." >> /mnt/data/gpu-stack.log
-  ls -la /usr/lib/box64-x86_64-linux-gnu 2>>/mnt/data/gpu-stack.log || true
+  log "FATAL: box64 x64lib missing ($X64LIB_GCC). Reinstall runtime."
+  ls -la /usr/lib/box64-x86_64-linux-gnu 2>&1 | tee -a /mnt/data/gpu-stack.log || true
   exit 127
 fi
 
-# BOX64_LD_LIBRARY_PATH：搜尋「被模擬的」x86_64 .so（與宿主 aarch64 LD_LIBRARY_PATH 分開）
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 export WINELOADER="${WINELOADER:-$WINEBIN}"
-echo "NTDLL=ok $(ls -la "$NTDLL" 2>&1)" >> /mnt/data/gpu-stack.log
-echo "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)" >> /mnt/data/gpu-stack.log
-echo "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH" >> /mnt/data/gpu-stack.log
+log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
+log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
+log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
 
-# Wine 安全預設：Winlator 關閉 AVX。AVX dynarec／客體 AVX 路徑在部分 SoC 會宿主 SIGILL（exit 132）。
-# LaunchPipeline 也會設 BOX64_AVX=0；此處強制覆蓋，避免舊 env／手動覆寫踩雷。
+# 強制安全預設（覆蓋 Kotlin env 以防漏設／舊值）
+# NOHOSTEXT=1：dynarec 只用 ASIMD，禁止 LSE／FLAGM／AES 等宿主擴展（防 HWCAP 誤報 → SIGILL）
+export BOX64_DYNAREC_NOHOSTEXT=1
+export BOX64_DYNAREC_NATIVEFLAGS=0
 export BOX64_AVX=0
-export BOX64_SSE42="${BOX64_SSE42:-1}"
+export BOX64_SSE42=0
+export BOX64_AES=0
+export BOX64_SHAEXT=0
+export BOX64_PCLMULQDQ=0
 export BOX64_DYNAREC="${BOX64_DYNAREC:-1}"
 export BOX64_DYNAREC_STRONGMEM="${BOX64_DYNAREC_STRONGMEM:-1}"
-export BOX64_DYNAREC_SAFEFLAGS="${BOX64_DYNAREC_SAFEFLAGS:-1}"
-export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-1}"
-export BOX64_DYNAREC_CALLRET="${BOX64_DYNAREC_CALLRET:-1}"
-echo "BOX64_FLAGS AVX=$BOX64_AVX SSE42=$BOX64_SSE42 DYNAREC=$BOX64_DYNAREC STRONGMEM=$BOX64_DYNAREC_STRONGMEM SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK CALLRET=$BOX64_DYNAREC_CALLRET" >> /mnt/data/gpu-stack.log
+export BOX64_DYNAREC_SAFEFLAGS="${BOX64_DYNAREC_SAFEFLAGS:-2}"
+export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-0}"
+export BOX64_DYNAREC_CALLRET="${BOX64_DYNAREC_CALLRET:-0}"
+export BOX64_DYNAREC_FASTNAN="${BOX64_DYNAREC_FASTNAN:-0}"
+export BOX64_DYNAREC_FASTROUND="${BOX64_DYNAREC_FASTROUND:-0}"
+export BOX64_LOG="${BOX64_LOG:-1}"
+export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-1}"
+export BOX64_SHOWBT="${BOX64_SHOWBT:-1}"
+export BOX64_NOBANNER=0
+log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS"
 
+log "WINE_START $WINEBIN explorer /desktop=x86,${W}x${H} $*"
+set +e
 "$BOX64" "$WINEBIN" explorer /desktop=x86,${W}x${H} "$@"
 RC=$?
+set -e
+log "WINE_EXIT=$RC"
+
+if [ "$RC" != "0" ]; then
+  log "--- gpu-stack.log tail ---"
+  tail -40 /mnt/data/gpu-stack.log 2>/dev/null || true
+fi
 
 [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
 [ -n "$XPID" ] && kill $XPID 2>/dev/null || true

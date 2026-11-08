@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.27",
-  "versionCode": 28,
-  "notes": "0.1.27: ntdll 之後 Illegal instruction／exit 132（SIGILL）— Box64Preset／wine-launch 強制 BOX64_AVX=0（對齊 Winlator）；STRONGMEM=1／BIGBLOCK=1；exit 132 繁中說明；runtimeId wine-gpustack-v0.1.27-box64-noavx"
+  "versionName": "0.1.28",
+  "versionCode": 29,
+  "notes": "0.1.28: SIGILL 仍在（AVX=0 無效）— 改 BOX64_DYNAREC_NOHOSTEXT=1（dynarec 只用 ASIMD），客體 AVX/SSE42/AES/SHA/PCLMUL 全關；SAFEFLAGS=2 CALLRET=0；wine-launch stdout 診斷＋BOX64_SELFTEST；session 合併 gpu-stack.log；runtimeId wine-gpustack-v0.1.28-box64-nohostext"
 }

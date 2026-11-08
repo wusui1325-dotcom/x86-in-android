@@ -22,7 +22,7 @@
 | 權限被拒／無法執行 | 舊版曾把 proot 放在 noexec 目錄 | 升級 App；勿依賴「儲存權限」 |
 | libtalloc／CANNOT LINK | 客體環境蓋掉宿主 `LD_LIBRARY_PATH` | 升級 App；必要時重裝運行時 |
 | could not load ntdll.so／Cannot dlopen | 缺 Wine unix `ntdll.so`，或缺 Box64 x64lib（`libgcc_s.so.1`） | 「重裝運行時」（0.1.26+ 會拉 x64lib） |
-| Illegal instruction／exit 132／SIGILL | Box64 開 AVX 後 Wine 走 AVX 路徑，dynarec 宿主非法指令 | 升到 0.1.27+（強制 `BOX64_AVX=0`）後重開；一般**不必**重裝運行時 |
+| Illegal instruction／exit 132／SIGILL | dynarec 依 HWCAP 發射 LSE／FLAGM／AES 等宿主指令（或 AVX） | 升到 **0.1.28+**（`NOHOSTEXT=1`）；看日誌 `BOX64_SELFTEST`／`BOX64_FLAGS`；一般不必重裝運行時 |
 | `/usr/bin/sh` not found | 常為缺 `ld-linux`（PT_INTERP），非真缺 sh | 「重裝運行時」 |
 
 ## 回報

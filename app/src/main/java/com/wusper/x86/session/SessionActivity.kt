@@ -487,7 +487,13 @@ class SessionActivity : ComponentActivity() {
                         val wait = NativeEngine.nativeWaitNonBlocking()
                         val lf = logFile
                         if (lf != null && lf.exists()) {
-                            logText = lf.readText()
+                            val session = lf.readText()
+                            val gpuLog = ws?.dataDir?.let { File(it, "gpu-stack.log") }
+                            logText = if (gpuLog != null && gpuLog.exists()) {
+                                session + "\n--- gpu-stack.log ---\n" + gpuLog.readText()
+                            } else {
+                                session
+                            }
                         }
                         if (wait != 1) {
                             val pid = NativeEngine.nativeRunningPid()

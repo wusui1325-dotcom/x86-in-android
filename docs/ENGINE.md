@@ -99,3 +99,15 @@ ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（12
 
 修復：`Box64Preset.performance` 與 `wine-launch.sh` **強制 `BOX64_AVX=0`**，並略收斂
 `STRONGMEM`／`BIGBLOCK`；啟動時 `ensureWineLaunchScript` 會覆寫腳本，**通常只需更新 APK 重開**。
+
+## Box64 NOHOSTEXT／SIGILL（0.1.28）
+
+0.1.27 僅關 `BOX64_AVX` 仍 SIGILL。根因更可能是 **dynarec 依 getauxval(HWCAP) 發射宿主擴展指令**
+（LSE atomics／FLAGM／AES…）；在 PRoot 或部分 SoC 上若 HWCAP 與實際可執行指令不一致，
+會得到宿主 `Illegal instruction`（exit 132），且錯誤出現在 ntdll 可載入之後。
+
+修復：
+- `BOX64_DYNAREC_NOHOSTEXT=1`（只用 ASIMD）
+- 客體 ISA 廣告全關：`AVX=0 SSE42=0 AES=0 SHAEXT=0 PCLMULQDQ=0`
+- `SAFEFLAGS=2 CALLRET=0 BIGBLOCK=0 NATIVEFLAGS=0`
+- `wine-launch.sh` 把診斷打到 **stdout**（session 可見）並做 `BOX64_SELFTEST`

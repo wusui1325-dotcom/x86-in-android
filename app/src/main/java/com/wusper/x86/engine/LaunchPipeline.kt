@@ -276,8 +276,9 @@ object LaunchPipeline {
             val shell = ComponentInstaller.resolveShellElf(rootfsDir)?.guestPath ?: "(none)"
             val ld = ComponentInstaller.hasDynamicLinker(rootfsDir)
             throw IllegalStateException(
-                "rootfs 缺可用 shell 或動態連結器（shell=$shell ld-linux=$ld，${rootfsDir.absolutePath}）。" +
-                    "請清除 files/engine/runtime 後重裝。常見：execve(/usr/bin/sh) ENOENT = 缺 /lib/ld-linux-aarch64.so.1",
+                "運行時不完整（缺 shell 或動態連結器；shell=$shell ld-linux=$ld）。" +
+                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME +
+                    "（技術：execve(sh) ENOENT 常為缺動態連結器，非真缺 sh）",
             )
         }
         ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), ComponentInstaller.runtimeRoot(ctx))
@@ -462,9 +463,14 @@ object LaunchPipeline {
             !targetPath.startsWith("asset:")
         ) {
             val f = File(targetPath)
-            if (f.exists()) {
+            if (f.exists() && f.isFile && f.length() > 0L) {
                 f.copyTo(staged, overwrite = true)
                 return staged
+            }
+            if (!f.exists()) {
+                throw IllegalStateException(
+                    "找不到來源檔案：${f.absolutePath}。請重新選取 .exe。",
+                )
             }
         }
 
@@ -472,13 +478,30 @@ object LaunchPipeline {
             ?: targetPath?.takeIf { it.startsWith("content:") }
         if (!uriStr.isNullOrBlank()) {
             val uri = Uri.parse(uriStr)
-            ctx.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(staged).use { output -> input.copyTo(output) }
+            val opened = runCatching {
+                ctx.contentResolver.openInputStream(uri)?.use { input ->
+                    FileOutputStream(staged).use { output -> input.copyTo(output) }
+                }
+            }.getOrElse { e ->
+                throw IllegalStateException(
+                    "無法讀取已選檔案（權限可能已失效）。請重新選取 .exe。${e.message?.let { "（$it）" } ?: ""}",
+                    e,
+                )
+            }
+            if (opened == null) {
+                throw IllegalStateException(
+                    "無法開啟已選檔案（content URI）。請重新選取 .exe。",
+                )
             }
             if (staged.exists() && staged.length() > 0) return staged
+            throw IllegalStateException(
+                "已選檔案為空或複製失敗。請重新選取 .exe。",
+            )
         }
 
-        val bins = EngineAssets.ensureTestBinaries(ctx)
-        return bins.hostArm64
+        // #15：禁止 silently 回落 hostArm64，避免「看起來成功、跑的不是用戶檔」
+        throw IllegalStateException(
+            "無法解析啟動目標（工作區尚無副本，且來源路徑／URI 無效）。請重新選取 .exe。",
+        )
     }
 }

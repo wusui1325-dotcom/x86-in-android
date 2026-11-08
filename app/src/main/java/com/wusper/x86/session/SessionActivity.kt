@@ -22,22 +22,28 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import kotlinx.coroutines.asCoroutineDispatcher
-import androidx.compose.ui.Alignment
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -47,6 +53,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
+import com.wusper.x86.engine.ExitStatusMessages
 import com.wusper.x86.engine.GpuStack
 import com.wusper.x86.x11.InProcessX
 import com.wusper.x86.audio.InProcessAudio
@@ -57,7 +64,6 @@ import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.graphics.SurfaceFrameBridge
 import com.wusper.x86.graphics.PresentSurfaceBridge
 import com.wusper.x86.graphics.X11InputBridge
-import android.view.MotionEvent
 import com.wusper.x86.ui.theme.X86Theme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,32 +108,122 @@ class SessionActivity : ComponentActivity() {
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
                 val inProcessInputRef = remember { AtomicReference<InProcessXInput?>(null) }
 
-                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke) {
+                var sessionEpoch by remember { mutableIntStateOf(0) }
+                var showErrorCard by remember { mutableStateOf(false) }
+                var errorTitle by remember { mutableStateOf("") }
+                var errorDetail by remember { mutableStateOf("") }
+                var errorRaw by remember { mutableStateOf("") }
+                var gpuFailed by remember { mutableStateOf(false) }
+                var gpuRetryEpoch by remember { mutableIntStateOf(0) }
+                var pendingDownloadConfirm by remember { mutableStateOf(false) }
+                var downloadConfirmAck by remember { mutableStateOf(false) }
+                var showClearConfirm by remember { mutableStateOf(false) }
+                var launchFailedBeforeStart by remember { mutableStateOf(false) }
+
+                fun presentFailure(title: String, detail: String, raw: String = "") {
+                    errorTitle = title
+                    errorDetail = detail
+                    errorRaw = raw
+                    showErrorCard = true
+                    status = title
+                }
+
+                fun stopBridges() {
+                    inputBridgeRef.get()?.shutdown()
+                    inProcessInputRef.get()?.shutdown()
+                    frameBridge?.shutdown()
+                    presentBridge?.shutdown()
+                    inProcessAudio?.stop()
+                    inProcessX?.stop()
+                    LaunchPipeline.stop()
+                    EngineForegroundService.stop(this@SessionActivity)
+                }
+
+                fun clearAndRetry() {
+                    showClearConfirm = false
+                    showErrorCard = false
+                    gpuFailed = false
+                    launchFailedBeforeStart = false
+                    downloadConfirmAck = false
+                    pendingDownloadConfirm = false
+                    stopBridges()
+                    val freed = ComponentInstaller.clearRuntime(this@SessionActivity, alsoClearCache = true)
+                    val mb = "%.1f".format(freed / 1e6)
+                    logText = "已清除運行時（約 ${mb}MB）。重新準備下載…\n"
+                    status = "已清除運行時"
+                    sessionEpoch++
+                }
+
+                fun softRetry() {
+                    showErrorCard = false
+                    gpuFailed = false
+                    launchFailedBeforeStart = false
+                    stopBridges()
+                    logText = "重試啟動…\n"
+                    status = "重試"
+                    sessionEpoch++
+                }
+
+                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke, sessionEpoch) {
+                    showErrorCard = false
+                    gpuFailed = false
+                    launchFailedBeforeStart = false
                     if (ws == null) {
-                        status = "錯誤"
+                        presentFailure("錯誤", "找不到工作區：$workspaceId")
                         logText += "找不到工作區：$workspaceId\n"
                         return@LaunchedEffect
                     }
                     EngineForegroundService.start(this@SessionActivity, ws.displayName)
-                    var plan = LaunchPipeline.prepare(
-                        ctx = this@SessionActivity,
-                        ws = ws,
-                        targetPath = ws.sourceExePath,
-                        targetUri = ws.sourceExePath.takeIf { it.startsWith("content:") },
-                        forceHostSmoke = forceSmoke,
-                        forceGuestSmoke = forceGuestSmoke,
-                        preferAndroidGuest = preferAndroidGuest,
-                        forcePeSmoke = forcePeSmoke,
-                    )
+                    val plan0 = try {
+                        LaunchPipeline.prepare(
+                            ctx = this@SessionActivity,
+                            ws = ws,
+                            targetPath = ws.sourceExePath,
+                            targetUri = ws.sourceExePath.takeIf { it.startsWith("content:") },
+                            forceHostSmoke = forceSmoke,
+                            forceGuestSmoke = forceGuestSmoke,
+                            preferAndroidGuest = preferAndroidGuest,
+                            forcePeSmoke = forcePeSmoke,
+                        )
+                    } catch (t: Throwable) {
+                        presentFailure(
+                            "無法解析啟動目標",
+                            t.message ?: "未知錯誤",
+                            t.javaClass.simpleName,
+                        )
+                        logText += "準備失敗：${t.message}\n"
+                        EngineForegroundService.stop(this@SessionActivity)
+                        launchFailedBeforeStart = true
+                        return@LaunchedEffect
+                    }
+                    var plan = plan0
                     logFile = plan.logFile
                     logText += "目標：${plan.targetFile.absolutePath}\n"
                     logText += "類型：${plan.kindMessage}\n"
                     logText += "模式：${plan.mode}／圖形：${plan.graphicsBackend}\n"
                     if (plan.needsRuntimeInstall || (plan.mode == LaunchPipeline.Mode.WineProot && !ComponentInstaller.isReady(this@SessionActivity))) {
+                        if (!downloadConfirmAck) {
+                            pendingDownloadConfirm = true
+                            status = "等待確認下載"
+                            // 等用戶確認或取消（由對話框改 sessionEpoch／ack）
+                            while (pendingDownloadConfirm && !downloadConfirmAck) {
+                                delay(200)
+                            }
+                            if (!downloadConfirmAck) {
+                                status = "已取消"
+                                presentFailure(
+                                    "已取消下載",
+                                    "未下載運行時，無法啟動 Windows 程式。",
+                                )
+                                EngineForegroundService.stop(this@SessionActivity)
+                                return@LaunchedEffect
+                            }
+                        }
                         status = "安裝運行時"
                         installing = true
                         installProgress = ComponentInstaller.Progress("download", message = "準備下載…")
-                        logText += "首次 PE：下載 Wine／glibc rootfs／Box64（可取消／斷點續傳）…\n"
+                        val sizeLabel = ComponentInstaller.approxDownloadMbLabel(this@SessionActivity)
+                        logText += "首次 PE：下載 Wine／glibc rootfs／Box64（$sizeLabel，可取消／斷點續傳）…\n"
                         val install = withContext(Dispatchers.IO) {
                             ComponentInstaller.install(this@SessionActivity) { p ->
                                 android.os.Handler(android.os.Looper.getMainLooper()).post {
@@ -153,18 +249,36 @@ class SessionActivity : ComponentActivity() {
                         installProgress = null
                         if (install.isFailure) {
                             val err = install.exceptionOrNull()
-                            status = if (err is ComponentInstaller.CancelledException) "已取消" else "安裝失敗"
+                            val title = if (err is ComponentInstaller.CancelledException) "已取消" else "安裝失敗"
+                            presentFailure(
+                                title,
+                                (err?.message ?: "未知錯誤") + "\n" + ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
+                                err?.javaClass?.simpleName ?: "",
+                            )
                             logText += "安裝失敗：${err?.message}\n"
                             EngineForegroundService.stop(this@SessionActivity)
+                            launchFailedBeforeStart = true
                             return@LaunchedEffect
                         }
                         logText += "Wine 運行時就緒，重建計畫…\n"
-                        plan = LaunchPipeline.buildWineProotPlan(
-                            this@SessionActivity, ws, plan.targetFile, plan.logFile,
-                        )
+                        plan = try {
+                            LaunchPipeline.buildWineProotPlan(
+                                this@SessionActivity, ws, plan.targetFile, plan.logFile,
+                            )
+                        } catch (t: Throwable) {
+                            presentFailure(
+                                "運行時校驗失敗",
+                                (t.message ?: "未知錯誤"),
+                                t.javaClass.simpleName,
+                            )
+                            logText += "重建計畫失敗：${t.message}\n"
+                            EngineForegroundService.stop(this@SessionActivity)
+                            launchFailedBeforeStart = true
+                            return@LaunchedEffect
+                        }
                         logText += "模式：${plan.mode}／${plan.graphicsBackend}\n${plan.kindMessage}\n"
                     }
-                    // GpuStack：先備料 Turnip／DXVK（Present 橋未就緒也下）
+                    // GpuStack：可重試
                     if (plan.needsGpuStackInstall ||
                         (plan.graphicsBackend == GraphicsBackend.GpuStack && !GpuStack.componentsInstalled(this@SessionActivity))
                     ) {
@@ -178,7 +292,14 @@ class SessionActivity : ComponentActivity() {
                             }
                         }
                         if (gpu.isFailure) {
-                            logText += "GPU 組件下載失敗：${gpu.exceptionOrNull()?.message}\n（可稍後重試）\n"
+                            gpuFailed = true
+                            val msg = gpu.exceptionOrNull()?.message ?: "未知錯誤"
+                            logText += "GPU 組件下載失敗：$msg\n"
+                            presentFailure(
+                                "GPU 組件下載失敗",
+                                "$msg\n可點「重試」再下載 Turnip／DXVK，無需離開此頁。",
+                                "gpu",
+                            )
                         } else {
                             logText += "GPU 組件：${GpuStack.statusMessage(this@SessionActivity)}\n"
                             plan = LaunchPipeline.buildWineProotPlan(
@@ -187,7 +308,7 @@ class SessionActivity : ComponentActivity() {
                             logText += "重建：${plan.mode}\n${plan.kindMessage}\n"
                         }
                     }
-                    // SoftLegacy：xdotool 檔案佇列；GpuStack：稍後接 InProcessX.inject*
+                    // SoftLegacy 輸入橋
                     if (plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.SoftLegacy &&
                         !plan.needsRuntimeInstall
@@ -202,7 +323,6 @@ class SessionActivity : ComponentActivity() {
                         inputBridgeRef.set(input)
                         logText += "輸入橋：【SoftLegacy】xdotool\n"
                     }
-                    // 進程內 X（Winlator）先於客體 Wine；輸入走 inject*
                     if (plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.GpuStack
                     ) {
@@ -210,7 +330,6 @@ class SessionActivity : ComponentActivity() {
                         logText += "啟動 Winlator Java X → Present…\n"
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
-                        // null sink：PresentXFramePump → AHB／BGRA native（非 CPU RGBA 回呼）
                         x.start()
                         inProcessX = x
                         val audio = InProcessAudio(this@SessionActivity)
@@ -220,7 +339,6 @@ class SessionActivity : ComponentActivity() {
                         val xs = x.xServer
                         if (xs != null) {
                             val xin = InProcessXInput(xs)
-                            // 預設 letterbox；surfaceChanged 會更新
                             xin.updateBlitFromSurface(1280, 720)
                             inProcessInputRef.set(xin)
                             logText += "輸入橋：WinHandler 級（相對滑鼠／雙指右鍵／長按右鍵／滾輪／可選手把）\n"
@@ -234,8 +352,15 @@ class SessionActivity : ComponentActivity() {
                         else -> "失敗"
                     }
                     logText += result.message + "\n"
+                    if (!result.ok && plan.mode != LaunchPipeline.Mode.WineGpuPending) {
+                        presentFailure(
+                            "啟動失敗",
+                            result.message,
+                            "start",
+                        )
+                        launchFailedBeforeStart = true
+                    }
 
-                    // 等 Surface
                     var waited = 0
                     while (surfaceHolderRef.get() == null && waited < 50) {
                         delay(100); waited++
@@ -250,7 +375,6 @@ class SessionActivity : ComponentActivity() {
                         frameBridge?.shutdown()
                         NativeEngine.nativePresentAttachSurface(surf)
                         logText += "Present：進程內 X Drawable → AHB → Surface（已 attach）\n"
-                        // 可選：shm 旁路仍可用
                         val bridge = PresentSurfaceBridge(
                             dataDir = ws.dataDir,
                             surface = surf,
@@ -258,7 +382,6 @@ class SessionActivity : ComponentActivity() {
                             allowXwdFeeder = false,
                             allowStub = false,
                         )
-                        // 不 start 輪詢（幀由 PresentXFramePump 推）；僅保留物件以便 shutdown 路徑一致
                         presentBridge = bridge
                     } else if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.SoftLegacy && holder != null
@@ -276,7 +399,6 @@ class SessionActivity : ComponentActivity() {
                     }
 
                     if (plan.mode == LaunchPipeline.Mode.WineGpuPending || plan.gpuBlocked) {
-                        // 仍可掛 Present stub 證明通路
                         if (surf != null && surf.isValid) {
                             presentBridge?.shutdown()
                             val bridge = PresentSurfaceBridge(
@@ -291,11 +413,19 @@ class SessionActivity : ComponentActivity() {
                             logText += "Present stub 演示（組件未齊／待啟動）\n"
                             status = "Present stub"
                         }
-                        // 不 return：若只有 pending 且已演示，仍結束服務輪詢
                         if (!result.ok) {
+                            presentFailure(
+                                "GPU 棧尚未就緒",
+                                plan.kindMessage.ifBlank { "缺少 Turnip／DXVK 或其他 GpuStack 條件。" },
+                                "gpu-pending",
+                            )
                             EngineForegroundService.stop(this@SessionActivity)
                             return@LaunchedEffect
                         }
+                    }
+                    if (!result.ok) {
+                        EngineForegroundService.stop(this@SessionActivity)
+                        return@LaunchedEffect
                     }
                     while (true) {
                         delay(400)
@@ -307,7 +437,17 @@ class SessionActivity : ComponentActivity() {
                         if (wait != 1) {
                             val pid = NativeEngine.nativeRunningPid()
                             if (pid <= 0) {
-                                status = if (wait < 0) "已結束 ($wait)" else "已結束"
+                                val decoded = ExitStatusMessages.decode(wait)
+                                status = ExitStatusMessages.statusLine(wait)
+                                if (decoded.isFailure) {
+                                    presentFailure(
+                                        decoded.title,
+                                        decoded.detail,
+                                        "原始碼 ${decoded.rawCode}" +
+                                            (decoded.exitStatus?.let { " · exit=$it" } ?: "") +
+                                            (decoded.signal?.let { " · signal=$it" } ?: ""),
+                                    )
+                                }
                                 EngineForegroundService.stop(this@SessionActivity)
                                 break
                             }
@@ -315,17 +455,90 @@ class SessionActivity : ComponentActivity() {
                     }
                 }
 
+                // GPU 單項重試（不整頁重跑 runtime install）
+                LaunchedEffect(gpuRetryEpoch) {
+                    if (gpuRetryEpoch == 0) return@LaunchedEffect
+                    if (ws == null) return@LaunchedEffect
+                    showErrorCard = false
+                    gpuFailed = false
+                    status = "重試 GPU 棧"
+                    logText += "重試下載 Turnip＋DXVK…\n"
+                    val gpu = withContext(Dispatchers.IO) {
+                        GpuStack.installComponents(this@SessionActivity) { msg ->
+                            android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                status = msg
+                            }
+                        }
+                    }
+                    if (gpu.isFailure) {
+                        gpuFailed = true
+                        presentFailure(
+                            "GPU 組件下載失敗",
+                            (gpu.exceptionOrNull()?.message ?: "未知錯誤") + "\n可再次重試。",
+                            "gpu",
+                        )
+                    } else {
+                        logText += "GPU 組件就緒，重新啟動工作階段…\n"
+                        softRetry()
+                    }
+                }
+
                 DisposableEffect(Unit) {
                     onDispose {
-                        inputBridgeRef.get()?.shutdown()
-                        inProcessInputRef.get()?.shutdown()
-                        frameBridge?.shutdown()
-                        presentBridge?.shutdown()
-                        inProcessAudio?.stop()
-                        inProcessX?.stop()
-                        LaunchPipeline.stop()
-                        EngineForegroundService.stop(this@SessionActivity)
+                        stopBridges()
                     }
+                }
+
+                if (pendingDownloadConfirm && !downloadConfirmAck) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            pendingDownloadConfirm = false
+                            downloadConfirmAck = false
+                        },
+                        title = { Text(getString(com.wusper.x86.R.string.dialog_download_title)) },
+                        text = {
+                            Text(
+                                getString(
+                                    com.wusper.x86.R.string.dialog_download_message,
+                                    ComponentInstaller.approxDownloadMbLabel(this@SessionActivity),
+                                ),
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                downloadConfirmAck = true
+                                pendingDownloadConfirm = false
+                            }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_download_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                downloadConfirmAck = false
+                                pendingDownloadConfirm = false
+                            }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_cancel))
+                            }
+                        },
+                    )
+                }
+
+                if (showClearConfirm) {
+                    AlertDialog(
+                        onDismissRequest = { showClearConfirm = false },
+                        title = { Text(getString(com.wusper.x86.R.string.dialog_clear_runtime_title)) },
+                        text = { Text(getString(com.wusper.x86.R.string.dialog_clear_runtime_message)) },
+                        confirmButton = {
+                            TextButton(onClick = { clearAndRetry() }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_clear_runtime_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showClearConfirm = false }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_cancel))
+                            }
+                        },
+                    )
                 }
 
                 Scaffold(
@@ -334,14 +547,7 @@ class SessionActivity : ComponentActivity() {
                             title = { Text(ws?.displayName ?: getString(com.wusper.x86.R.string.session_title)) },
                             navigationIcon = {
                                 IconButton(onClick = {
-                                    inputBridgeRef.get()?.shutdown()
-                                    inProcessInputRef.get()?.shutdown()
-                                    frameBridge?.shutdown()
-                                    presentBridge?.shutdown()
-                                    inProcessAudio?.stop()
-                        inProcessX?.stop()
-                                    LaunchPipeline.stop()
-                                    EngineForegroundService.stop(this@SessionActivity)
+                                    stopBridges()
                                     finish()
                                 }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
@@ -358,7 +564,6 @@ class SessionActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(padding),
                     ) {
-                        // 客體畫面：Xvfb -fbdir XWD → SurfaceFrameBridge blit
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -414,6 +619,64 @@ class SessionActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxSize(),
                             )
+                            if (showErrorCard) {
+                                Card(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(20.dp)
+                                        .fillMaxWidth(0.92f),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                                    ),
+                                ) {
+                                    Column(Modifier.padding(16.dp)) {
+                                        Text(
+                                            text = errorTitle.ifBlank { getString(com.wusper.x86.R.string.error_card_title) },
+                                            style = MaterialTheme.typography.titleMedium,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(
+                                            text = errorDetail,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        if (errorRaw.isNotBlank()) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(
+                                                text = errorRaw,
+                                                style = MaterialTheme.typography.bodySmall.copy(
+                                                    fontFamily = FontFamily.Monospace,
+                                                ),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                        Spacer(Modifier.height(14.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            modifier = Modifier.fillMaxWidth(),
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    if (gpuFailed) {
+                                                        gpuRetryEpoch++
+                                                    } else {
+                                                        softRetry()
+                                                    }
+                                                },
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text(getString(com.wusper.x86.R.string.btn_retry))
+                                            }
+                                            OutlinedButton(
+                                                onClick = { showClearConfirm = true },
+                                                modifier = Modifier.weight(1f),
+                                            ) {
+                                                Text(getString(com.wusper.x86.R.string.btn_clear_runtime))
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                         Text(
                             text = "狀態：$status",

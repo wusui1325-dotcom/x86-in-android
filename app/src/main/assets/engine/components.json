@@ -6,7 +6,7 @@
       "id": "rootfs",
       "filename": "ubuntu-noble-aarch64-pd.tar.xz",
       "url": "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz",
-      "sha256": "",
+      "sha256": "91acaa786b8e2fbba56a9fd0f8a1188cee482b5c7baeed707b29ddaa9a294daa",
       "extract": "rootfs",
       "stripPrefix": "ubuntu-noble-aarch64"
     },

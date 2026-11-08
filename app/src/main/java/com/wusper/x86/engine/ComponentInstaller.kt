@@ -385,6 +385,8 @@ object ComponentInstaller {
         val rootfs = File(runtimeRoot(ctx), "rootfs")
         val dest = File(rootfs, "usr/local/bin/wine-launch.sh")
         dest.parentFile?.mkdirs()
+        // 每次啟動覆寫（0.1.33：確保 unix wine 路徑進客體，勿留舊 bin/wine 腳本）
+        if (dest.exists()) dest.delete()
         ctx.assets.open("engine/wine-launch.sh").use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }

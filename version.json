@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.32",
-  "versionCode": 33,
-  "notes": "0.1.32: c0000018 shared user data — use x86_64-unix/wine (wine_main_preload_info); Session copy-log + jump-highlight"
+  "versionName": "0.1.33",
+  "versionCode": 34,
+  "notes": "0.1.33: HARD-SET WINELOADER/WINE_REAL/smoke to x86_64-unix/wine (0.1.32 failed to apply); fix preloader ls; force overwrite wine-launch.sh"
 }

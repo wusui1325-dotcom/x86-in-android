@@ -166,3 +166,11 @@ Kron4ek **`bin/wine` stub 沒有此符號**；只有 **`lib/wine/x86_64-unix/win
 - **複製 log**：一鍵複製完整 session＋gpu-stack 合併日誌到剪貼簿
 - **跳轉關鍵**：捲動到首個關鍵行並高亮（FATAL／WINE_VERSION_SMOKE／c0000018／
   BOX64_FLAGS／SELFTEST／Illegal instruction／NTDLL／stamp…）
+
+## 0.1.33 — unix wine 路徑必須硬寫入腳本
+
+0.1.32 聲稱改 `WINELOADER`→`x86_64-unix/wine`，但 assets 腳本仍留 `WINE_REAL=/opt/wine/bin/wine`，
+且 log 用未定義的 `$WINE_UNIX` → `ls /wine-preloader`。真機仍 c0000018。
+
+0.1.33：**字面量** `/opt/wine/lib/wine/x86_64-unix/wine` 寫入 WINELOADER／WINE_REAL／smoke／
+WINE_START；`ensureWineLaunchScript` 先刪再覆寫。蓋裝即可，不必重裝運行時。

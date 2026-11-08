@@ -246,7 +246,13 @@ object LaunchPipeline {
 
         val bindGpu = mutableListOf<String>()
         if (backend == GraphicsBackend.GpuStack && GpuStack.hasTurnip(ctx)) {
+            GpuStack.turnipSo(ctx).setExecutable(true, false)
             bindGpu += listOf("-b", "${GpuStack.turnipDir(ctx).absolutePath}:/mnt/gpu/turnip")
+            // /dev 已 bind；KGSL 節點若存在則客體可見
+            val kgsl = java.io.File("/dev/kgsl-3d0")
+            if (kgsl.exists()) {
+                bindGpu += listOf("-b", "/dev/kgsl-3d0:/dev/kgsl-3d0")
+            }
         }
         if (backend == GraphicsBackend.GpuStack && GpuStack.hasDxvk(ctx)) {
             bindGpu += listOf("-b", "${GpuStack.dxvkDir(ctx).absolutePath}:/mnt/gpu/dxvk")

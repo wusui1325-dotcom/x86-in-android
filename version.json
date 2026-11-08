@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.11",
-  "versionCode": 12,
-  "notes": "0.1.11: DRI3／AHB GPU_SAMPLED Present（EGL／BGRA 單趟；砍 Java BGRA→RGBA）"
+  "versionName": "0.1.12",
+  "versionCode": 13,
+  "notes": "0.1.12: Turnip glibc ICD（KGSL／Winlator 等價）；VK_ICD_FILENAMES 通路；x11-overlay 作 VK 依賴"
 }

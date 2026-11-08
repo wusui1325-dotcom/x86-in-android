@@ -51,6 +51,14 @@ object ComponentInstaller {
         File(rootfs, "opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi").exists() ||
             File(rootfs, "opt/wine/share/wine/gecko/wine-gecko-2.47.4-x86_64").isDirectory
 
+    /** Turnip glibc ICD 依賴：Vulkan loader＋drm／xcb（來自 x11-overlay） */
+    fun hasTurnipVkDeps(rootfs: File): Boolean {
+        val lib = File(rootfs, "usr/lib/aarch64-linux-gnu")
+        return File(lib, "libvulkan.so.1").exists() &&
+            File(lib, "libdrm.so.2").exists() &&
+            File(lib, "libxcb-dri3.so.0").exists()
+    }
+
     /**
      * Wine／glibc 基底就緒。
      * 不再把 Xvfb／xdotool 當硬依賴（GpuStack 預設不走軟渲）；
@@ -68,6 +76,7 @@ object ComponentInstaller {
         val proot = File(EngineAssets.engineRoot(ctx), "proot")
         return wine.exists() && box.exists() &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
+            hasTurnipVkDeps(rootfs) &&
             (proot.exists() || File(root, "bin/proot").exists())
     }
 
@@ -155,13 +164,14 @@ object ComponentInstaller {
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
             val baseOk = hasWine && hasBox
-            // GpuStack 預設：不再強制抓 Xvfb／xdotool；僅補 Electron／mono 等
+            // GpuStack：x11-overlay 提供 libvulkan／drm／xcb（Turnip 依賴）；不強制 Xvfb
+            val hasVkDeps = hasTurnipVkDeps(rootfs)
             val needExtras = mutableSetOf<String>()
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
-            // SoftLegacy 才需要 Xvfb；GpuStack 用進程內 X
+            if (!hasVkDeps) needExtras += "x11-overlay"
             val onlyExtras = baseOk && needExtras.isNotEmpty()
-            val stampOnly = baseOk && hasElectron && hasAddons
+            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }

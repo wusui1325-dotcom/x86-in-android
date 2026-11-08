@@ -12,43 +12,45 @@ import java.util.zip.ZipInputStream
  * Winlator／glibc 級 GPU 棧接縫：Turnip ICD＋DXVK＋Present→AHardwareBuffer→Session Surface。
  *
  * 合法重用（見 docs/THIRD_PARTY.md、docs/GPU_STACK.md）：
- * - Mesa Turnip：MIT（nihui Android 預編 ICD）
+ * - Mesa Turnip **glibc／KGSL ICD**：MIT（Winlator 等價預編；PRoot glibc 客體直載）
  * - DXVK：Zlib（doitsujin 官方 release）
- * - 參考架構：brunodev85/winlator（LGPL-2.1）— 本版**不整樹 fork**，只對齊容器／啟動腳本＋我們的 Session Surface
+ * - 參考架構：brunodev85/winlator（LGPL-2.1）— 不整樹 fork
+ * - nihui bionic／adrenotools／Vortek IPC：另檔（本輪不做；bionic .so 不能給 glibc Wine dlopen）
  */
 object GpuStack {
 
-    /**
-     * Present＋進程內 X（Winlator Java X vendor）已接；畫面走 AHB→Session Surface。
-     */
     const val PRESENTATION_READY: Boolean = true
     const val INPROCESS_X_READY: Boolean = true
     /** AHB GPU_SAMPLED＋EGL／BGRA 單趟；完整 Vortek IPC 另檔 */
     const val DRI3_ZEROCOPY_READY: Boolean = true
+    /** glibc Turnip ICD 下載／bind／VK_ICD_FILENAMES 通路已接 */
+    const val TURNIP_ICD_READY: Boolean = true
 
-    const val TURNIP_VERSION = "26.2.6"
+    /** Winlator 等價 glibc Turnip（KGSL）；非 nihui bionic zip */
+    const val TURNIP_VERSION = "25.1.0-R2"
     const val DXVK_VERSION = "2.7.1"
 
-    // DXVK 2.7.1 與常見 Wine 11 組合較穩；3.x 需更新 Wine，下一檔再升
     private const val DXVK_URL =
         "https://github.com/doitsujin/dxvk/releases/download/v2.7.1/dxvk-2.7.1.tar.gz"
     private const val TURNIP_URL =
-        "https://github.com/nihui/mesa-turnip-android-driver/releases/download/26.2.6/mesa-turnip-android-26.2.6.zip"
+        "https://github.com/K11MCH1/WinlatorTurnipDrivers/releases/download/winlator_v25.1_r2/libvulkan_freedreno.so"
     private const val TURNIP_SHA256 =
-        "936c31c5ed5947b3c2a1106043832db93d6af270b5dede86449b6a44fc40fff4"
+        "fe222ea204d5ac312eae2955da4a7b78c087009f28403edceec73e4ed1ae64da"
+    private const val TURNIP_SO_NAME = "libvulkan_freedreno.so"
+    private const val TURNIP_ICD_NAME = "freedreno_icd.json"
 
     fun stackRoot(ctx: Context): File =
         File(ctx.filesDir, "engine/gpu-stack").also { it.mkdirs() }
 
     fun turnipDir(ctx: Context): File = File(stackRoot(ctx), "turnip-$TURNIP_VERSION")
     fun dxvkDir(ctx: Context): File = File(stackRoot(ctx), "dxvk-$DXVK_VERSION")
+    fun turnipSo(ctx: Context): File = File(turnipDir(ctx), TURNIP_SO_NAME)
+    fun turnipIcd(ctx: Context): File = File(turnipDir(ctx), TURNIP_ICD_NAME)
 
     fun hasTurnip(ctx: Context): Boolean {
-        val d = turnipDir(ctx)
-        if (!d.isDirectory) return false
-        return d.walkTopDown().any { it.isFile && it.name.contains("vulkan") && it.extension == "so" } ||
-            File(d, "libvulkan_freedreno.so").exists() ||
-            d.listFiles()?.any { it.extension == "so" } == true
+        val so = turnipSo(ctx)
+        val icd = turnipIcd(ctx)
+        return so.isFile && so.length() > 1_000_000L && icd.isFile
     }
 
     fun hasDxvk(ctx: Context): Boolean {
@@ -62,7 +64,7 @@ object GpuStack {
     fun gaps(ctx: Context): List<String> {
         val g = mutableListOf<String>()
         if (!hasTurnip(ctx)) {
-            g += "缺 Mesa Turnip Android ICD（$TURNIP_VERSION；Adreno Vulkan）"
+            g += "缺 Mesa Turnip glibc ICD（$TURNIP_VERSION；KGSL／Adreno）"
         }
         if (!hasDxvk(ctx)) {
             g += "缺 DXVK $DXVK_VERSION（d3d8/9/10/11→Vulkan DLL）"
@@ -73,7 +75,7 @@ object GpuStack {
         if (!DRI3_ZEROCOPY_READY) {
             g += "缺 DRI3／AHB GPU Present"
         }
-        g += "缺完整 Vortek IPC Vulkan（客體 ICD→socket→bionic；現為同進程 DRI3／AHB）"
+        g += "缺 Vortek／adrenotools 通路（Mali／非 KGSL；現為 glibc Turnip 直載）"
         g += "缺 Pulse／ALSA→AAudio 真輸出"
         g += "缺 GLX／gladiorenderer（OpenGL 客體暫 BadImplementation）"
         return g
@@ -90,6 +92,7 @@ object GpuStack {
         parts += if (INPROCESS_X_READY) "X✓（Winlator）" else "X✗"
         parts += "Input✓（inject*）"
         parts += if (DRI3_ZEROCOPY_READY) "DRI3✓" else "DRI3✗"
+        parts += if (TURNIP_ICD_READY && hasTurnip(ctx)) "ICD✓（glibc）" else "ICD✗"
         return parts.joinToString(" · ")
     }
 
@@ -102,11 +105,13 @@ object GpuStack {
             "WINE_DESKTOP_W=1280",
             "WINE_DESKTOP_H=720",
         )
-        val turnip = turnipDir(ctx)
-        if (turnip.isDirectory) {
-            // ICD 經 proot bind 進客體後由腳本設置；此處先標路徑
-            env += "HOST_TURNIP_DIR=${turnip.absolutePath}"
-            env += "VK_ICD_FILENAMES=/mnt/gpu/turnip/freedreno_icd.json"
+        if (hasTurnip(ctx)) {
+            env += "HOST_TURNIP_DIR=${turnipDir(ctx).absolutePath}"
+            env += "VK_ICD_FILENAMES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
+            env += "VK_DRIVER_FILES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
+            env += "LD_LIBRARY_PATH=/mnt/gpu/turnip"
+            env += "TU_DEBUG=noconform"
+            env += "X86_TURNIP_ICD=glibc_kgsl"
         }
         val dxvk = dxvkDir(ctx)
         if (dxvk.isDirectory) {
@@ -122,27 +127,30 @@ object GpuStack {
 
     /**
      * 下載 Turnip＋DXVK 到 app 私有目錄（不進 APK）。
-     * 可在 PE 啟動前呼叫；Present 橋未就緒時仍可先備料。
      */
     fun installComponents(ctx: Context, onProgress: (String) -> Unit = {}): Result<Unit> {
         return runCatching {
             val cache = File(stackRoot(ctx), "cache").also { it.mkdirs() }
             if (!hasTurnip(ctx)) {
-                onProgress("下載 Mesa Turnip $TURNIP_VERSION …")
-                val zip = File(cache, "mesa-turnip-android-$TURNIP_VERSION.zip")
-                download(TURNIP_URL, zip)
-                val got = sha256(zip)
+                onProgress("下載 Turnip glibc ICD $TURNIP_VERSION …")
+                val soCached = File(cache, "$TURNIP_SO_NAME-$TURNIP_VERSION")
+                download(TURNIP_URL, soCached)
+                val got = sha256(soCached)
                 if (!got.equals(TURNIP_SHA256, ignoreCase = true)) {
-                    zip.delete()
+                    soCached.delete()
                     error("Turnip SHA256 不符：expect=$TURNIP_SHA256 got=$got")
                 }
                 val dest = turnipDir(ctx)
                 dest.deleteRecursively()
                 dest.mkdirs()
-                unzip(zip, dest)
-                onProgress("Turnip 已解壓 → ${dest.absolutePath}")
-                writeTurnipIcdHint(dest)
+                val so = File(dest, TURNIP_SO_NAME)
+                soCached.copyTo(so, overwrite = true)
+                so.setReadable(true, false)
+                so.setExecutable(true, false)
+                writeTurnipIcd(dest)
+                onProgress("Turnip glibc ICD 已就緒 → ${so.absolutePath}")
             } else {
+                writeTurnipIcd(turnipDir(ctx))
                 onProgress("Turnip 已就緒")
             }
             if (!hasDxvk(ctx)) {
@@ -153,7 +161,6 @@ object GpuStack {
                 dest.deleteRecursively()
                 dest.mkdirs()
                 extractTarGz(tg, dest)
-                // 官方包頂層常為 dxvk-x.y.z/{x64,x32}
                 dest.listFiles()?.firstOrNull { it.isDirectory && it.name.startsWith("dxvk") }?.let { nested ->
                     nested.listFiles()?.forEach { child ->
                         val t = File(dest, child.name)
@@ -167,15 +174,16 @@ object GpuStack {
             File(stackRoot(ctx), "VERSION.json").writeText(
                 JSONObject()
                     .put("turnip", TURNIP_VERSION)
+                    .put("turnipAbi", "aarch64-glibc-kgsl")
                     .put("dxvk", DXVK_VERSION)
                     .put("presentationReady", PRESENTATION_READY)
+                    .put("turnipIcdReady", TURNIP_ICD_READY)
                     .put("installedAt", System.currentTimeMillis())
                     .toString(2),
             )
         }
     }
 
-    /** 把 DXVK x64 DLL 拷進 wineprefix（若存在） */
     fun stageDxvkIntoPrefix(ctx: Context, winePrefix: File): Boolean {
         if (!hasDxvk(ctx)) return false
         val sys32 = File(winePrefix, "drive_c/windows/system32").also { it.mkdirs() }
@@ -188,25 +196,23 @@ object GpuStack {
         return true
     }
 
-    private fun writeTurnipIcdHint(turnipDir: File) {
-        val so = turnipDir.walkTopDown().firstOrNull {
-            it.isFile && it.extension == "so" &&
-                (it.name.contains("freedreno") || it.name.contains("vulkan") || it.name.startsWith("lib"))
-        } ?: return
-        val icd = File(turnipDir, "freedreno_icd.json")
-        if (!icd.exists()) {
-            icd.writeText(
-                """
-                {
-                  "file_format_version": "1.0.0",
-                  "ICD": {
-                    "library_path": "${so.absolutePath}",
-                    "api_version": "1.3.0"
-                  }
-                }
-                """.trimIndent() + "\n",
-            )
-        }
+    /**
+     * ICD JSON 必須用客體相對路徑（同目錄 .so），不可寫宿主 filesDir 絕對路徑。
+     */
+    private fun writeTurnipIcd(turnipDir: File) {
+        val so = File(turnipDir, TURNIP_SO_NAME)
+        if (!so.isFile) return
+        File(turnipDir, TURNIP_ICD_NAME).writeText(
+            """
+            {
+              "file_format_version": "1.0.0",
+              "ICD": {
+                "library_path": "$TURNIP_SO_NAME",
+                "api_version": "1.3.278"
+              }
+            }
+            """.trimIndent() + "\n",
+        )
     }
 
     private fun download(url: String, dest: File) {
@@ -222,6 +228,7 @@ object GpuStack {
         conn.disconnect()
     }
 
+    @Suppress("unused")
     private fun unzip(zip: File, dest: File) {
         dest.mkdirs()
         ZipInputStream(zip.inputStream().buffered()).use { zis ->

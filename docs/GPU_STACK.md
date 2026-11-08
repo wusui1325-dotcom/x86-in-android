@@ -27,7 +27,7 @@
 | Wine | Kron4ek Builds / Wine HQ | LGPL | rootfs `/opt/wine` |
 | Ubuntu rootfs | proot-distro | 各套件 | PRoot |
 | PRoot | Termux／portable | GPL-3 | APK assets；獨立進程 |
-| **Mesa Turnip** | nihui/mesa-turnip-android-driver（Mesa） | **MIT** | 下載 ICD → bind `/mnt/gpu/turnip` |
+| **Mesa Turnip glibc** | K11MCH1/WinlatorTurnipDrivers（Mesa／KGSL） | **MIT** | 下載 `libvulkan_freedreno.so` → bind `/mnt/gpu/turnip`＋`VK_ICD_FILENAMES` |
 | **DXVK** | doitsujin/dxvk | **Zlib** | 下載 → wineprefix `system32` + native override |
 | VKD3D | Wine HQ | LGPL | 後續 |
 | Winlator 參考 | brunodev85/winlator | **LGPL-2.1** | **架構／啟動腳本對齊**；不整包併入本 APK |
@@ -40,7 +40,7 @@
 | | GpuStack（預設） | SoftLegacy（`forceSoftLegacy=true`） |
 |--|------------------|-------------------------------------|
 | 顯示 | DRI3 AHB→EGL／BGRA 單趟→Surface | Xvfb `-fbdir` XWD→blit ~15 FPS |
-| GL/VK | Turnip＋DXVK | `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe |
+| GL/VK | **glibc Turnip ICD（KGSL）**＋DXVK | `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe |
 | 輸入 | **InProcessX.inject***（觸控／鍵／滾輪） | xdotool cmd 佇列 |
 
 ## 本版已接（0.1.8）
@@ -101,3 +101,17 @@
 3. GLX／gladiorenderer（OpenGL 客體）
 4. Turnip ICD thunk 實機驗證；Pulse／ALSA→AAudio
 5. AHB 已 CPU-lock 時 EGL 穩定性（失敗則 BGRA 單趟保底）
+
+## 更新 0.1.12 — Turnip glibc ICD 通路
+
+- **最短路**：Winlator 等價 `libvulkan_freedreno.so`（aarch64／glibc／KGSL），非 nihui bionic
+- `VK_ICD_FILENAMES`／`VK_DRIVER_FILES` → `/mnt/gpu/turnip/freedreno_icd.json`（`library_path` 相對同目錄）
+- `ComponentInstaller`：GpuStack 亦拉取 **x11-overlay**（`libvulkan`／drm／xcb）
+- `wine-launch.sh`：記錄 ICD／KGSL／loader；`TU_DEBUG=noconform`
+- **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
+
+### 還缺
+
+1. Vortek／adrenotools（非 KGSL／Mali）
+2. Turnip＋DXVK 實機冒煙（Adreno 裝置）
+3. WinHandler 級輸入；GLX；AAudio

@@ -24,12 +24,19 @@
 - 授權：LGPL／Wine
 - 用途：Windows PE（經 Box64）
 
-## Mesa Turnip（GpuStack）
+## Mesa Turnip glibc ICD（GpuStack · Winlator 等價）
 
-- https://github.com/nihui/mesa-turnip-android-driver （26.2.6）
-- 上游：Mesa freedreno／turnip
-- 授權：**MIT**
-- 用途：Adreno Vulkan ICD；下載至 `files/engine/gpu-stack/turnip-*`
+- https://github.com/K11MCH1/WinlatorTurnipDrivers （`winlator_v25.1_r2` → `libvulkan_freedreno.so`）
+- 上游：Mesa freedreno／turnip（Pipetto-crypto／KGSL 移植）
+- 授權：**MIT**（Mesa）
+- 用途：PRoot **glibc** 客體 Vulkan ICD（直載；需 `/dev/kgsl-3d0`）
+- 路徑：`files/engine/gpu-stack/turnip-25.1.0-R2/`＋`freedreno_icd.json`（客體相對 `library_path`）
+- 依賴：rootfs `x11-overlay`（`libvulkan.so.1`／`libdrm`／`libxcb-*`）
+
+### 未採用（本輪）
+
+- nihui/mesa-turnip-android-driver：**bionic** ICD，不能給 glibc Wine／Box64 `dlopen`
+- adrenotools／Vortek IPC：宿主 bionic 渲染進程通路，另檔
 
 ## DXVK（GpuStack）
 

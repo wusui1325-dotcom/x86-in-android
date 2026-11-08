@@ -26,8 +26,13 @@ if [ -d /mnt/gpu/dxvk/x64 ]; then
   done
 fi
 
-if [ -f /mnt/gpu/turnip/freedreno_icd.json ]; then
+# Turnip glibc ICD（KGSL）— 對齊 Winlator；非 bionic／adrenotools
+if [ -f /mnt/gpu/turnip/freedreno_icd.json ] && [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
   export VK_ICD_FILENAMES="/mnt/gpu/turnip/freedreno_icd.json"
+  export VK_DRIVER_FILES="/mnt/gpu/turnip/freedreno_icd.json"
+  export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+  export TU_DEBUG="${TU_DEBUG:-noconform}"
+  chmod +x /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null || true
 fi
 
 export ANDROID_SYSVSHM_SERVER="${ANDROID_SYSVSHM_SERVER:-/tmp/.sysvshm/SM0}"
@@ -56,6 +61,22 @@ else
   unset LIBGL_ALWAYS_SOFTWARE || true
   unset GALLIUM_DRIVER || true
   echo "GRAPHICS_BACKEND=gpu inprocess_x=1 present=AHB" > /mnt/data/gpu-stack.log
+  if [ -n "${VK_ICD_FILENAMES:-}" ]; then
+    echo "TURNIP_ICD=${VK_ICD_FILENAMES}" >> /mnt/data/gpu-stack.log
+    echo "TURNIP_SO=$(ls -la /mnt/gpu/turnip/libvulkan_freedreno.so 2>&1)" >> /mnt/data/gpu-stack.log
+  else
+    echo "WARN: Turnip ICD not bound" >> /mnt/data/gpu-stack.log
+  fi
+  if [ -e /dev/kgsl-3d0 ]; then
+    echo "KGSL=ok /dev/kgsl-3d0" >> /mnt/data/gpu-stack.log
+  else
+    echo "WARN: /dev/kgsl-3d0 missing (non-Adreno or no access)" >> /mnt/data/gpu-stack.log
+  fi
+  if [ -e /usr/lib/aarch64-linux-gnu/libvulkan.so.1 ]; then
+    echo "VULKAN_LOADER=ok" >> /mnt/data/gpu-stack.log
+  else
+    echo "WARN: libvulkan.so.1 missing in rootfs (need x11-overlay)" >> /mnt/data/gpu-stack.log
+  fi
   # 等待宿主進程內 X（Winlator Java X）socket
   i=0
   while [ $i -lt 100 ]; do

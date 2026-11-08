@@ -1,3 +1,20 @@
+## 0.1.34 — Wine11 `set_mem_area_state` / `granularity_mask` (exit 134)
+
+**Symptom (0.1.33):** `WINELOADER` correct (`x86_64-unix/wine`), then:
+`Assertion !(size & granularity_mask) failed` → `WINE_VERSION_SMOKE exit=134` (SIGABRT).
+mmap of mem_areas OK; assert fires while applying Box64 `wine_main_preload_info`.
+
+**Root cause:** Box64 default DOS prereserve is `{0x10000, 0x8000}` (32 KiB). Wine 11
+`granularity_mask = 0xffff` requires size **and** addr 64 KiB-aligned. `0x8000 & 0xffff ≠ 0` → abort.
+(Winlator/Proton 9 often never hit this path; Wine 11’s new mem_areas table is strict.)
+
+**Fix:** Ship `Box64-0.4.4-glibc-wine64k.wcp` with DOS size patched `0x8000 → 0x10000`, plus
+`.box64-wine64k-stamp`. ComponentInstaller force-reinstalls box64 when stamp missing.
+Also `BOX64_MMAP32=0` (Winlator-style). No Wine version swap needed for this assert.
+
+**Retest:** Cover-install APK → runtime auto-pulls new box64 (stamp) → expect
+`WINE prereserve of 0x10000:0x10000 done` and `wine-11.21` version string (smoke exit 0).
+
 # 引擎進度
 
 ## 目標（Boss · 定案 A）

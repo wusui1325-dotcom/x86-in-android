@@ -438,13 +438,18 @@ object ComponentInstaller {
             val arr = jo.getJSONArray("components")
             val rootfs = File(root, "rootfs")
             val hasWine = hasWineTree(rootfs)
-            val hasBox = hasGlibcBox64(rootfs)
+            val hasBoxElf = hasGlibcBox64Elf(rootfs)
+            val hasBox = hasGlibcBox64(rootfs) // ELF + wine64k stamp
             // 舊 bionic box64 視為未裝，強制重抓 glibc 包
-            if (!hasBox) {
+            if (!hasBoxElf) {
                 File(rootfs, "usr/local/bin/box64").takeIf { it.exists() }?.let {
                     android.util.Log.w("ComponentInstaller", "removing non-glibc box64 ${it.length()}B")
                     it.delete()
                 }
+            }
+            // 舊 glibc box64（無 wine64k stamp）刪 stamp 旁的舊二進位標記，強制走 needExtras 重抽
+            if (hasBoxElf && !hasBox) {
+                android.util.Log.w("ComponentInstaller", "box64 missing wine64k stamp → will reinstall Box64-0.4.4-glibc-wine64k")
             }
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
@@ -457,7 +462,7 @@ object ComponentInstaller {
                 File(rootfs, "usr/bin/dash").isFile || File(rootfs, "usr/bin/bash").isFile
             // 連 dash／bash 實體都沒有 → 必須重解整棵 rootfs（會清掉樹上 wine，故全組件重裝）
             val needsRootfsRetar = !rootfsOk && !hasDashOrBash
-            val baseOk = hasWine && hasBox && rootfsOk
+            val baseOk = hasWine && hasBoxElf && rootfsOk
             // GpuStack：x11-overlay 提供 libvulkan／drm／xcb（Turnip 依賴）；不強制 Xvfb
             val hasVkDeps = hasTurnipVkDeps(rootfs)
             val hasX64 = hasBox64X64lib(rootfs)
@@ -466,7 +471,8 @@ object ComponentInstaller {
             if (!hasAddons) needExtras += "wine-addons-overlay"
             if (!hasVkDeps) needExtras += "x11-overlay"
             if (!hasX64) needExtras += "box64-x64lib"
-            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps && hasX64 && !needsRootfsRetar
+            if (!hasBox) needExtras += "box64-glibc"
+            val stampOnly = baseOk && hasBox && hasElectron && hasAddons && hasVkDeps && hasX64 && !needsRootfsRetar
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }
@@ -486,7 +492,8 @@ object ComponentInstaller {
                         jobs += c
                         continue
                     }
-                    if (baseOk && id in setOf("rootfs", "wine", "box64-glibc")) continue
+                    if (baseOk && id in setOf("rootfs", "wine")) continue
+                    if (baseOk && id == "box64-glibc" && hasBox) continue
                     if (baseOk && needExtras.isNotEmpty() && id !in needExtras) continue
                     if (!baseOk) {
                         // 缺基底：該下的都下（略過已有的）
@@ -996,8 +1003,15 @@ object ComponentInstaller {
         }.getOrDefault(false)
     }
 
-    fun hasGlibcBox64(rootfs: File): Boolean =
+    /** 僅檢查 glibc ELF（不含 stamp；給 baseOk 判斷用）。 */
+    fun hasGlibcBox64Elf(rootfs: File): Boolean =
         isGlibcBox64(File(rootfs, "usr/local/bin/box64"))
+
+    /** glibc Box64 + Wine11 64k-aligned prereserve stamp（0.1.34+）。缺 stamp＝舊 0x8000 → granularity assert。 */
+    fun hasGlibcBox64(rootfs: File): Boolean {
+        val stamp = File(rootfs, "usr/local/bin/.box64-wine64k-stamp")
+        return hasGlibcBox64Elf(rootfs) && stamp.isFile && stamp.length() > 0L
+    }
 
     private fun extractBox64(archive: File, binDir: File) {
         binDir.mkdirs()
@@ -1032,8 +1046,19 @@ object ComponentInstaller {
         tmp.walkTopDown().firstOrNull { it.isFile && it.name == "profile.json" }?.let { prof ->
             prof.copyTo(File(binDir, "box64.profile.json"), overwrite = true)
         }
+        // Wine11 64k-aligned prereserve stamp（0.1.34+）；缺此 stamp 會強制重抽
+        val stampSrc = tmp.walkTopDown().firstOrNull { it.isFile && it.name == ".box64-wine64k-stamp" }
+        val stampDest = File(binDir, ".box64-wine64k-stamp")
+        if (stampSrc != null) {
+            stampSrc.copyTo(stampDest, overwrite = true)
+        } else {
+            stampDest.writeText("wine64k-granularity-0x10000-2026-11-09\n")
+        }
         tmp.deleteRecursively()
-        android.util.Log.i("ComponentInstaller", "installed glibc box64 → ${dest.absolutePath} (${dest.length()} bytes)")
+        android.util.Log.i(
+            "ComponentInstaller",
+            "installed glibc box64 wine64k → ${dest.absolutePath} (${dest.length()} bytes) stamp=${stampDest.readText().trim()}",
+        )
     }
 
     private fun extractTarXz(

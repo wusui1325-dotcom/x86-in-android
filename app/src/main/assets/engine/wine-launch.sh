@@ -230,18 +230,31 @@ else
   log "WARN: x64lib stamp missing (want bookworm libgcc). Reinstall runtime recommended."
 fi
 
+# 0.1.34: Box64 must have wine64k stamp (DOS prereserve size 0x10000, Wine11 granularity)
+BOX64_WINE64K_STAMP=/usr/local/bin/.box64-wine64k-stamp
+if [ ! -f "$BOX64_WINE64K_STAMP" ]; then
+  log "FATAL: box64 wine64k stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
+  exit 127
+fi
+log "BOX64_WINE64K_STAMP=$(cat "$BOX64_WINE64K_STAMP" 2>/dev/null)"
+
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 # 關鍵：強制 WINELOADER＝unix wine ELF（覆寫 Kotlin／舊 env）
 export WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine
 export WINE_REAL=/opt/wine/lib/wine/x86_64-unix/wine
 export WINELOADERNOEXEC=1
+# Wine11 + Box64：留空讓 Box64 用內建（已 patch 成 64k 對齊）；勿塞會破壞對齊的 reserve
+export WINEPRELOADRESERVE="${WINEPRELOADRESERVE:-}"
+# Winlator 同款：關閉 MMAP32，讓 39-bit VA 下 prereserve／mmap 行為較穩
+export BOX64_MMAP32=0
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
 mkdir -p "$WINEPREFIX"
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
 log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC WINE_REAL=$WINE_REAL"
+log "WINEPRELOADRESERVE='$WINEPRELOADRESERVE' BOX64_MMAP32=$BOX64_MMAP32"
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
 # 自證：unix wine 必須存在
@@ -276,7 +289,7 @@ export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-1}"
 export BOX64_SHOWBT="${BOX64_SHOWBT:-1}"
 export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-1}"
 export BOX64_NOBANNER=0
-log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS"
+log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
 # 冒煙：wine --version（隔離 ntdll／libgcc／WINELOADER）
 # 暫時打開 err 日誌，完整落入 session（stdout）與檔案
@@ -309,6 +322,12 @@ else
   log "FATAL: wine --version smoke failed (exit=$WV, no version string)."
   if grep -q 'c0000018\|shared user data' /mnt/data/wine-version.out 2>/dev/null; then
     log "HINT: c0000018 shared user data — need wine ELF with wine_main_preload_info (use x86_64-unix/wine)."
+  fi
+  if grep -q 'granularity_mask\|set_mem_area_state' /mnt/data/wine-version.out 2>/dev/null; then
+    log "HINT: Wine11 set_mem_area_state granularity assert — need Box64 wine64k (prereserve 0x10000:0x10000). Reinstall runtime."
+  fi
+  if [ "$WV" = "134" ]; then
+    log "HINT: exit 134=SIGABRT (often Wine ntdll assert). Check BOX64_WINE64K_STAMP / prereserve sizes."
   fi
   log "HINT: WINELOADER=$WINELOADER WINE_REAL=$WINE_REAL; not Android storage permission."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true

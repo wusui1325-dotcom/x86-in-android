@@ -87,6 +87,7 @@ object ExitStatusMessages {
         126 -> "客體命令無法執行"
         1 -> "客體以錯誤結束"
         132 -> "客體非法指令（SIGILL）"
+        134 -> "客體中止（SIGABRT／Wine assert）"
         else -> "客體異常結束"
     }
 
@@ -108,6 +109,11 @@ object ExitStatusMessages {
         132 -> (
             "客體退出碼 132＝SIGILL。0.1.30+ 已換 bookworm libgcc；若仍 132，看 BOX64_SELFTEST／WINE_VERSION_SMOKE。" +
                 "SELFTEST=132 → 換 Box64；SMOKE=132 → Wine／x64lib；僅 explorer 炸 → GPU／PE。"
+            )
+        134 -> (
+            "客體退出碼 134＝SIGABRT。0.1.33 常見 Wine11 set_mem_area_state granularity_mask assert：" +
+                "Box64 舊 DOS prereserve 0x10000:0x8000 非 64KB 對齊。0.1.34+ 換 Box64-wine64k（0x10000:0x10000）；" +
+                "請更新 App 後讓運行時自動重抽 box64（看 BOX64_WINE64K_STAMP）。不是存取權限問題。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

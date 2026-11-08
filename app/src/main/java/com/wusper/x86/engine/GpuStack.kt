@@ -27,6 +27,8 @@ object GpuStack {
     const val TURNIP_ICD_READY: Boolean = true
     /** GLX＋gladiorenderer＋客體 libGL（Winlator Gladio） */
     const val GLX_GLADIO_READY: Boolean = true
+    /** ALSA android_aserver → 宿主 AAudio */
+    const val AAUDIO_READY: Boolean = true
 
     /** Winlator 等價 glibc Turnip（KGSL）；非 nihui bionic zip */
     const val TURNIP_VERSION = "25.1.0-R2"
@@ -78,7 +80,9 @@ object GpuStack {
             g += "缺 DRI3／AHB GPU Present"
         }
         g += "缺 Vortek／adrenotools 通路（Mali／非 KGSL；現為 glibc Turnip 直載）"
-        g += "缺 Pulse／ALSA→AAudio 真輸出"
+        if (!AAUDIO_READY) {
+            g += "缺 ALSA→AAudio 真輸出"
+        }
         if (!GLX_GLADIO_READY) {
             g += "缺 GLX／gladiorenderer（OpenGL 客體）"
         }
@@ -98,6 +102,7 @@ object GpuStack {
         parts += if (DRI3_ZEROCOPY_READY) "DRI3✓" else "DRI3✗"
         parts += if (TURNIP_ICD_READY && hasTurnip(ctx)) "ICD✓（glibc）" else "ICD✗"
         parts += if (GLX_GLADIO_READY) "GLX✓（Gladio）" else "GLX✗"
+        parts += if (AAUDIO_READY) "Audio✓（AAudio）" else "Audio✗"
         return parts.joinToString(" · ")
     }
 
@@ -120,7 +125,7 @@ object GpuStack {
         val dxvk = dxvkDir(ctx)
         if (dxvk.isDirectory) {
             env += "HOST_DXVK_DIR=${dxvk.absolutePath}"
-            env += "WINEDLLOVERRIDES=d3d8,d3d9,d3d10core,d3d11,dxgi=n,b;winepulse.drv=d"
+            // Audio／DXVK override 於下方合併
         }
         env += "X86_GPU_STATUS=${statusMessage(ctx)}"
         env += "X86_WS_DATA=$wsDataAbs"
@@ -128,8 +133,16 @@ object GpuStack {
         env += "X_PROTOCOL=inprocess_winlator"
         if (GLX_GLADIO_READY) {
             env += "X86_GLX=gladio"
-            // 客體 Gladio libGL（優先於 Mesa）；Wine OpenGL→GLX→gladiorenderer
             env += "LD_LIBRARY_PATH=/opt/gladio/lib:/mnt/gpu/turnip"
+        }
+        if (AAUDIO_READY) {
+            env += "ANDROID_ALSA_SERVER=/tmp/.sound/AS0"
+            env += "ANDROID_ASERVER_USE_SHM=true"
+            env += "ALSA_PLUGIN_DIR=/usr/lib/aarch64-linux-gnu/alsa-lib"
+            env += "ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf"
+            // 啟用 winealsa；關掉 winepulse
+            env += "WINEDLLOVERRIDES=d3d8,d3d9,d3d10core,d3d11,dxgi=n,b;winepulse.drv=d;winealsa.drv=b"
+            env += "X86_AUDIO=alsa_aaudio"
         }
         return env
     }
@@ -181,6 +194,7 @@ object GpuStack {
                 onProgress("DXVK 已就緒")
             }
             runCatching { stageGladioIntoRootfs(ctx) }
+            runCatching { stageAlsaAAudioIntoRootfs(ctx) }
             File(stackRoot(ctx), "VERSION.json").writeText(
                 JSONObject()
                     .put("turnip", TURNIP_VERSION)
@@ -189,6 +203,7 @@ object GpuStack {
                     .put("presentationReady", PRESENTATION_READY)
                     .put("turnipIcdReady", TURNIP_ICD_READY)
                     .put("glxGladioReady", GLX_GLADIO_READY)
+                    .put("aaudioReady", AAUDIO_READY)
                     .put("installedAt", System.currentTimeMillis())
                     .toString(2),
             )
@@ -198,7 +213,43 @@ object GpuStack {
     /**
      * 把 Gladio 客體 libGL 裝進 rootfs `/opt/gladio/lib`（GpuStack OpenGL／GLX）。
      */
-        fun stageGladioIntoRootfs(ctx: Context): Boolean {
+        /** 客體 ALSA android_aserver plugin＋conf → rootfs */
+    fun stageAlsaAAudioIntoRootfs(ctx: Context): Boolean {
+        val rootfs = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
+        if (!rootfs.isDirectory) return false
+        val pluginDir = File(rootfs, "usr/lib/aarch64-linux-gnu/alsa-lib").also { it.mkdirs() }
+        val plugin = File(pluginDir, "libasound_module_pcm_android_aserver.so")
+        if (!plugin.exists() || plugin.length() < 10_000L) {
+            try {
+                ctx.assets.open("engine/audio/alsa-lib/libasound_module_pcm_android_aserver.so").use { input ->
+                    plugin.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (_: Throwable) {
+                return false
+            }
+        }
+        plugin.setExecutable(true, false)
+        plugin.setReadable(true, false)
+        val confDir = File(rootfs, "etc/alsa/conf.d").also { it.mkdirs() }
+        val conf = File(confDir, "android_aserver.conf")
+        ctx.assets.open("engine/audio/conf.d/android_aserver.conf").use { input ->
+            conf.outputStream().use { output -> input.copyTo(output) }
+        }
+        val shareAlsa = File(rootfs, "usr/share/alsa").also { it.mkdirs() }
+        val alsaConf = File(shareAlsa, "alsa.conf")
+        ctx.assets.open("engine/audio/alsa.conf").use { input ->
+            alsaConf.outputStream().use { output -> input.copyTo(output) }
+        }
+        // 清掉 null sink，改走 aserver
+        val asound = File(rootfs, "etc/asound.conf")
+        asound.writeText(
+            "pcm.!default { type android_aserver }\n" +
+                "ctl.!default { type android_aserver }\n",
+        )
+        return plugin.exists()
+    }
+
+    fun stageGladioIntoRootfs(ctx: Context): Boolean {
         val rootfs = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
         if (!rootfs.isDirectory) return false
         val destDir = File(rootfs, "opt/gladio/lib").also { it.mkdirs() }
@@ -227,7 +278,7 @@ object GpuStack {
         return destSo.exists()
     }
 
-fun hasGladioGuest(ctx: Context): Boolean {
+    fun hasGladioGuest(ctx: Context): Boolean {
         val so = File(ComponentInstaller.runtimeRoot(ctx), "rootfs/opt/gladio/lib/libGL.so.1.7.0")
         return so.isFile && so.length() > 100_000L
     }

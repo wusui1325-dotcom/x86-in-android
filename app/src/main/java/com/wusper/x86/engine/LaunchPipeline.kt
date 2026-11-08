@@ -260,6 +260,7 @@ object LaunchPipeline {
         }
         if (backend == GraphicsBackend.GpuStack) {
             GpuStack.stageGladioIntoRootfs(ctx)
+            GpuStack.stageAlsaAAudioIntoRootfs(ctx)
         }
 
         val argv = buildList {
@@ -280,6 +281,10 @@ object LaunchPipeline {
             }
             if (shm.isDirectory) {
                 add("-b"); add("${shm.absolutePath}:/tmp/.sysvshm")
+            }
+            val sound = File(imageFs, "tmp/.sound")
+            if (sound.isDirectory) {
+                add("-b"); add("${sound.absolutePath}:/tmp/.sound")
             }
             addAll(bindGpu)
             add("-w"); add("/mnt/app")

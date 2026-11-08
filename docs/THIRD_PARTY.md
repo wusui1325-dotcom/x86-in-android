@@ -89,3 +89,10 @@
 - 宿主：`libgladiorenderer.so`＋`GLXExtension`（取代 BadImplementation stub）
 - 客體：`/opt/gladio/lib/libGL.so*`（Wine OpenGL → 自訂 GLX opcode → 環緩衝 → GLES）
 - 備註：VirGL／Zink overlay 未本輪預設啟用（Turnip Vulkan＋DXVK 仍為 D3D 主線）
+
+## ALSA android_aserver → AAudio（0.1.14）
+
+- 協定／Java server 對齊：https://github.com/brunodev85/winlator-app（`alsaserver`／`android_aserver` plugin）
+- 授權：**LGPL-2.1**（隨 Winlator；見 `third_party/winlator/LICENSE`）
+- 宿主播放：**AAudio**（Android NDK；非 AudioTrack）；native：`app/src/main/cpp/aaudio/`
+- 客體 plugin asset：`engine/audio/alsa-lib/libasound_module_pcm_android_aserver.so`（自 Winlator rootfs_patches 抽取）

@@ -123,9 +123,24 @@
 - 修 OpenGL 客體 **BadImplementation**（先前 GLX stub）
 - D3D 主線仍 Turnip ICD＋DXVK；Gladio＝Wine／原生 OpenGL
 
-### 還缺
+### 還缺（0.1.13 時）
 
 1. VirGL／Zink 客體包（可選備援；非預設）
 2. Vortek／adrenotools（Mali）
 3. Turnip＋DXVK＋Gladio 實機冒煙
-4. WinHandler 級輸入；AAudio
+4. WinHandler 級輸入；AAudio ← **0.1.14 已接**
+
+## 更新 0.1.14 — 客體音訊 → 宿主 AAudio（定案 A）
+
+- **最短路**（對齊 Winlator／Termux）：客體 `winealsa.drv`＋`libasound_module_pcm_android_aserver.so` → Unix socket／SHM（`/tmp/.sound/AS0`）→ 宿主 `ALSAServerComponent` → **AAudio**（`libx86aaudio.so`；非 AudioTrack）
+- 宿主：`InProcessAudio` 於 Session 與進程內 X 同步啟動；PRoot bind `imagefs/tmp/.sound`
+- 客體 env：`ANDROID_ALSA_SERVER`／`ANDROID_ASERVER_USE_SHM`／`ALSA_PLUGIN_DIR`；`WINEDLLOVERRIDES` 合併 `winepulse.drv=d;winealsa.drv=b`
+- Assets：`engine/audio/`（plugin＋`android_aserver.conf`＋`alsa.conf`）；`GpuStack.stageAlsaAAudioIntoRootfs`
+
+### 還缺
+
+1. VirGL／Zink 客體包（可選備援）
+2. Vortek／adrenotools（Mali／非 KGSL）
+3. Turnip＋DXVK＋Gladio＋AAudio **實機冒煙**（Adreno）
+4. WinHandler 級輸入（多指／相對滑鼠／手把）
+5. 完整 Pulse 通路（可選；現主線 ALSA→AAudio）

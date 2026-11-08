@@ -25,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +42,7 @@ import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.GpuStack
 import com.wusper.x86.x11.InProcessX
+import com.wusper.x86.audio.InProcessAudio
 import com.wusper.x86.x11.InProcessXInput
 import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.engine.GraphicsBackend
@@ -85,6 +87,7 @@ class SessionActivity : ComponentActivity() {
                 var logFile by remember { mutableStateOf<File?>(null) }
                 var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
                 var presentBridge by remember { mutableStateOf<PresentSurfaceBridge?>(null) }
+                var inProcessAudio by remember { mutableStateOf<InProcessAudio?>(null) }
                 var inProcessX by remember { mutableStateOf<InProcessX?>(null) }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
@@ -176,6 +179,10 @@ class SessionActivity : ComponentActivity() {
                         // null sink：PresentXFramePump → AHB／BGRA native（非 CPU RGBA 回呼）
                         x.start()
                         inProcessX = x
+                        val audio = InProcessAudio(this@SessionActivity)
+                        audio.start()
+                        inProcessAudio = audio
+                        logText += "音訊：ALSA→AAudio socket=${audio.socketPath()}\n"
                         val xs = x.xServer
                         if (xs != null) {
                             val xin = InProcessXInput(xs)
@@ -280,6 +287,7 @@ class SessionActivity : ComponentActivity() {
                         inProcessInputRef.get()?.shutdown()
                         frameBridge?.shutdown()
                         presentBridge?.shutdown()
+                        inProcessAudio?.stop()
                         inProcessX?.stop()
                         LaunchPipeline.stop()
                         EngineForegroundService.stop(this@SessionActivity)
@@ -296,7 +304,8 @@ class SessionActivity : ComponentActivity() {
                                     inProcessInputRef.get()?.shutdown()
                                     frameBridge?.shutdown()
                                     presentBridge?.shutdown()
-                                    inProcessX?.stop()
+                                    inProcessAudio?.stop()
+                        inProcessX?.stop()
                                     LaunchPipeline.stop()
                                     EngineForegroundService.stop(this@SessionActivity)
                                     finish()

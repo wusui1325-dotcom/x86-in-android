@@ -3,6 +3,7 @@ project(x86engine)
 
 add_subdirectory(winlator)
 add_subdirectory(gladiorenderer)
+add_subdirectory(aaudio)
 
 add_library(x86engine SHARED
     native_engine.cpp

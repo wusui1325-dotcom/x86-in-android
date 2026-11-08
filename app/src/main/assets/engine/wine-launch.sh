@@ -5,7 +5,7 @@ BACKEND="${GRAPHICS_BACKEND:-gpu}"
 
 W="${WINE_DESKTOP_W:-1280}"
 H="${WINE_DESKTOP_H:-720}"
-mkdir -p /mnt/data /tmp/.X11-unix /tmp/.sysvshm
+mkdir -p /mnt/data /tmp/.X11-unix /tmp/.sysvshm /tmp/.sound
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
 if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
@@ -13,7 +13,13 @@ if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
   export WINEDLLOVERRIDES="mscoree,mshtml=;$WINEDLLOVERRIDES"
 fi
 
-if [ ! -f /etc/asound.conf ]; then
+# 定案 A：客體 ALSA android_aserver → 宿主 AAudio（由 GpuStack 寫入 asound.conf）
+if [ -n "${ANDROID_ALSA_SERVER:-}" ]; then
+  mkdir -p /tmp/.sound
+  if [ ! -f /etc/asound.conf ] || ! grep -q android_aserver /etc/asound.conf 2>/dev/null; then
+    printf 'pcm.!default { type android_aserver }\nctl.!default { type android_aserver }\n' > /etc/asound.conf
+  fi
+elif [ ! -f /etc/asound.conf ]; then
   printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
 fi
 
@@ -95,6 +101,20 @@ else
     exit 93
   fi
   echo "INPROCESS_X_OK wait=${i}" >> /mnt/data/gpu-stack.log
+  # 等待宿主 ALSA→AAudio socket
+  if [ -n "${ANDROID_ALSA_SERVER:-}" ]; then
+    j=0
+    while [ $j -lt 50 ]; do
+      if [ -S "${ANDROID_ALSA_SERVER}" ] || [ -e "${ANDROID_ALSA_SERVER}" ]; then break; fi
+      j=$((j+1)); sleep 0.1
+    done
+    if [ -S "${ANDROID_ALSA_SERVER}" ] || [ -e "${ANDROID_ALSA_SERVER}" ]; then
+      echo "ALSA_AAUDIO_OK sock=${ANDROID_ALSA_SERVER} wait=${j}" >> /mnt/data/gpu-stack.log
+    else
+      echo "WARN: ALSA AAudio socket missing (${ANDROID_ALSA_SERVER})" >> /mnt/data/gpu-stack.log
+    fi
+    echo "X86_AUDIO=${X86_AUDIO:-unset} WINEDLLOVERRIDES=${WINEDLLOVERRIDES:-}" >> /mnt/data/gpu-stack.log
+  fi
 fi
 
 # 輸入：xdotool 僅 SoftLegacy；GpuStack 由宿主 InProcessX.inject*（不啟動 agent）

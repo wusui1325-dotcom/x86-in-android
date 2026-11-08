@@ -1,0 +1,7 @@
+cmake_minimum_required(VERSION 3.22.1)
+# Guest ALSA → host AAudio sink (Winlator protocol compatible)
+add_library(x86aaudio SHARED aaudio_sink.cpp)
+find_library(log-lib log)
+find_library(aaudio-lib aaudio)
+target_link_libraries(x86aaudio ${log-lib} ${aaudio-lib})
+target_compile_options(x86aaudio PRIVATE -Wall -O2)

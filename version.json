@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.13",
-  "versionCode": 14,
-  "notes": "0.1.13: GLX／Gladio（gladiorenderer＋客體 libGL；修 BadImplementation）"
+  "versionName": "0.1.14",
+  "versionCode": 15,
+  "notes": "0.1.14: 客體 ALSA android_aserver → 宿主 AAudio（定案 A；對齊 Winlator／Termux）"
 }

@@ -10,6 +10,7 @@ object NativeEngine {
         System.loadLibrary("winlator")
         System.loadLibrary("gladiorenderer")
         System.loadLibrary("x86engine")
+        System.loadLibrary("x86aaudio")
     }
 
     const val KIND_UNKNOWN = 0

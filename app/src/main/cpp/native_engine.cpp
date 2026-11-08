@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <cstring>
+#include <cstdlib>
 #include "elf_probe.h"
 
 #define LOG_TAG "x86engine"
@@ -58,15 +59,16 @@ Java_com_wusper_x86_engine_NativeEngine_nativeRunningPid(JNIEnv*, jclass) {
 }
 
 /**
- * 在子進程執行 argv[0..]；stdout/stderr 寫入 log_path。
- * 成功回傳 child pid；失敗回傳 -errno。
+ * argv + 可選 env（"KEY=VALUE" 字串陣列，可 null／空）。
+ * stdout/stderr → log_path。成功回傳 child pid；失敗回傳 -errno。
  */
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wusper_x86_engine_NativeEngine_nativeExec(
         JNIEnv* env, jclass,
         jobjectArray jargv,
         jstring jcwd,
-        jstring jlogPath) {
+        jstring jlogPath,
+        jobjectArray jenv) {
     if (g_child > 0) {
         LOGE("already running pid=%d", (int)g_child);
         return -EBUSY;
@@ -83,6 +85,20 @@ Java_com_wusper_x86_engine_NativeEngine_nativeExec(
         env->ReleaseStringUTFChars(js, s);
         env->DeleteLocalRef(js);
     }
+
+    std::vector<std::string> envs;
+    if (jenv != nullptr) {
+        jsize nenv = env->GetArrayLength(jenv);
+        envs.reserve(nenv);
+        for (jsize i = 0; i < nenv; ++i) {
+            auto js = (jstring)env->GetObjectArrayElement(jenv, i);
+            const char* s = env->GetStringUTFChars(js, nullptr);
+            envs.emplace_back(s ? s : "");
+            env->ReleaseStringUTFChars(js, s);
+            env->DeleteLocalRef(js);
+        }
+    }
+
     const char* cwd = env->GetStringUTFChars(jcwd, nullptr);
     const char* logPath = env->GetStringUTFChars(jlogPath, nullptr);
 
@@ -103,7 +119,6 @@ Java_com_wusper_x86_engine_NativeEngine_nativeExec(
         return -e;
     }
     if (pid == 0) {
-        // child
         if (cwd && cwd[0]) {
             if (chdir(cwd) != 0) {
                 dprintf(logfd, "chdir(%s) failed: %d\n", cwd, errno);
@@ -113,21 +128,26 @@ Java_com_wusper_x86_engine_NativeEngine_nativeExec(
         dup2(logfd, STDERR_FILENO);
         if (logfd > 2) close(logfd);
 
+        for (auto& e : envs) {
+            if (e.empty()) continue;
+            // putenv needs persistent storage; leak in child is fine
+            char* heap = strdup(e.c_str());
+            if (heap) putenv(heap);
+        }
+
         std::vector<char*> argv;
         argv.reserve(args.size() + 1);
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
 
         execv(argv[0], argv.data());
-        // exec failed
         dprintf(STDOUT_FILENO, "execv(%s) failed: %d (%s)\n", argv[0], errno, strerror(errno));
         _exit(127);
     }
 
-    // parent
     close(logfd);
     g_child = pid;
-    LOGI("spawned pid=%d cmd=%s", (int)pid, args[0].c_str());
+    LOGI("spawned pid=%d cmd=%s env=%zu", (int)pid, args[0].c_str(), envs.size());
     env->ReleaseStringUTFChars(jcwd, cwd);
     env->ReleaseStringUTFChars(jlogPath, logPath);
     return static_cast<jint>(pid);
@@ -138,7 +158,7 @@ Java_com_wusper_x86_engine_NativeEngine_nativeWaitNonBlocking(JNIEnv*, jclass) {
     if (g_child <= 0) return 0;
     int status = 0;
     pid_t r = waitpid(g_child, &status, WNOHANG);
-    if (r == 0) return 1; // still running
+    if (r == 0) return 1;
     if (r == g_child) {
         g_child = -1;
         if (WIFEXITED(status)) return -(1000 + WEXITSTATUS(status));

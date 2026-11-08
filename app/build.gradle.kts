@@ -35,7 +35,7 @@ android {
 
     defaultConfig {
         applicationId = "com.wusper.x86"
-        minSdk = 26
+        minSdk = 28
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName

@@ -230,3 +230,12 @@ com.wusper.x86（暫名）
 
 - UI 走**原生 Material 3**（Compose）。
 - 下一步接引擎：假啟動 → 真啟動管線；P0 先 host ELF 驗收，Box64 可插位。
+
+### 進度（2026-11-09 ~00:00 HKT）
+
+- Box64 v0.4.4 已以 NDK android-28 編過並打進 APK assets；minSdk 升 28。
+- P0 驗收主路徑：Android x86_64 靜態 ELF via Box64。Linux glibc ELF／rootfs／Wine 仍未完成。
+
+### Boss 效能硬指標（2026-11-09）
+
+- 同機同負載：Box64 ≥ 原生 arm64 **70%**（CPU 微基準；見 docs/ENGINE.md）。

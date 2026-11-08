@@ -7,6 +7,10 @@
     <string name="btn_pick_exe">選取 .exe</string>
     <string name="btn_refresh">重新整理</string>
     <string name="btn_host_smoke">跑 host ELF 驗收</string>
+    <string name="btn_guest_android_smoke">跑 Box64（Android x86_64）</string>
+    <string name="btn_guest_linux_smoke">跑 Box64（Linux x86_64）</string>
+    <string name="btn_microbench_native">對照：原生 arm64</string>
+    <string name="btn_microbench_box64">對照：Box64 x86_64</string>
     <string name="empty_workspaces">尚無工作區。選一個 .exe 啟動後會自動建立。</string>
     <string name="empty_exes">尚未選取任何 .exe。點右下角＋從裝置挑選。</string>
     <string name="workspace_created">已建立工作區：%1$s</string>

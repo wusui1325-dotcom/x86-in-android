@@ -116,7 +116,7 @@ class MainActivity : ComponentActivity() {
                         workspaces = workspaces,
                         visibleExes = visibleExes,
                         onLaunchWorkspace = { ws ->
-                            launchWorkspace(ws, forceSmoke = false)
+                            launchWorkspace(ws)
                             tick++
                         },
                         onLaunchExe = { exe ->
@@ -124,18 +124,49 @@ class MainActivity : ComponentActivity() {
                             tick++
                         },
                         onHostSmoke = {
-                            // 用內建 host ELF 建／重用工作區並驗收管線
-                            val smoke = DeviceExe(
+                            startSmoke(
                                 displayName = "hello_host_arm64",
                                 path = "asset://testdata/hello_host_arm64",
-                                uriString = null,
+                                forceHost = true,
+                                forceGuest = false,
                             )
-                            val ws = WorkspaceStore.ensureWorkspace(this, smoke)
-                            WorkspaceStore.touchLaunch(this, ws)
-                            startActivity(
-                                Intent(this, SessionActivity::class.java)
-                                    .putExtra(SessionActivity.EXTRA_WORKSPACE_ID, ws.id)
-                                    .putExtra(SessionActivity.EXTRA_FORCE_SMOKE, true),
+                            tick++
+                        },
+                        onGuestAndroidSmoke = {
+                            startSmoke(
+                                displayName = "hello_android_x86_64",
+                                path = "asset://testdata/hello_android_x86_64",
+                                forceHost = false,
+                                forceGuest = true,
+                                preferAndroidGuest = true,
+                            )
+                            tick++
+                        },
+                        onGuestLinuxSmoke = {
+                            startSmoke(
+                                displayName = "hello_x86_64",
+                                path = "asset://testdata/hello_x86_64",
+                                forceHost = false,
+                                forceGuest = true,
+                                preferAndroidGuest = false,
+                            )
+                            tick++
+                        },
+                        onMicrobenchNative = {
+                            startSmoke(
+                                displayName = "microbench_host_arm64",
+                                path = "asset://testdata/microbench_host_arm64",
+                                forceHost = false,
+                                forceGuest = false,
+                            )
+                            tick++
+                        },
+                        onMicrobenchBox64 = {
+                            startSmoke(
+                                displayName = "microbench_android_x86_64",
+                                path = "asset://testdata/microbench_android_x86_64",
+                                forceHost = false,
+                                forceGuest = false,
                             )
                             tick++
                         },
@@ -154,12 +185,30 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun launchWorkspace(ws: Workspace, forceSmoke: Boolean) {
+    private fun launchWorkspace(ws: Workspace) {
+        WorkspaceStore.touchLaunch(this, ws)
+        startActivity(
+            Intent(this, SessionActivity::class.java)
+                .putExtra(SessionActivity.EXTRA_WORKSPACE_ID, ws.id),
+        )
+    }
+
+    private fun startSmoke(
+        displayName: String,
+        path: String,
+        forceHost: Boolean,
+        forceGuest: Boolean,
+        preferAndroidGuest: Boolean = true,
+    ) {
+        val smoke = DeviceExe(displayName = displayName, path = path, uriString = null)
+        val ws = WorkspaceStore.ensureWorkspace(this, smoke)
         WorkspaceStore.touchLaunch(this, ws)
         startActivity(
             Intent(this, SessionActivity::class.java)
                 .putExtra(SessionActivity.EXTRA_WORKSPACE_ID, ws.id)
-                .putExtra(SessionActivity.EXTRA_FORCE_SMOKE, forceSmoke),
+                .putExtra(SessionActivity.EXTRA_FORCE_SMOKE, forceHost)
+                .putExtra(SessionActivity.EXTRA_FORCE_GUEST_SMOKE, forceGuest)
+                .putExtra(SessionActivity.EXTRA_PREFER_ANDROID_GUEST, preferAndroidGuest),
         )
     }
 
@@ -183,6 +232,10 @@ private fun HomeScreen(
     onLaunchWorkspace: (Workspace) -> Unit,
     onLaunchExe: (DeviceExe) -> Unit,
     onHostSmoke: () -> Unit,
+    onGuestAndroidSmoke: () -> Unit,
+    onGuestLinuxSmoke: () -> Unit,
+    onMicrobenchNative: () -> Unit,
+    onMicrobenchBox64: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -204,6 +257,27 @@ private fun HomeScreen(
                     onClick = onHostSmoke,
                     label = { Text(stringResource(R.string.btn_host_smoke)) },
                     leadingIcon = { Icon(Icons.Default.Science, contentDescription = null) },
+                )
+                AssistChip(
+                    onClick = onGuestAndroidSmoke,
+                    label = { Text(stringResource(R.string.btn_guest_android_smoke)) },
+                    leadingIcon = { Icon(Icons.Default.Science, contentDescription = null) },
+                )
+                AssistChip(
+                    onClick = onGuestLinuxSmoke,
+                    label = { Text(stringResource(R.string.btn_guest_linux_smoke)) },
+                    leadingIcon = { Icon(Icons.Default.Science, contentDescription = null) },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = onMicrobenchNative,
+                    label = { Text(stringResource(R.string.btn_microbench_native)) },
+                )
+                AssistChip(
+                    onClick = onMicrobenchBox64,
+                    label = { Text(stringResource(R.string.btn_microbench_box64)) },
                 )
             }
         }

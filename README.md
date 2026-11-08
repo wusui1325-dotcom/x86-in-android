@@ -5,7 +5,7 @@
 - **不是** Winlator 假桌面殼
 - 啟動：進 App → 選裝置上的 `.exe` 或 App 私有工作區 → 全螢幕直開
 - Package：`com.wusper.x86`
-- 工程：Compose Material3 殼＋P0 啟動管線（host ELF 可跑）；Box64 翻譯層待打包（見 docs/ENGINE.md）
+- 工程：Compose Material3 殼＋P0 啟動管線；**已內嵌 Box64**（Android x86_64 ELF 驗收，見 docs/ENGINE.md）
 
 詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)。
 
@@ -31,7 +31,7 @@ files/workspaces/<id>/
 
 - JDK 17（本機常用 `/workspace/jdk17`）
 - Android SDK（本機常用 `/workspace/android-sdk`，platform 35 + build-tools）
-- 僅 abi：`arm64-v8a`
+- minSdk **28**；僅 abi：`arm64-v8a`
 
 ## Release 簽名（keystore）
 
@@ -85,4 +85,11 @@ Debug：
 
 ```bash
 ./gradlew assembleDebug
+```
+
+## 重編 Box64（可選）
+
+```bash
+export ANDROID_HOME=/workspace/android-sdk
+./scripts/build_box64_android.sh
 ```

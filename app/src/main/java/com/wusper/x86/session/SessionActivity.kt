@@ -60,6 +60,8 @@ class SessionActivity : ComponentActivity() {
 
         val workspaceId = intent.getStringExtra(EXTRA_WORKSPACE_ID).orEmpty()
         val forceSmoke = intent.getBooleanExtra(EXTRA_FORCE_SMOKE, false)
+        val forceGuestSmoke = intent.getBooleanExtra(EXTRA_FORCE_GUEST_SMOKE, false)
+        val preferAndroidGuest = intent.getBooleanExtra(EXTRA_PREFER_ANDROID_GUEST, true)
         val ws = WorkspaceStore.listWorkspaces(this).firstOrNull { it.id == workspaceId }
 
         setContent {
@@ -68,7 +70,7 @@ class SessionActivity : ComponentActivity() {
                 var status by remember { mutableStateOf("初始化") }
                 var logFile by remember { mutableStateOf<File?>(null) }
 
-                LaunchedEffect(workspaceId, forceSmoke) {
+                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest) {
                     if (ws == null) {
                         status = "錯誤"
                         logText += "找不到工作區：$workspaceId\n"
@@ -81,6 +83,8 @@ class SessionActivity : ComponentActivity() {
                         targetPath = ws.sourceExePath,
                         targetUri = ws.sourceExePath.takeIf { it.startsWith("content:") },
                         forceHostSmoke = forceSmoke,
+                        forceGuestSmoke = forceGuestSmoke,
+                        preferAndroidGuest = preferAndroidGuest,
                     )
                     logFile = plan.logFile
                     logText += "目標：${plan.targetFile.absolutePath}\n"
@@ -212,5 +216,7 @@ class SessionActivity : ComponentActivity() {
     companion object {
         const val EXTRA_WORKSPACE_ID = "workspace_id"
         const val EXTRA_FORCE_SMOKE = "force_smoke"
+        const val EXTRA_FORCE_GUEST_SMOKE = "force_guest_smoke"
+        const val EXTRA_PREFER_ANDROID_GUEST = "prefer_android_guest"
     }
 }

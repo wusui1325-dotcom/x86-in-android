@@ -1,3 +1,24 @@
+## 0.1.39 — hole-fit endless scan / 100000-1 occupies low page
+
+**Symptom (0.1.38 Boss):** 「感覺不太對」. HOLEFIT tried shrinking sizes at `0x100000`
+(`is not free`), then mid at `0x800000:0x10000000` **did** print `done`, but the loop
+kept scanning (`0x800000` smaller sizes → `0x1000000` → `0x10000000`…) and hung.
+Also always `WINE prereserve of 0x100000:0x1 done` because `WINEPRELOADRESERVE=100000-1`.
+
+**Root cause:**
+1. `WINEPRELOADRESERVE=100000-1` occupies Wine's critical low page during probe and
+   confuses success detection.
+2. Probe did not reliably stop after a useful mid `done` (race / tiny `0x1` reserve).
+
+**Fix:**
+- `unset WINEPRELOADRESERVE` for probe and real run (no more `100000-1`)
+- Parse probe output after kill; success = mid addr∉{DOS,hi} with size>0x1000
+- **Stop on first success**, persist `.box64-wine64k-holefit` immediately
+- Prefer largest size first (`0x10000000` …); Boss's first free hole was `0x800000:0x10000000`
+
+**Retest:** Cover-install 0.1.39 → expect `HOLEFIT ok addr=… size=…` (often `0x800000:0x10000000`),
+three prereserve lines (DOS + mid + hi), **no** endless `HOLEFIT try`, then `WINE_START` / frame.
+
 ## 0.1.38 — mid prereserve silently dropped (hole-fit)
 
 **Symptom (0.1.37 Boss):** stamp `wine64k-align-0x100000` installed, hex table in asset is

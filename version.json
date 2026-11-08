@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.38",
-  "versionCode": 39,
-  "notes": "0.1.38: mid prereserve silently dropped — Box64 isBlockFree fails on 0x100000:0x30000000 under 39-bit/proot with no log when WINEPRELOADRESERVE unset; hole-fit patches mid addr/size until 'prereserve done'; WINEPRELOADRESERVE=100000-1 enables warnings"
+  "versionName": "0.1.39",
+  "versionCode": 40,
+  "notes": "0.1.39: hole-fit stop-on-first-success; unset WINEPRELOADRESERVE during probe (100000-1 occupied 0x100000 and caused endless scan); cache marker immediately"
 }

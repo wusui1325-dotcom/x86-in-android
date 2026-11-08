@@ -114,11 +114,11 @@ object ExitStatusMessages {
             )
         124 -> (
             "客體退出碼 124＝WINE_PE_SMOKE 逾時。0.1.37+ 版號改讀 wine.inf；PE 探測仍逾時＝loader／wineboot 卡住。" +
-                "請確認日誌有 HOLEFIT ok／WINE prereserve of <addr>:<size> done（0.1.38+ 會自動縮小 mid）。"
+                "請確認日誌有 HOLEFIT ok／WINE prereserve of <addr>:<size> done（0.1.39+ 成功即停並快取；不應無限 HOLEFIT try）。"
             )
         139 -> (
             "客體退出碼 139＝Wine PE SIGSEGV。常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
-                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.38+ hole-fit 會改 addr/size；" +
+                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.39+ hole-fit 改 addr/size 且成功即停；" +
                 "請蓋裝後看 HOLEFIT ok 與 prereserve mid done。"
             )
         134 -> (

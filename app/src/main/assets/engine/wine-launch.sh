@@ -230,7 +230,7 @@ else
   log "WARN: x64lib stamp missing (want bookworm libgcc). Reinstall runtime recommended."
 fi
 
-# 0.1.38: Box64 wine64k stamp (align-0x100000) + runtime hole-fit for mid prereserve
+# 0.1.39: Box64 wine64k stamp (align-0x100000) + runtime hole-fit (stop-on-first, no 100000-1)
 BOX64_WINE64K_STAMP=/usr/local/bin/.box64-wine64k-stamp
 if [ ! -f "$BOX64_WINE64K_STAMP" ] || ! grep -qE 'wine64k-align-0x100000|wine64k-holefit-0x100000' "$BOX64_WINE64K_STAMP" 2>/dev/null; then
   log "FATAL: box64 wine64k-align/holefit stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
@@ -244,10 +244,10 @@ export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 export WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine
 export WINE_REAL=/opt/wine/lib/wine/x86_64-unix/wine
 export WINELOADERNOEXEC=1
-# 0.1.38: mid 0x100000:0x30000000 often silently dropped under 39-bit/proot
-# (Box64 isBlockFree fails; "is not free" only prints when WINEPRELOADRESERVE parses).
-# Tiny env enables warnings; hole-fit patches mid addr/size to a free hole.
-export WINEPRELOADRESERVE="${WINEPRELOADRESERVE:-100000-1}"
+# 0.1.39: do NOT set WINEPRELOADRESERVE=100000-1 — that 1-byte reserve occupies
+# Wine's critical low page and made hole-fit think mid failed / scan forever.
+# Hole-fit probes with WINEPRELOADRESERVE unset; detect mid via "prereserve done".
+unset WINEPRELOADRESERVE
 # Winlator 同款：關閉 MMAP32，讓 39-bit VA 下 prereserve／mmap 行為較穩
 export BOX64_MMAP32=0
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
@@ -296,9 +296,9 @@ export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
 export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
-# ---- 0.1.38 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
-# Evidence (0.1.37): asset table IS {0x100000,0x30000000} but runtime only prints
-# DOS+hi; mid removed silently when 768MiB hole is not free under 39-bit VA.
+# ---- 0.1.39 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
+# Evidence (0.1.38 Boss): WINEPRELOADRESERVE=100000-1 occupied 0x100000 during probe;
+# mid at 0x800000:0x10000000 already "done" but probe never stopped (endless scan).
 box64_find_prereserve_mid_off() {
   python3 - "$1" <<'PY'
 import sys
@@ -350,46 +350,83 @@ print("patched mid -> %#x:%#x @ file_off %#x" % (addr, size, base + 16))
 PY
 }
 
+# Probe: WINEPRELOADRESERVE must be unset. Success = useful mid (not DOS/hi, size>0x1000) done.
+# Always re-parse $out after kill (fixes race where loop missed buffered lines).
 box64_probe_mid_done() {
   local expect="$1"
   local out=/mnt/data/wine-prereserve-probe.out
   : > "$out"
   local oldlog="${BOX64_LOG-}"
+  local saved_wpr="${WINEPRELOADRESERVE-}"
+  unset WINEPRELOADRESERVE
   export BOX64_LOG=1
   set +e
-  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >"$out" 2>&1 &
+  if command -v stdbuf >/dev/null 2>&1; then
+    stdbuf -oL -eL "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >"$out" 2>&1 &
+  else
+    "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >"$out" 2>&1 &
+  fi
   local pid=$!
   local t=0
-  local ok=1
   while kill -0 "$pid" 2>/dev/null; do
-    if grep -q "WINE prereserve of ${expect}:" "$out" 2>/dev/null; then
-      sleep 0.3
-      if grep -q "WINE prereserve of ${expect}:.* done" "$out" 2>/dev/null; then
-        ok=0
-      fi
-      kill -KILL "$pid" 2>/dev/null || true
+    # Table walk finished once hi prints (DOS+mid+hi are sequential).
+    if grep -q 'WINE prereserve of 0x7f000000' "$out" 2>/dev/null; then
+      sleep 0.2
       break
     fi
-    if grep -q 'WINE prereserve of 0x7f000000' "$out" 2>/dev/null; then
-      if grep -q "WINE prereserve of ${expect}:.* done" "$out" 2>/dev/null; then
-        ok=0
-      fi
-      kill -KILL "$pid" 2>/dev/null || true
+    # Useful mid done for expect — stop early.
+    if [ -n "$expect" ] && grep -Eq "WINE prereserve of ${expect}:0x[0-9a-fA-F]+ done" "$out" 2>/dev/null; then
+      sleep 0.2
       break
     fi
     t=$((t+1))
-    if [ "$t" -ge 5 ]; then
-      kill -KILL "$pid" 2>/dev/null || true
+    if [ "$t" -ge 10 ]; then
       break
     fi
-    sleep 1
+    sleep 0.5
   done
+  kill -KILL "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+  # Parse after process end — do not trust in-loop races.
+  python3 - "$out" "$expect" <<'PY'
+import re, sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text(errors="replace")
+expect = sys.argv[2].strip() if len(sys.argv) > 2 else ""
+pat = re.compile(r"WINE prereserve of (0x[0-9a-fA-F]+):(0x[0-9a-fA-F]+) done")
+dos, hi = 0x10000, 0x7F000000
+expect_i = int(expect, 0) if expect else None
+best = None
+for m in pat.finditer(text):
+    addr = int(m.group(1), 16)
+    size = int(m.group(2), 16)
+    if addr in (dos, hi):
+        continue
+    if size <= 0x1000:  # ignore tiny env reserves like 0x1
+        continue
+    if expect_i is not None and addr != expect_i:
+        continue
+    best = (addr, size)
+    break
+for line in text.splitlines():
+    if "is not free" in line or "Wine64 detected" in line or "WINE prereserve of" in line:
+        print(line)
+if best is None:
+    sys.exit(1)
+print("PROBE_MID_OK %s:%s" % (hex(best[0]), hex(best[1])))
+sys.exit(0)
+PY
+  local rc=$?
+  if [ -n "$saved_wpr" ]; then
+    export WINEPRELOADRESERVE="$saved_wpr"
+  else
+    unset WINEPRELOADRESERVE
+  fi
   if [ -n "$oldlog" ]; then export BOX64_LOG="$oldlog"; else export BOX64_LOG=0; fi
-  grep -E 'prereserve|Wine64 detected|is not free' "$out" 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+  grep -E 'prereserve|Wine64 detected|is not free|PROBE_MID_OK' "$out" 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null || true
   set -e
-  return $ok
+  return $rc
 }
 
 box64_holefit_mid() {
@@ -407,8 +444,9 @@ box64_holefit_mid() {
     log "WARN: holefit skip — cannot locate my_wine_reserve mid in $box"
     return 0
   fi
-  local cand_addrs="0x100000 0x800000 0x1000000 0x10000000"
-  local cand_sizes="0x10000000 0x8000000 0x4000000 0x1000000 0x300000"
+  # Largest size first; stop on FIRST useful mid done (do not keep shrinking).
+  local cand_addrs="0x100000 0x800000 0x1000000 0x2000000"
+  local cand_sizes="0x10000000 0x8000000 0x4000000 0x1000000"
   if [ -f "$marker" ]; then
     # shellcheck disable=SC1090
     . "$marker" 2>/dev/null || true
@@ -418,13 +456,15 @@ box64_holefit_mid() {
         if box64_probe_mid_done "$HOLEFIT_ADDR"; then
           log "HOLEFIT ok (cached) WINE prereserve of $HOLEFIT_ADDR:$HOLEFIT_SIZE"
           export HOLEFIT_ADDR HOLEFIT_SIZE
+          unset WINEPRELOADRESERVE
           return 0
         fi
         log "WARN: holefit marker stale — re-probing"
+        rm -f "$marker"
       fi
     fi
   fi
-  log "HOLEFIT begin (mid silently dropped under 39-bit if 768MiB not free)"
+  log "HOLEFIT begin (no WINEPRELOADRESERVE; stop on first useful mid done)"
   local a s
   for a in $cand_addrs; do
     for s in $cand_sizes; do
@@ -446,17 +486,17 @@ PY
         printf 'HOLEFIT_ADDR=%s\nHOLEFIT_SIZE=%s\n' "$a" "$s" > "$marker"
         log "HOLEFIT ok addr=$a size=$s (saved $marker)"
         export HOLEFIT_ADDR="$a" HOLEFIT_SIZE="$s"
+        unset WINEPRELOADRESERVE
         return 0
       fi
     done
   done
   log "WARN: HOLEFIT failed all candidates — mid prereserve still missing"
+  unset WINEPRELOADRESERVE
   return 0
 }
 
 box64_holefit_mid
-
-
 
 # 冒煙 0.1.37：
 # 1) wine.inf 版號（不觸發 wineboot；Wine11 unix stub 無 --version 短路）

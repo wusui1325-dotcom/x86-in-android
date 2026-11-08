@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.38: hole-fit mid prereserve (isBlockFree silent drop of 0x100000:0x30000000 under 39-bit); WINEPRELOADRESERVE=100000-1 for warnings"
+  "notes": "0.1.39: hole-fit fix \u2014 no WINEPRELOADRESERVE=100000-1 while probing; stop+cache on first useful mid done"
 }

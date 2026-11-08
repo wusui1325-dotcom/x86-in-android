@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API 31+：排除引擎樹；保留 SharedPreferences／工作區偏好 -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="file" path="engine" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="file" path="engine" />
+    </device-transfer>
+</data-extraction-rules>

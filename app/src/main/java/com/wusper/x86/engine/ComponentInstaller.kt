@@ -87,6 +87,38 @@ object ComponentInstaller {
         return "約 ${mb}MB"
     }
 
+    /** 下載＋解壓緩衝：約需下載量 ×1.5，至少再留 200MB。 */
+    fun requiredFreeBytes(ctx: Context): Long {
+        val dl = approxDownloadBytes(ctx)
+        return maxOf(dl + dl / 2, dl + 200_000_000L)
+    }
+
+    fun availableBytes(ctx: Context): Long = runCatching {
+        val path = ctx.filesDir?.absolutePath ?: return@runCatching 0L
+        val st = android.os.StatFs(path)
+        st.availableBlocksLong * st.blockSizeLong
+    }.getOrDefault(0L)
+
+    fun formatBytes(bytes: Long): String {
+        if (bytes >= 1_000_000_000L) return "%.1fGB".format(bytes / 1e9)
+        if (bytes >= 1_000_000L) return "%.0fMB".format(bytes / 1e6)
+        return "${bytes}B"
+    }
+
+    /**
+     * 下載前預檢。不足時拋 [IllegalStateException]（繁中，不含內部路徑）。
+     */
+    fun assertEnoughSpace(ctx: Context) {
+        val need = requiredFreeBytes(ctx)
+        val have = availableBytes(ctx)
+        if (have in 1 until need) {
+            throw IllegalStateException(
+                "儲存空間不足：可用約 ${formatBytes(have)}，下載與解壓約需 ${formatBytes(need)}。" +
+                    "請腾出空間後再試。",
+            )
+        }
+    }
+
     private fun dirSize(f: File): Long {
         if (!f.exists()) return 0L
         if (f.isFile) return f.length()
@@ -395,7 +427,7 @@ object ComponentInstaller {
                                 val got = sha256(out)
                                 if (!got.equals(expectSha, ignoreCase = true)) {
                                     out.delete()
-                                    throw IllegalStateException("SHA256 不符：$id expect=$expectSha got=$got")
+                                    throw IllegalStateException("組件「$id」下載內容校驗失敗（檔案可能損毀）。請重試；若持續失敗，$USER_HINT_REINSTALL_RUNTIME")
                                 }
                             }
                             downloaded[id] = out
@@ -466,7 +498,17 @@ object ComponentInstaller {
             ensureUsrmergeShell(rootfs)
             if (!hasValidRootfs(rootfs)) {
                 return Result.failure(
-                    IllegalStateException("安裝後運行時不完整（缺 shell 或動態連結器）。$USER_HINT_REINSTALL_RUNTIME"),
+                    IllegalStateException(
+                        "安裝後運行時不完整（系統殼層／連結器缺失）。$USER_HINT_REINSTALL_RUNTIME",
+                    ),
+                )
+            }
+            val boxDest = File(rootfs, "usr/local/bin/box64")
+            if (!boxDest.isFile || !isGlibcBox64(boxDest)) {
+                return Result.failure(
+                    IllegalStateException(
+                        "安裝後找不到可用的 Box64（客體轉譯器）。$USER_HINT_REINSTALL_RUNTIME",
+                    ),
                 )
             }
             ensureWineLaunchScript(ctx)
@@ -615,7 +657,7 @@ object ComponentInstaller {
         ensureUsrmergeShell(dest)
         if (!hasValidRootfs(dest)) {
             throw IllegalStateException(
-                "rootfs 解壓後仍不完整（缺 shell／動態連結器）。$USER_HINT_REINSTALL_RUNTIME",
+                "運行時解壓後不完整。$USER_HINT_REINSTALL_RUNTIME",
             )
         }
     }
@@ -803,20 +845,26 @@ object ComponentInstaller {
         }
         extractTarXz(archive, tmp)
         val box = tmp.walkTopDown().firstOrNull { it.isFile && it.name == "box64" }
-            ?: throw IllegalStateException("wcp 內找不到 box64")
+            ?: run {
+                tmp.deleteRecursively()
+                throw IllegalStateException(
+                    "下載的 Box64 組件不完整（找不到可執行檔）。$USER_HINT_REINSTALL_RUNTIME",
+                )
+            }
         if (!isGlibcBox64(box)) {
             tmp.deleteRecursively()
             throw IllegalStateException(
-                "box64 不是 glibc 客體版（偵測到 bionic／linker64 或缺 ld-linux）。" +
-                    "請改用 Box64-*-glibc.wcp（runtime-v1）。",
+                "Box64 組件版本不正確（無法在本運行時執行）。$USER_HINT_REINSTALL_RUNTIME",
             )
         }
         val dest = File(binDir, "box64")
         box.copyTo(dest, overwrite = true)
         ExecBits.force(dest)
-        if (!isGlibcBox64(dest)) {
+        if (!dest.isFile || dest.length() < 4096L || !isGlibcBox64(dest)) {
             dest.delete()
-            throw IllegalStateException("安裝後 box64 校驗失敗（非 glibc）")
+            throw IllegalStateException(
+                "Box64 安裝後校驗失敗（檔案缺失或版本不符）。$USER_HINT_REINSTALL_RUNTIME",
+            )
         }
         // 可選：一併落下 profile.json
         tmp.walkTopDown().firstOrNull { it.isFile && it.name == "profile.json" }?.let { prof ->

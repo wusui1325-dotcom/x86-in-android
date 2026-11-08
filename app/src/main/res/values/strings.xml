@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">x86-in-android</string>
-    <string name="home_subtitle">選取 .exe 或工作區 → 全螢幕直開。無假桌面。</string>
+    <string name="home_subtitle">選取 .exe 或工作區 → 全螢幕直開。無假桌面。僅 arm64-v8a／Android 9+。虛擬桌面固定 1280×720。</string>
     <string name="title_workspaces">已有工作區</string>
     <string name="title_device_exes">裝置上的 .exe</string>
     <string name="btn_pick_exe">選取 .exe</string>
@@ -25,6 +25,7 @@
     <string name="btn_retry">重試</string>
     <string name="btn_delete_workspace">刪除工作區</string>
     <string name="btn_developer_options">開發者選項</string>
+    <string name="btn_about">關於</string>
     <string name="menu_more">更多</string>
     <string name="dev_options_enabled">已開啟開發者選項（煙測芯片）</string>
     <string name="dev_options_hint">連點版本號七次可開啟開發者選項</string>
@@ -35,7 +36,7 @@
     <string name="dialog_cancel">取消</string>
 
     <string name="dialog_clear_runtime_title">重裝運行時？</string>
-    <string name="dialog_clear_runtime_message">將清除本機引擎運行時與下載快取，下次啟動會重新下載。不會刪除工作區與遊戲存檔（wineprefix）。</string>
+    <string name="dialog_clear_runtime_message">將清除本機引擎運行時與下載快取，下次啟動會依目前 App 版本重新下載最新組件集。不會刪除工作區與遊戲存檔（wineprefix）。尚不支援釘選／回退舊 runtime。</string>
     <string name="dialog_clear_runtime_confirm">清除並重裝</string>
     <string name="clear_runtime_done">已清除運行時（約釋放 %1$s）。下次啟動將重新下載。</string>
 
@@ -43,8 +44,19 @@
     <string name="dialog_delete_ws_message">將移除「%1$s」工作區目錄（含 wineprefix／日誌）。裝置上的原始 .exe 不會被刪。</string>
     <string name="dialog_delete_ws_confirm">刪除</string>
 
+    <string name="dialog_kgsl_title">此裝置可能無畫面</string>
+    <string name="dialog_kgsl_message">未偵測到 Adreno／KGSL（/dev/kgsl-3d0）。目前 GPU 路徑依賴 Turnip＋KGSL，Mali／其他 GPU 可能黑屏。仍要繼續嘗試嗎？</string>
+    <string name="dialog_kgsl_continue">仍要繼續</string>
+
+    <string name="dialog_about_title">關於 x86-in-android</string>
+    <string name="dialog_about_body">版本 %1$s（versionCode %2$d）\n建置 tip：%3$s\n\n僅支援 arm64-v8a、Android 9+（minSdk 28）。\n虛擬桌面固定 1280×720。\nGPU 期望：Qualcomm Adreno／KGSL。\n\n「重裝運行時」會依本版 runtimeId 拉取最新組件；不支援釘選舊 runtime。\n相容說明見 docs/COMPAT.md（GitHub）。</string>
+    <string name="dialog_about_ok">知道了</string>
+
     <string name="error_card_title">啟動失敗</string>
     <string name="error_ended_title">已結束</string>
     <string name="uri_permission_failed">無法取得持久讀取權限，仍會嘗試本次開啟；若之後失敗請重新選取檔案。</string>
     <string name="version_label">版本 %1$s（%2$d）</string>
+    <string name="session_desktop_hint">虛擬桌面 1280×720（固定）</string>
+    <string name="error_insufficient_storage">儲存空間不足：可用約 %1$s，下載約需 %2$s。請腾出空間後再試。</string>
+    <string name="abi_min_sdk_note">僅 arm64-v8a · Android 9+</string>
 </resources>

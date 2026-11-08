@@ -1,6 +1,10 @@
 package com.wusper.x86
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.content.ContextCompat
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -79,7 +83,21 @@ class MainActivity : ComponentActivity() {
                 var versionTapCount by remember { mutableIntStateOf(0) }
                 var menuExpanded by remember { mutableStateOf(false) }
                 var showClearRuntime by remember { mutableStateOf(false) }
+                var showAbout by remember { mutableStateOf(false) }
                 var workspacePendingDelete by remember { mutableStateOf<Workspace?>(null) }
+
+                val notifPerm = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { /* 拒絕不阻斷 */ }
+                androidx.compose.runtime.LaunchedEffect(Unit) {
+                    if (Build.VERSION.SDK_INT >= 33) {
+                        val ok = ContextCompat.checkSelfPermission(
+                            this@MainActivity,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) == PackageManager.PERMISSION_GRANTED
+                        if (!ok) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }
 
                 val workspaces = remember(tick) { WorkspaceStore.listWorkspaces(this) }
                 val picked = remember(tick) { WorkspaceStore.loadPickedExes(this) }
@@ -142,6 +160,28 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                if (showAbout) {
+                    AlertDialog(
+                        onDismissRequest = { showAbout = false },
+                        title = { Text(stringResource(R.string.dialog_about_title)) },
+                        text = {
+                            Text(
+                                stringResource(
+                                    R.string.dialog_about_body,
+                                    BuildConfig.VERSION_NAME,
+                                    BuildConfig.VERSION_CODE,
+                                    BuildConfig.GIT_SHA,
+                                ),
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = { showAbout = false }) {
+                                Text(stringResource(R.string.dialog_about_ok))
+                            }
+                        },
+                    )
+                }
+
                 workspacePendingDelete?.let { ws ->
                     AlertDialog(
                         onDismissRequest = { workspacePendingDelete = null },
@@ -177,7 +217,8 @@ class MainActivity : ComponentActivity() {
                                             R.string.version_label,
                                             BuildConfig.VERSION_NAME,
                                             BuildConfig.VERSION_CODE,
-                                        ),
+                                        ) + " · " + BuildConfig.GIT_SHA +
+                                            "\n" + stringResource(R.string.abi_min_sdk_note),
                                         style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         modifier = Modifier.clickable {
@@ -221,6 +262,13 @@ class MainActivity : ComponentActivity() {
                                         },
                                         leadingIcon = {
                                             Icon(Icons.Default.Delete, contentDescription = null)
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(stringResource(R.string.btn_about)) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            showAbout = true
                                         },
                                     )
                                     DropdownMenuItem(

@@ -7,7 +7,9 @@
 - Package：`com.wusper.x86`
 - 工程：Compose Material3；Box64；**PE → PRoot＋Wine＋GpuStack（Turnip／DXVK／Gladio／真 Surface）**；進程內 Winlator X＋AHB Present；**ALSA→AAudio**；WinHandler 級輸入；Xvfb 僅 SoftLegacy（見 docs/ENGINE.md、docs/GPU_STACK.md）
 
-詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)。
+詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)、[docs/COMPAT.md](docs/COMPAT.md)。
+
+**裝置需求**：僅 **arm64-v8a**、**minSdk 28（Android 9+）**。GPU 路徑期望 Qualcomm **Adreno／KGSL**；虛擬桌面固定 **1280×720**。App 內「關於」可看 versionName／versionCode／建置 tip。
 
 ## UI
 
@@ -95,7 +97,7 @@ Debug：
 
 GitHub Releases 可能同時出現多個資產，請依下列優先順序：
 
-1. **推薦（版本化）**：`x86-in-android-0.1.23.apk`（或當版 `x86-in-android-<versionName>.apk`）——與 tag `0.1.23` 一對一。
+1. **推薦（版本化）**：`x86-in-android-0.1.24.apk`（或當版 `x86-in-android-<versionName>.apk`）——與 tag `0.1.24` 一對一。
 2. **同 tag 的** `x86-in-android-release.apk`：內容應與該版版本化 APK 相同（建置產物預設名）；若兩者並存且 digest 不同，以**版本化檔名**為準。
 3. **滾動 tag `0.1.x`**：追最新主線的快照，**可能隨時被覆寫**，不適合書籤／鏡像／自動化釘死。除錯或追 tip 時再用。
 

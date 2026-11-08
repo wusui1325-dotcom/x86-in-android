@@ -245,9 +245,9 @@ object LaunchPipeline {
                     logFile = logFile,
                     kind = BinaryKind.Pe,
                     kindMessage =
-                        "Windows PE · GpuStack（預設）· ${GpuStack.statusMessage(ctx)}\n" +
-                            "尚未可全螢幕跑 .exe。缺口：\n$gaps\n" +
-                            "（工程保底可設 LaunchPipeline.forceSoftLegacy=true，不建議產品使用）",
+                        "Windows PE · 圖形組件尚未就緒（${GpuStack.statusMessage(ctx)}）\n" +
+                            "需要：\n$gaps\n" +
+                            "請先完成下載，或稍後重試。",
                     mode = Mode.WineGpuPending,
                     targetFile = pe,
                     needsRuntimeInstall = false,
@@ -267,8 +267,8 @@ object LaunchPipeline {
         val rootfsDir = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
         if (!ComponentInstaller.hasGlibcBox64(rootfsDir)) {
             throw IllegalStateException(
-                "rootfs 缺 glibc box64（/usr/local/bin/box64）。" +
-                    "舊 bionic／linker64 版無法在 Ubuntu proot 執行（dash 報 not found）。請重裝運行時。",
+                "運行時缺少可用的 Box64 轉譯器（或仍是舊版）。" +
+                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
             )
         }
         ComponentInstaller.ensureUsrmergeShell(rootfsDir)
@@ -276,9 +276,8 @@ object LaunchPipeline {
             val shell = ComponentInstaller.resolveShellElf(rootfsDir)?.guestPath ?: "(none)"
             val ld = ComponentInstaller.hasDynamicLinker(rootfsDir)
             throw IllegalStateException(
-                "運行時不完整（缺 shell 或動態連結器；shell=$shell ld-linux=$ld）。" +
-                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME +
-                    "（技術：execve(sh) ENOENT 常為缺動態連結器，非真缺 sh）",
+                "運行時不完整（系統殼層或連結器缺失；內部：shell=$shell ld=$ld）。" +
+                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
             )
         }
         ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), ComponentInstaller.runtimeRoot(ctx))

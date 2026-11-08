@@ -91,10 +91,34 @@ object ExitStatusMessages {
 
     private fun exitDetail(code: Int): String = when (code) {
         0 -> "行程已正常結束。"
-        127 -> "客體命令不存在（box64／wine／shell）。請重裝運行時。"
-        126 -> "找到命令但無法執行（權限或格式）。請重裝運行時。"
-        1 -> "客體行程以退出碼 1 結束。請查看下方日誌；若剛升級 App，建議重裝運行時。"
-        else -> "客體退出碼 $code。請查看日誌；無法自助時請重裝運行時後重試。"
+        127 -> (
+            "客體命令不存在（常見：Box64／Wine／系統殼層未裝齊，或舊版連結器問題）。" +
+                "請在錯誤卡或首頁選單點「重裝運行時」，無需 adb。"
+            )
+        126 -> (
+            "找到命令但無法執行（權限或格式）。若剛升級或曾清資料失敗，" +
+                "請點「重裝運行時」。"
+            )
+        1 -> (
+            "客體行程以退出碼 1 結束。請查看下方日誌。" +
+                "若日誌出現權限被拒、找不到動態庫、或「沒有 sh」一類字樣，" +
+                "請優先點「重裝運行時」（不要只改系統儲存權限）。"
+            )
+        else -> (
+            "客體退出碼 $code。請查看日誌；" +
+                "若含 linker／libtalloc／permission／ENOENT，請點「重裝運行時」後重試。"
+            )
+    }
+
+    /** 從日誌／例外字串推測是否應引導重裝運行時（#24–26）。 */
+    fun shouldSuggestReinstall(detail: String): Boolean {
+        val s = detail.lowercase()
+        return listOf(
+            "permission", "eacces", "權限",
+            "libtalloc", "cannot link", "linker",
+            "ld-linux", "enoent", "/usr/bin/sh", "not found",
+            "box64", "動態連結",
+        ).any { it in s }
     }
 
     private fun signalName(sig: Int): String = when (sig) {

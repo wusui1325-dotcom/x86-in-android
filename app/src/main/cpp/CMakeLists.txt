@@ -2,6 +2,7 @@ cmake_minimum_required(VERSION 3.22.1)
 project(x86engine)
 
 add_subdirectory(winlator)
+add_subdirectory(gladiorenderer)
 
 add_library(x86engine SHARED
     native_engine.cpp

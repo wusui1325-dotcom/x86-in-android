@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.12",
-  "versionCode": 13,
-  "notes": "0.1.12: Turnip glibc ICD（KGSL／Winlator 等價）；VK_ICD_FILENAMES 通路；x11-overlay 作 VK 依賴"
+  "versionName": "0.1.13",
+  "versionCode": 14,
+  "notes": "0.1.13: GLX／Gladio（gladiorenderer＋客體 libGL；修 BadImplementation）"
 }

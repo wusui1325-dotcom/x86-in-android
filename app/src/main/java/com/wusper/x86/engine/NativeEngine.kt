@@ -6,6 +6,9 @@ import java.nio.ByteBuffer
 object NativeEngine {
     // @JvmStatic so Java (PresentXFramePump / Winlator bridge) can call
     init {
+        // winlator／gladiorenderer 供進程內 X／GLX；先於 x86engine
+        System.loadLibrary("winlator")
+        System.loadLibrary("gladiorenderer")
         System.loadLibrary("x86engine")
     }
 

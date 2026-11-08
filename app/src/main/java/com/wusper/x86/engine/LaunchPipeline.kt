@@ -258,6 +258,9 @@ object LaunchPipeline {
             bindGpu += listOf("-b", "${GpuStack.dxvkDir(ctx).absolutePath}:/mnt/gpu/dxvk")
             GpuStack.stageDxvkIntoPrefix(ctx, prefix)
         }
+        if (backend == GraphicsBackend.GpuStack) {
+            GpuStack.stageGladioIntoRootfs(ctx)
+        }
 
         val argv = buildList {
             add(proot.absolutePath)

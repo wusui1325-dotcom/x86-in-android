@@ -3,7 +3,7 @@
 ## 目標（Boss · 定案 A）
 
 - 真 x86 主線；殼 `com.wusper.x86`。
-- **GpuStack**：glibc Turnip ICD（KGSL）／DXVK／**進程內 X → Present→AHB→Session Surface**。
+- **GpuStack**：glibc Turnip ICD（KGSL）／DXVK／Gladio GLX／**進程內 X → Present→AHB→Session Surface**。
 - SoftLegacy（Xvfb XWD→Canvas）僅 `forceSoftLegacy`。
 
 詳見 [GPU_STACK.md](GPU_STACK.md)。

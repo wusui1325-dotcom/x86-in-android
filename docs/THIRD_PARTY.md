@@ -51,7 +51,7 @@
 - 授權：**LGPL-2.1**（`third_party/winlator/LICENSE`）
 - 路徑：`app/src/main/java/com/winlator/{xserver,xconnector,sysvshm,…}`、`app/src/main/cpp/winlator/`
 - 用途：進程內 X11＋epoll connector＋drawable／MIT-SHM；畫面接我們的 Present
-- 注意：未 vendor gladiorenderer（GLX stub）；未併入 Winlator 假桌面 UX
+- 已 vendor：`gladiorenderer`＋客體 `libGL.so`（Gladio 1.1）；未併入 Winlator 假桌面 UX
 
 ## Winlator（其餘架構參考）
 
@@ -81,3 +81,11 @@
 
 - Wine HQ；`wine-addons-overlay.tar.xz`
 - 用途：.NET／內嵌 HTML
+
+## Gladio／GLX（GpuStack OpenGL）
+
+- 來源：https://github.com/brunodev85/winlator-app（`gladiorenderer`＋`graphics_driver/gladio-1.1.tzst`）
+- 授權：**LGPL-2.1**（隨 Winlator；見 `third_party/winlator/LICENSE`）
+- 宿主：`libgladiorenderer.so`＋`GLXExtension`（取代 BadImplementation stub）
+- 客體：`/opt/gladio/lib/libGL.so*`（Wine OpenGL → 自訂 GLX opcode → 環緩衝 → GLES）
+- 備註：VirGL／Zink overlay 未本輪預設啟用（Turnip Vulkan＋DXVK 仍為 D3D 主線）

@@ -77,6 +77,13 @@ else
   else
     echo "WARN: libvulkan.so.1 missing in rootfs (need x11-overlay)" >> /mnt/data/gpu-stack.log
   fi
+  # Gladio 客體 libGL（Wine OpenGL → GLX → 宿主 gladiorenderer）
+  if [ -f /opt/gladio/lib/libGL.so.1.7.0 ] || [ -f /opt/gladio/lib/libGL.so.1 ]; then
+    export LD_LIBRARY_PATH="/opt/gladio/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    echo "GLADIO_LIBGL=ok" >> /mnt/data/gpu-stack.log
+  else
+    echo "WARN: Gladio libGL missing (/opt/gladio/lib)" >> /mnt/data/gpu-stack.log
+  fi
   # 等待宿主進程內 X（Winlator Java X）socket
   i=0
   while [ $i -lt 100 ]; do

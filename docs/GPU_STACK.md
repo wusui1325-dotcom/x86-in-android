@@ -115,3 +115,17 @@
 1. Vortek／adrenotools（非 KGSL／Mali）
 2. Turnip＋DXVK 實機冒煙（Adreno 裝置）
 3. WinHandler 級輸入；GLX；AAudio
+
+## 更新 0.1.13 — GLX／Gladio OpenGL
+
+- Vendor Winlator **gladiorenderer**＋完整 `GLXExtension`（Query／FBConfig／CreateContext）
+- 客體 Gladio `libGL.so.1.7.0` → `/opt/gladio/lib`；GpuStack `LD_LIBRARY_PATH` 優先
+- 修 OpenGL 客體 **BadImplementation**（先前 GLX stub）
+- D3D 主線仍 Turnip ICD＋DXVK；Gladio＝Wine／原生 OpenGL
+
+### 還缺
+
+1. VirGL／Zink 客體包（可選備援；非預設）
+2. Vortek／adrenotools（Mali）
+3. Turnip＋DXVK＋Gladio 實機冒煙
+4. WinHandler 級輸入；AAudio

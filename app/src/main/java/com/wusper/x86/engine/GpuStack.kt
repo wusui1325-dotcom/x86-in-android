@@ -25,6 +25,8 @@ object GpuStack {
     const val DRI3_ZEROCOPY_READY: Boolean = true
     /** glibc Turnip ICD 下載／bind／VK_ICD_FILENAMES 通路已接 */
     const val TURNIP_ICD_READY: Boolean = true
+    /** GLX＋gladiorenderer＋客體 libGL（Winlator Gladio） */
+    const val GLX_GLADIO_READY: Boolean = true
 
     /** Winlator 等價 glibc Turnip（KGSL）；非 nihui bionic zip */
     const val TURNIP_VERSION = "25.1.0-R2"
@@ -77,7 +79,9 @@ object GpuStack {
         }
         g += "缺 Vortek／adrenotools 通路（Mali／非 KGSL；現為 glibc Turnip 直載）"
         g += "缺 Pulse／ALSA→AAudio 真輸出"
-        g += "缺 GLX／gladiorenderer（OpenGL 客體暫 BadImplementation）"
+        if (!GLX_GLADIO_READY) {
+            g += "缺 GLX／gladiorenderer（OpenGL 客體）"
+        }
         return g
     }
 
@@ -93,6 +97,7 @@ object GpuStack {
         parts += "Input✓（inject*）"
         parts += if (DRI3_ZEROCOPY_READY) "DRI3✓" else "DRI3✗"
         parts += if (TURNIP_ICD_READY && hasTurnip(ctx)) "ICD✓（glibc）" else "ICD✗"
+        parts += if (GLX_GLADIO_READY) "GLX✓（Gladio）" else "GLX✗"
         return parts.joinToString(" · ")
     }
 
@@ -109,7 +114,6 @@ object GpuStack {
             env += "HOST_TURNIP_DIR=${turnipDir(ctx).absolutePath}"
             env += "VK_ICD_FILENAMES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
             env += "VK_DRIVER_FILES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
-            env += "LD_LIBRARY_PATH=/mnt/gpu/turnip"
             env += "TU_DEBUG=noconform"
             env += "X86_TURNIP_ICD=glibc_kgsl"
         }
@@ -122,6 +126,11 @@ object GpuStack {
         env += "X86_WS_DATA=$wsDataAbs"
         env += "PRESENT_SHM=/mnt/data/present.shm"
         env += "X_PROTOCOL=inprocess_winlator"
+        if (GLX_GLADIO_READY) {
+            env += "X86_GLX=gladio"
+            // 客體 Gladio libGL（優先於 Mesa）；Wine OpenGL→GLX→gladiorenderer
+            env += "LD_LIBRARY_PATH=/opt/gladio/lib:/mnt/gpu/turnip"
+        }
         return env
     }
 
@@ -171,6 +180,7 @@ object GpuStack {
             } else {
                 onProgress("DXVK 已就緒")
             }
+            runCatching { stageGladioIntoRootfs(ctx) }
             File(stackRoot(ctx), "VERSION.json").writeText(
                 JSONObject()
                     .put("turnip", TURNIP_VERSION)
@@ -178,10 +188,48 @@ object GpuStack {
                     .put("dxvk", DXVK_VERSION)
                     .put("presentationReady", PRESENTATION_READY)
                     .put("turnipIcdReady", TURNIP_ICD_READY)
+                    .put("glxGladioReady", GLX_GLADIO_READY)
                     .put("installedAt", System.currentTimeMillis())
                     .toString(2),
             )
         }
+    }
+
+    /**
+     * 把 Gladio 客體 libGL 裝進 rootfs `/opt/gladio/lib`（GpuStack OpenGL／GLX）。
+     */
+        fun stageGladioIntoRootfs(ctx: Context): Boolean {
+        val rootfs = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
+        if (!rootfs.isDirectory) return false
+        val destDir = File(rootfs, "opt/gladio/lib").also { it.mkdirs() }
+        val destSo = File(destDir, "libGL.so.1.7.0")
+        if (!destSo.exists() || destSo.length() < 100_000L) {
+            try {
+                ctx.assets.open("engine/graphics/gladio/usr/lib/libGL.so.1.7.0").use { input ->
+                    destSo.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (_: Throwable) {
+                return false
+            }
+        }
+        destSo.setReadable(true, false)
+        destSo.setExecutable(true, false)
+        for (link in listOf("libGL.so.1", "libGL.so")) {
+            val f = File(destDir, link)
+            if (f.exists()) f.delete()
+            try {
+                java.nio.file.Files.createSymbolicLink(f.toPath(), destSo.toPath().fileName)
+            } catch (_: Throwable) {
+                destSo.copyTo(f, overwrite = true)
+            }
+        }
+        File(destDir, "VERSION").writeText("gladio-1.1" + "\n")
+        return destSo.exists()
+    }
+
+fun hasGladioGuest(ctx: Context): Boolean {
+        val so = File(ComponentInstaller.runtimeRoot(ctx), "rootfs/opt/gladio/lib/libGL.so.1.7.0")
+        return so.isFile && so.length() > 100_000L
     }
 
     fun stageDxvkIntoPrefix(ctx: Context, winePrefix: File): Boolean {

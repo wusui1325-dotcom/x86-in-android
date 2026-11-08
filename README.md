@@ -5,9 +5,13 @@
 - **不是** Winlator 假桌面殼
 - 啟動：進 App → 選裝置上的 `.exe` 或 App 私有工作區 → 全螢幕直開
 - Package：`com.wusper.x86`
-- 工程：之後接 Box64（翻譯）＋ Wine（Windows PE）；目前為 **空殼**（假啟動＋工作區）
+- 工程：Compose Material3 殼＋P0 啟動管線（host ELF 可跑）；Box64 翻譯層待打包（見 docs/ENGINE.md）
 
-詳見 [docs/PLAN.md](docs/PLAN.md)。
+詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)。
+
+## UI
+
+原生 **Jetpack Compose Material 3**（動態色可選）、繁中、無假桌面。
 
 ## 工作區模型
 

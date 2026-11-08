@@ -1,13 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">x86-in-android</string>
+    <string name="home_subtitle">選取 .exe 或工作區 → 全螢幕直開。無假桌面。</string>
     <string name="title_workspaces">已有工作區</string>
     <string name="title_device_exes">裝置上的 .exe</string>
     <string name="btn_pick_exe">選取 .exe</string>
     <string name="btn_refresh">重新整理</string>
+    <string name="btn_host_smoke">跑 host ELF 驗收</string>
     <string name="empty_workspaces">尚無工作區。選一個 .exe 啟動後會自動建立。</string>
-    <string name="empty_exes">尚未選取任何 .exe。點上方按鈕從裝置挑選。</string>
-    <string name="launch_placeholder">即將啟動：%1$s（引擎尚未接入）</string>
+    <string name="empty_exes">尚未選取任何 .exe。點右下角＋從裝置挑選。</string>
     <string name="workspace_created">已建立工作區：%1$s</string>
     <string name="hidden_exe_hint">已有工作區的 exe 會從此列表隱藏，請從「已有工作區」進入。</string>
+    <string name="session_title">執行中</string>
+    <string name="notify_channel">引擎執行中</string>
+    <string name="notify_running">執行中：%1$s</string>
+    <string name="notify_running_hint">點開回到全螢幕工作階段</string>
 </resources>

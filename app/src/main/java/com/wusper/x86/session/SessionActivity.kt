@@ -43,6 +43,7 @@ import com.wusper.x86.engine.GpuStack
 import com.wusper.x86.engine.GraphicsBackend
 import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.graphics.SurfaceFrameBridge
+import com.wusper.x86.graphics.PresentSurfaceBridge
 import com.wusper.x86.graphics.X11InputBridge
 import android.view.MotionEvent
 import com.wusper.x86.engine.NativeEngine
@@ -81,6 +82,7 @@ class SessionActivity : ComponentActivity() {
                 var status by remember { mutableStateOf("初始化") }
                 var logFile by remember { mutableStateOf<File?>(null) }
                 var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
+                var presentBridge by remember { mutableStateOf<PresentSurfaceBridge?>(null) }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
 
@@ -144,11 +146,8 @@ class SessionActivity : ComponentActivity() {
                             logText += "重建：${plan.mode}\n${plan.kindMessage}\n"
                         }
                     }
-                    // SoftLegacy 才接 xdotool／XWD；GpuStack 等 Present 橋
-                    if (plan.mode == LaunchPipeline.Mode.WineProot &&
-                        plan.graphicsBackend == GraphicsBackend.SoftLegacy &&
-                        !plan.needsRuntimeInstall
-                    ) {
+                    // 輸入橋：GpuStack／SoftLegacy 過渡皆可用 xdotool（WinHandler 下一檔）
+                    if (plan.mode == LaunchPipeline.Mode.WineProot && !plan.needsRuntimeInstall) {
                         val input = X11InputBridge(ws.dataDir)
                         input.prepareFifo()
                         val agentCopy = java.io.File(ws.dataDir, "x11-input-agent.sh")
@@ -157,40 +156,94 @@ class SessionActivity : ComponentActivity() {
                         }
                         agentCopy.setExecutable(true, false)
                         inputBridgeRef.set(input)
-                        logText += "【SoftLegacy】輸入橋 xdotool\n"
+                        logText += "輸入橋：xdotool 過渡\n"
+                    }
+                    // 若缺 X 協定 stub（Xvfb binary），補裝 x11-overlay
+                    if (plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.GpuStack &&
+                        ComponentInstaller.needsX11Overlay(this@SessionActivity)
+                    ) {
+                        status = "安裝 X stub"
+                        logText += "補裝 X 協定 stub（x11-overlay／Xvfb）…\n"
+                        val inst = withContext(Dispatchers.IO) {
+                            ComponentInstaller.install(this@SessionActivity) { }
+                        }
+                        if (inst.isFailure) {
+                            logText += "X stub 安裝失敗：${inst.exceptionOrNull()?.message}\n"
+                        }
                     }
                     val result = LaunchPipeline.start(plan)
                     status = when {
                         result.ok -> "執行中 pid=${result.pid}"
-                        plan.mode == LaunchPipeline.Mode.WineGpuPending -> "GpuStack 待 Present"
+                        plan.mode == LaunchPipeline.Mode.WineGpuPending -> "GpuStack 待組件"
                         else -> "失敗"
                     }
                     logText += result.message + "\n"
-                    if (result.ok &&
-                        plan.mode == LaunchPipeline.Mode.WineProot &&
-                        plan.graphicsBackend == GraphicsBackend.SoftLegacy
+
+                    // 等 Surface
+                    var waited = 0
+                    while (surfaceHolderRef.get() == null && waited < 50) {
+                        delay(100); waited++
+                    }
+                    val holder = surfaceHolderRef.get()
+                    val surf = holder?.surface
+
+                    if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.GpuStack && surf != null && surf.isValid
+                    ) {
+                        presentBridge?.shutdown()
+                        frameBridge?.shutdown()
+                        val input = inputBridgeRef.get()
+                        val bridge = PresentSurfaceBridge(
+                            dataDir = ws.dataDir,
+                            surface = surf,
+                            targetFps = 30,
+                            allowXwdFeeder = true,
+                            allowStub = true,
+                            onBlitRect = { r ->
+                                input?.blitRect = r
+                                // letterbox 假設桌面滿版 Present
+                            },
+                        )
+                        presentBridge = bridge
+                        bridge.start()
+                        logText += "Present：AHB→ANativeWindow（shm／xwd feeder／stub）\n"
+                    } else if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.SoftLegacy && holder != null
                     ) {
                         val fbDir = java.io.File(ws.dataDir, "xfb").also { it.mkdirs() }
-                        var waited = 0
-                        while (surfaceHolderRef.get() == null && waited < 50) {
-                            delay(100); waited++
-                        }
-                        surfaceHolderRef.get()?.let { sh ->
-                            frameBridge?.shutdown()
-                            val input = inputBridgeRef.get()
-                            val bridge = SurfaceFrameBridge(
-                                fbDir, sh, targetFps = 15,
-                                onBlitRect = { r -> input?.blitRect = r },
-                            )
-                            frameBridge = bridge
-                            bridge.start()
-                            logText += "【SoftLegacy】Xvfb XWD → Surface（非產品預設）\n"
-                        }
+                        frameBridge?.shutdown()
+                        val input = inputBridgeRef.get()
+                        val bridge = SurfaceFrameBridge(
+                            fbDir, holder, targetFps = 15,
+                            onBlitRect = { r -> input?.blitRect = r },
+                        )
+                        frameBridge = bridge
+                        bridge.start()
+                        logText += "【SoftLegacy】Xvfb XWD→Canvas（非產品預設）\n"
                     }
-                    // GpuStack pending：不輪詢客體進程，停在缺口說明
+
                     if (plan.mode == LaunchPipeline.Mode.WineGpuPending || plan.gpuBlocked) {
-                        EngineForegroundService.stop(this@SessionActivity)
-                        return@LaunchedEffect
+                        // 仍可掛 Present stub 證明通路
+                        if (surf != null && surf.isValid) {
+                            presentBridge?.shutdown()
+                            val bridge = PresentSurfaceBridge(
+                                dataDir = ws.dataDir,
+                                surface = surf,
+                                targetFps = 20,
+                                allowXwdFeeder = false,
+                                allowStub = true,
+                            )
+                            presentBridge = bridge
+                            bridge.start()
+                            logText += "Present stub 演示（組件未齊／待啟動）\n"
+                            status = "Present stub"
+                        }
+                        // 不 return：若只有 pending 且已演示，仍結束服務輪詢
+                        if (!result.ok) {
+                            EngineForegroundService.stop(this@SessionActivity)
+                            return@LaunchedEffect
+                        }
                     }
                     while (true) {
                         delay(400)
@@ -214,6 +267,7 @@ class SessionActivity : ComponentActivity() {
                     onDispose {
                         inputBridgeRef.get()?.shutdown()
                         frameBridge?.shutdown()
+                        presentBridge?.shutdown()
                         LaunchPipeline.stop()
                         EngineForegroundService.stop(this@SessionActivity)
                     }
@@ -226,6 +280,8 @@ class SessionActivity : ComponentActivity() {
                             navigationIcon = {
                                 IconButton(onClick = {
                                     inputBridgeRef.get()?.shutdown()
+                                    frameBridge?.shutdown()
+                                    presentBridge?.shutdown()
                                     LaunchPipeline.stop()
                                     EngineForegroundService.stop(this@SessionActivity)
                                     finish()
@@ -270,6 +326,9 @@ class SessionActivity : ComponentActivity() {
                                             override fun surfaceDestroyed(holder: SurfaceHolder) {
                                                 frameBridge?.shutdown()
                                                 frameBridge = null
+                                                presentBridge?.shutdown()
+                                                presentBridge = null
+                                                NativeEngine.nativePresentDetach()
                                                 surfaceHolderRef.set(null)
                                             }
                                         })

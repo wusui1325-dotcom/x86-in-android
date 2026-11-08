@@ -261,3 +261,8 @@ com.wusper.x86（暫名）
 - **砍掉預設** Xvfb→XWD 軟渲；軟渲僅工程 `forceSoftLegacy`。
 - 最短路徑：組件級重用（MIT Turnip、Zlib DXVK）＋自研 Session Surface；不整叉 Winlator。
 - 見 docs/GPU_STACK.md；0.1.7＝架構切換＋文件＋可編譯；Present 橋＝下一缺口。
+
+### 進度（2026-11-09 ~01:00 HKT）
+
+- Present：AHB→ANativeWindow 落地；PRESENTATION_READY=true（0.1.8）。
+- X 仍為 Xvfb 協定 stub；DRI3 零拷貝與完整進程內 X 下一檔。

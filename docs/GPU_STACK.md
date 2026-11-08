@@ -43,20 +43,27 @@
 | GL/VK | Turnip＋DXVK | `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe |
 | 輸入 | WinHandler 級（待做） | xdotool cmd 佇列 |
 
-## 本版已接
+## 本版已接（0.1.8）
 
-- `GraphicsBackend`／`GpuStack`：就緒檢查、缺口列表、Turnip／DXVK 下載解壓、DXVK stage 進 prefix
-- `LaunchPipeline`：PE 預設 GpuStack；Present 未就緒 → `WineGpuPending`（不啟動軟渲）
-- `wine-launch.sh`：`GRAPHICS_BACKEND=gpu|soft`；gpu 路徑拒絕無 X 時的 Xvfb 偷跑
-- Session：GpuStack 先備料組件；僅 SoftLegacy 掛 XWD blit
+- **Present 通路**：`present_engine.cpp` — `AHardwareBuffer` → `ANativeWindow`（Session Surface）
+- **PresentSurfaceBridge**：shm → XWD feeder → stub 色條（可測）
+- **present.shm** 協定（`PresentShm`）供客體／工具寫幀
+- **PRESENTATION_READY=true**；PE 在 Turnip＋DXVK 備齊後可進 `WineProot`＋Present
+- X 協定：**Xvfb socket stub**（非 SoftLegacy Canvas）；輸入仍暫 xdotool
 
-## 下一步（可跑 .exe 全螢幕的缺口）
+## 怎麼 Present
 
-1. **進程內 X／合成器**（對齊 Winlator `XServer`＋`GLRenderer`／`XServerView`）或 DRI3 Present→`AHardwareBuffer`→Session Surface  
-2. 把 Turnip ICD 以 **thunk／adrenotools／VK_ICD** 真正接到客體 Vulkan（glibc↔bionic 邊界）  
-3. DXVK／VKD3D 預設 override 驗證（D3D 測試 exe）  
-4. **輸入橋**：觸控／鍵鼠→客體（WinHandler UDP 或 X 注入，取代 xdotool 檔）  
-5. 音訊：Pulse／ALSA→AAudio  
-6. （可選）Winlator 容器啟動腳本／環境變數表對齊，仍不繼承假桌面 UX  
+1. `nativePresentCreate(w,h)` 配置 AHB（CPU_WRITE/READ + GPU_SAMPLED）
+2. `nativePresentAttachSurface(Surface)` → `ANativeWindow_fromSurface`
+3. 每幀 RGBA → lock AHB → 寫入 → `ANativeWindow_lock` 拷貝 → `unlockAndPost`
+4. 幀來源優先：`files/.../present.shm` → Xvfb `xfb/Xvfb_screen0`（過渡 feeder）→ stub
 
-`GpuStack.PRESENTATION_READY` 目前為 **false**；變 true 的條件＝缺口 1 落地並通過至少一個 PE 全螢幕煙測。
+## 還缺什麼
+
+1. **完整進程內 X**（Winlator Java X／Termux-X11 Lorie 級）— 取代 Xvfb stub
+2. **DRI3／AHB 零拷貝**（現為 CPU present；結構已留 GPU_SAMPLED）
+3. WinHandler 級輸入；AAudio
+4. Turnip ICD thunk 實機驗證
+
+`GpuStack.PRESENTATION_READY` 已為 **true**（Present 通路可測）；X stub≠最終 X。
+

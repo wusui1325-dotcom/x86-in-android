@@ -77,6 +77,23 @@ object ComponentInstaller {
         return File(rootfs, "usr/bin/Xvfb").exists() && File(rootfs, "usr/bin/xdotool").exists()
     }
 
+    /** GpuStack 過渡：確保 Xvfb 在 rootfs（只當 X 協定 stub，畫面走 Present／AHB） */
+    fun ensureXProtocolStub(ctx: Context): Boolean {
+        val rootfs = File(runtimeRoot(ctx), "rootfs")
+        val xvfb = File(rootfs, "usr/bin/Xvfb")
+        if (xvfb.exists()) {
+            xvfb.setExecutable(true, false)
+            return true
+        }
+        // 觸發完整 install 以拉取 x11-overlay（若 manifest 仍含）
+        return false
+    }
+
+    fun needsX11Overlay(ctx: Context): Boolean {
+        val rootfs = File(runtimeRoot(ctx), "rootfs")
+        return !File(rootfs, "usr/bin/Xvfb").exists()
+    }
+
     fun ensureProot(ctx: Context): File {
         val dest = File(EngineAssets.engineRoot(ctx), "proot")
         return copyAsset(ctx, "engine/proot", dest, executable = true)
@@ -139,12 +156,14 @@ object ComponentInstaller {
             val hasAddons = hasWineAddons(rootfs)
             val baseOk = hasWine && hasBox
             // GpuStack 預設：不再強制抓 Xvfb／xdotool；僅補 Electron／mono 等
+            val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
             val needExtras = mutableSetOf<String>()
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
-            // SoftLegacy 工程路徑仍可手動帶 x11／input（manifest 保留）
+            // GpuStack X 協定 stub 需要 Xvfb binary（非 SoftLegacy 顯示路徑）
+            if (!hasXvfb) needExtras += "x11-overlay"
             val onlyExtras = baseOk && needExtras.isNotEmpty()
-            val stampOnly = baseOk && hasElectron && hasAddons
+            val stampOnly = baseOk && hasElectron && hasAddons && hasXvfb
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }

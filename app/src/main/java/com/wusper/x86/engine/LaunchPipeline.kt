@@ -287,7 +287,7 @@ object LaunchPipeline {
             GraphicsBackend.GpuStack -> {
                 env += GpuStack.guestEnv(ctx, ws.dataDir.absolutePath)
                 kindMessage =
-                    "Windows PE · GpuStack（Turnip／DXVK／真 Surface）· PRoot→Box64→Wine ${pe.name}"
+                    "Windows PE · GpuStack Present（AHB→Surface）＋X stub · PRoot→Box64→Wine ${pe.name}"
             }
             GraphicsBackend.SoftLegacy -> {
                 env += "GRAPHICS_BACKEND=soft"

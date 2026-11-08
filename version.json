@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.7",
-  "versionCode": 8,
-  "notes": "0.1.7: 定案 A — GpuStack 預設（Turnip／DXVK）；砍預設 Xvfb 軟渲；架構＋文件＋可編譯"
+  "versionName": "0.1.8",
+  "versionCode": 9,
+  "notes": "0.1.8: Present AHB→ANativeWindow；PRESENTATION_READY=true；X stub＋shm／xwd feeder／stub 可測"
 }

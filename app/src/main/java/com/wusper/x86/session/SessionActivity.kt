@@ -956,6 +956,9 @@ class SessionActivity : ComponentActivity() {
         private val KEY_LOG_PATTERNS = listOf(
             "FATAL:",
             "WINE_VERSION_SMOKE",
+            "TIMEOUT",
+            "still running",
+            "prereserve",
             "c0000018",
             "shared user data",
             "granularity_mask",

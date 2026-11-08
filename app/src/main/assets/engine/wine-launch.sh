@@ -264,6 +264,9 @@ if [ ! -f /opt/wine/lib/wine/x86_64-unix/wine ]; then
 fi
 
 # 強制安全預設（覆蓋 Kotlin env）
+# 0.1.36: DYNAREC=1（dynarecSafe）。0.1.29–35 用 interpreter 擋 SIGILL，但 wine64k
+# 過 granularity 後 wine --version 在 DYNAREC=0 下會活掛（Boss pid 仍在、無 exit）。
+# bookworm x64lib + NOHOSTEXT 已否證「dynarec 必 SIGILL」；改回 dynarec 讓冒煙／wineserver 可結束。
 export BOX64_DYNAREC_NOHOSTEXT=1
 export BOX64_DYNAREC_NATIVEFLAGS=0
 export BOX64_AVX=0
@@ -271,7 +274,7 @@ export BOX64_SSE42=0
 export BOX64_AES=0
 export BOX64_SHAEXT=0
 export BOX64_PCLMULQDQ=0
-export BOX64_DYNAREC=0
+export BOX64_DYNAREC="${BOX64_DYNAREC:-1}"
 export BOX64_DYNAREC_STRONGMEM="${BOX64_DYNAREC_STRONGMEM:-1}"
 export BOX64_DYNAREC_SAFEFLAGS="${BOX64_DYNAREC_SAFEFLAGS:-2}"
 export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-0}"
@@ -292,18 +295,68 @@ export BOX64_NOBANNER=0
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
 # 冒煙：wine --version（隔離 ntdll／libgcc／WINELOADER）
-# 暫時打開 err 日誌，完整落入 session（stdout）與檔案
+# 0.1.36: 即時 tee + timeout（防 DYNAREC=0 活掛）；獨立 WINEPREFIX 避免卡住真實 prefix
+SMOKE_TIMEOUT="${WINE_VERSION_SMOKE_TIMEOUT:-90}"
+SMOKE_PREFIX="/tmp/wine-smoke-$$"
+mkdir -p "$SMOKE_PREFIX"
+: > /mnt/data/wine-version.out
 log "WINE_VERSION_SMOKE begin cmd=$BOX64 /opt/wine/lib/wine/x86_64-unix/wine --version"
+log "WINE_VERSION_SMOKE timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (live tee)"
 SMOKE_WINEDEBUG_SAVE="${WINEDEBUG-}"
-export WINEDEBUG="+err,+fix"
+SMOKE_PREFIX_SAVE="${WINEPREFIX-}"
+export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEPREFIX="$SMOKE_PREFIX"
 set +e
-"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >/mnt/data/wine-version.out 2>&1
-WV=$?
-set -e
+# 背景跑 + 輪詢輸出／heartbeat；到時 KILL（plain sh 無 PIPESTATUS／可靠 timeout）
+"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >>/mnt/data/wine-version.out 2>&1 &
+SMOKE_PID=$!
+SMOKE_BYTES=0
+SMOKE_ELAPSED=0
+WV=""
+while kill -0 "$SMOKE_PID" 2>/dev/null; do
+  SZ=$(wc -c < /mnt/data/wine-version.out 2>/dev/null | tr -d ' \n' || echo 0)
+  SZ=${SZ:-0}
+  if [ "$SZ" -gt "$SMOKE_BYTES" ] 2>/dev/null; then
+    # 把新增位元組即時打到 session／gpu-stack
+    dd if=/mnt/data/wine-version.out bs=1 skip="$SMOKE_BYTES" count=$((SZ-SMOKE_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log
+    SMOKE_BYTES=$SZ
+  fi
+  SMOKE_ELAPSED=$((SMOKE_ELAPSED+1))
+  if [ "$SMOKE_ELAPSED" -ge "$SMOKE_TIMEOUT" ]; then
+    log "WINE_VERSION_SMOKE TIMEOUT after ${SMOKE_TIMEOUT}s — killing smoke pid=$SMOKE_PID (likely hang under Box64/Wine)"
+    kill -TERM "$SMOKE_PID" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$SMOKE_PID" 2>/dev/null || true
+    # 清掉 smoke 用的 wineserver（同 WINEPREFIX）
+    "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+    pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
+    WV=124
+    break
+  fi
+  if [ $((SMOKE_ELAPSED % 10)) -eq 0 ]; then
+    log "WINE_VERSION_SMOKE still running t=${SMOKE_ELAPSED}s out_bytes=${SMOKE_BYTES} pid=$SMOKE_PID"
+  fi
+  sleep 1
+done
+if [ -z "$WV" ]; then
+  wait "$SMOKE_PID"
+  WV=$?
+fi
+# 衝刷殘餘輸出
+SZ=$(wc -c < /mnt/data/wine-version.out 2>/dev/null | tr -d ' \n' || echo 0)
+SZ=${SZ:-0}
+if [ "$SZ" -gt "$SMOKE_BYTES" ] 2>/dev/null; then
+  dd if=/mnt/data/wine-version.out bs=1 skip="$SMOKE_BYTES" 2>/dev/null | tee -a /mnt/data/gpu-stack.log
+fi
+# 先在 smoke prefix 上殺 wineserver，再還原真實 WINEPREFIX
+"$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+wait "$SMOKE_PID" 2>/dev/null || true
+rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 if [ -n "$SMOKE_WINEDEBUG_SAVE" ]; then export WINEDEBUG="$SMOKE_WINEDEBUG_SAVE"; else export WINEDEBUG="-all"; fi
+if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
+set -e
 log "WINE_VERSION_SMOKE exit=$WV"
 log "--- WINE_VERSION_SMOKE output begin ---"
-# 整份輸出進 session／gpu-stack（上限 80 行，避免爆）
 head -80 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 log "--- WINE_VERSION_SMOKE output end ---"
 # 若印出 wine-x.y 字樣，視為冒煙通過（有些環境收尾非 0）
@@ -311,10 +364,18 @@ SMOKE_OK=0
 if [ "$WV" = "0" ]; then SMOKE_OK=1; fi
 if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then SMOKE_OK=1; fi
 if [ "$WV" = "132" ]; then
-  log "FATAL: wine --version SIGILL (exit 132). Emulated ntdll／libgcc／loader."
+  log "FATAL: wine --version SIGILL (exit 132). Emulated ntdll／libgcc／loader／dynarec."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 132
+fi
+if [ "$WV" = "124" ]; then
+  log "FATAL: wine --version smoke HANG (timeout ${SMOKE_TIMEOUT}s, exit 124). Box64/Wine did not finish."
+  log "HINT: expect WINE prereserve of 0x10000:0x10000; if missing, reinstall Box64-wine64k. If DYNAREC=0, upgrade to 0.1.36+ (dynarecSafe)."
+  log "HINT: partial out_bytes=$(wc -c < /mnt/data/wine-version.out 2>/dev/null || echo 0)"
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 124
 fi
 if [ "$SMOKE_OK" = "1" ]; then
   log "WINE_VERSION_SMOKE ok (exit=$WV, version line present or exit 0)"
@@ -329,7 +390,7 @@ else
   if [ "$WV" = "134" ]; then
     log "HINT: exit 134=SIGABRT (often Wine ntdll assert). Check BOX64_WINE64K_STAMP / prereserve sizes."
   fi
-  log "HINT: WINELOADER=$WINELOADER WINE_REAL=$WINE_REAL; not Android storage permission."
+  log "HINT: WINELOADER=$WINELOADER WINE_REAL=$WINE_REAL DYNAREC=$BOX64_DYNAREC; not Android storage permission."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 1

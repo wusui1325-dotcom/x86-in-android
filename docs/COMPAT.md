@@ -1,3 +1,22 @@
+## 0.1.36 — wine --version hang under DYNAREC=0
+
+**Symptom (0.1.35):** Session shows `執行中`；log stops at `WINE_VERSION_SMOKE begin cmd=…wine --version`
+with **no** prereserve／version／exit. Boss confirmed pid still alive → **hang**, not silent crash.
+Stamps／SELFTEST／NTDLL／X64LIB／GpuStack all OK.
+
+**Root cause:** 0.1.29–35 forced `BOX64_DYNAREC=0` (interpreter). After wine64k fixed the early
+Wine11 `granularity_mask` SIGABRT, `wine --version` proceeds into heavier init／wineserver and
+**never returns** under interpreter. Smoke also redirected all stdout/stderr to a file with **no
+timeout**, so the UI sat forever on `begin`.
+
+**Fix:**
+- Default `BOX64_DYNAREC=1` (dynarecSafe + NOHOSTEXT；bookworm x64lib 已否證「dynarec 必 SIGILL」)
+- Smoke: 90s timeout + live tee/heartbeat + disposable `WINEPREFIX` + kill wineserver on timeout (exit 124)
+- `ensureWineLaunchScript` 覆寫腳本 → **蓋裝即可**，不必重裝運行時
+
+**Retest:** Cover-install 0.1.36 → expect `DYNAREC=1`, live Box64 lines, `WINE prereserve of 0x10000:0x10000`,
+`wine-11.x` version string, `WINE_VERSION_SMOKE ok`. If still hang → `TIMEOUT`／exit 124 with partial out.
+
 ## 0.1.35 — XZFormatException on wine64k.wcp extract
 
 **Symptom (0.1.34 cover-install / reinstall):** `安裝失敗：Input is not in the XZ format` (`XZFormatException`)

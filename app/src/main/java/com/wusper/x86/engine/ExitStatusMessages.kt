@@ -87,6 +87,7 @@ object ExitStatusMessages {
         126 -> "客體命令無法執行"
         1 -> "客體以錯誤結束"
         132 -> "客體非法指令（SIGILL）"
+        124 -> "冒煙逾時（wine --version 活掛）"
         134 -> "客體中止（SIGABRT／Wine assert）"
         else -> "客體異常結束"
     }
@@ -109,6 +110,10 @@ object ExitStatusMessages {
         132 -> (
             "客體退出碼 132＝SIGILL。0.1.30+ 已換 bookworm libgcc；若仍 132，看 BOX64_SELFTEST／WINE_VERSION_SMOKE。" +
                 "SELFTEST=132 → 換 Box64；SMOKE=132 → Wine／x64lib；僅 explorer 炸 → GPU／PE。"
+            )
+        124 -> (
+            "客體退出碼 124＝WINE_VERSION_SMOKE 逾時。0.1.35 在 DYNAREC=0（interpreter）下 wine --version 會活掛（pid 仍在、無 exit）。" +
+                "0.1.36+ 改 dynarecSafe（DYNAREC=1）並加 90s timeout＋即時 tee；請蓋裝後直接重開（腳本覆寫，通常不必重裝運行時）。"
             )
         134 -> (
             "客體退出碼 134＝SIGABRT。0.1.33 常見 Wine11 set_mem_area_state granularity_mask assert：" +

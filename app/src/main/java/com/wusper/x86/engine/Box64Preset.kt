@@ -1,15 +1,16 @@
 package com.wusper.x86.engine
 
 /**
- * Wine／PE 預設走 **interpreter（DYNAREC=0）**。
- * 0.1.29 已證 dynarec 非本機 SIGILL 主因；0.1.30 改打 x64lib／wine 包裝鏈。
+ * Wine／PE 預設走 **dynarecSafe（DYNAREC=1 + NOHOSTEXT）**。
+ * 0.1.29–35 曾用 interpreter 擋 SIGILL；0.1.36 起 wine64k 過後 interpreter 會活掛 wine --version，
+ * 改回 dynarec（bookworm x64lib + NOHOSTEXT）。
  */
 object Box64Preset {
     /**
-     * Wine／PE 預設（0.1.30+）：DYNAREC=0 + NOHOSTEXT + ISA 廣告關 + Winlator COMPAT 向收斂。
+     * Wine／PE 預設（0.1.36+）：DYNAREC=1 + NOHOSTEXT + ISA 廣告關 + Winlator COMPAT 向收斂。
      */
     val performance: Array<String> = arrayOf(
-        "BOX64_DYNAREC=0",
+        "BOX64_DYNAREC=1",
         "BOX64_DYNAREC_NOHOSTEXT=1",
         "BOX64_DYNAREC_NATIVEFLAGS=0",
         "BOX64_DYNAREC_FASTNAN=0",

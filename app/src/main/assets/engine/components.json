@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1",
+  "runtimeId": "wine-gpustack-v0.1.22-box64-glibc",
   "approxDownloadBytes": 450000000,
   "components": [
     {
@@ -21,13 +21,14 @@
     },
     {
       "id": "box64-glibc",
-      "filename": "Box64-0.4.3.wcp",
-      "url": "https://github.com/The412Banner/Nightlies/releases/download/Box64/Box64-0.4.3.wcp",
-      "sha256": "",
+      "filename": "Box64-0.4.4-glibc.wcp",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/Box64-0.4.4-glibc.wcp",
+      "sha256": "d17ca6d7e9e29fc51f736ac38cd4bffb90ef060fe9ed6c380cfc3fd33e63d53a",
       "extract": "rootfs/usr/local/bin",
       "pickFiles": [
         "box64"
-      ]
+      ],
+      "notes": "glibc aarch64 Box64 0.4.4 (Winlator-derived; INTERP=/lib/ld-linux-aarch64.so.1). NOT bionic/linker64."
     },
     {
       "id": "x11-overlay",

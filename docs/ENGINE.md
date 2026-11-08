@@ -57,3 +57,12 @@ Android `files`／`code_cache` 常 **noexec**。宿主 `libproot.so`／`libproot
 - `ensureUsrmergeShell`：補 `bin`／`lib`／`sh→dash`，並保證 `lib/ld-linux-aarch64.so.1`（symlink 失敗則 copy）
 - `hasValidRootfs`：必須有可解析 shell ELF **且** 有 ld-linux；不接受 dangling symlink
 - 啟動 argv 優先 `/usr/bin/dash`（真實 ELF），不再只靠 `/bin/sh` 字面
+
+## box64 glibc（0.1.22）
+
+客體 `/usr/local/bin/box64` 必須是 **glibc**（`libc.so.6`＋`/lib/ld-linux-aarch64.so.1`）。
+The412Banner Nightlies `Box64-*-Bionic/Native.wcp` 皆為 bionic（`/system/bin/linker64`），
+在 PRoot Ubuntu 內 `exec` → dash `box64: not found`（缺 interpreter 的 ENOENT）。
+
+改用 `runtime-v1/Box64-0.4.4-glibc.wcp`（Winlator 0.4.4 衍生，patchelf INTERP）；
+`isGlibcBox64` 校驗；`runtimeId` bump 強制重裝。

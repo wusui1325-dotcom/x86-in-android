@@ -201,3 +201,8 @@
 
 - 修 proot `execve(/usr/bin/sh) No such file`：補 usrmerge `lib`＋`/lib/ld-linux-aarch64.so.1`（dash PT_INTERP）
 - 校驗改為 shell ELF＋動態連結器皆需可解析；啟動優先 `/usr/bin/dash`
+
+## 更新 0.1.22 — glibc box64（修 not found）
+
+- 根因：components 下載的 Box64-0.4.3.wcp 為 **bionic**（linker64），非客體 glibc
+- 改 `Box64-0.4.4-glibc.wcp`；安裝／isReady 拒 bionic；wine-launch 明確 FATAL

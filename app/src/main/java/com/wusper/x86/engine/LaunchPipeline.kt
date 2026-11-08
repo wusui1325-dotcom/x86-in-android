@@ -265,6 +265,12 @@ object LaunchPipeline {
         ExecBits.force(prootBundle.loader)
         ComponentInstaller.ensureWineLaunchScript(ctx)
         val rootfsDir = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
+        if (!ComponentInstaller.hasGlibcBox64(rootfsDir)) {
+            throw IllegalStateException(
+                "rootfs 缺 glibc box64（/usr/local/bin/box64）。" +
+                    "舊 bionic／linker64 版無法在 Ubuntu proot 執行（dash 報 not found）。請重裝運行時。",
+            )
+        }
         ComponentInstaller.ensureUsrmergeShell(rootfsDir)
         if (!ComponentInstaller.hasValidRootfs(rootfsDir)) {
             val shell = ComponentInstaller.resolveShellElf(rootfsDir)?.guestPath ?: "(none)"

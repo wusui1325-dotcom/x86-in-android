@@ -130,7 +130,31 @@ if [ "$BACKEND" = "soft" ]; then
   fi
 fi
 
-/usr/local/bin/box64 /opt/wine/bin/wine explorer /desktop=x86,${W}x${H} "$@"
+# Box64：必須是 glibc 客體二進位（INTERP /lib/ld-linux-aarch64.so.1）
+# 舊版誤裝 bionic（/system/bin/linker64）→ dash 報 "not found"
+BOX64=
+for c in \
+  /usr/local/bin/box64 \
+  /opt/box64/bin/box64 \
+  /usr/bin/box64
+do
+  if [ -x "$c" ] || [ -f "$c" ]; then BOX64=$c; break; fi
+done
+if [ -z "$BOX64" ]; then
+  echo "FATAL: box64 missing (expected /usr/local/bin/box64 glibc). Reinstall runtime." >> /mnt/data/gpu-stack.log
+  ls -la /usr/local/bin >> /mnt/data/gpu-stack.log 2>&1 || true
+  exit 127
+fi
+echo "BOX64=$BOX64" >> /mnt/data/gpu-stack.log
+chmod +x "$BOX64" 2>/dev/null || true
+
+WINEBIN=/opt/wine/bin/wine
+if [ ! -x "$WINEBIN" ] && [ ! -f "$WINEBIN" ]; then
+  echo "FATAL: wine missing at $WINEBIN" >> /mnt/data/gpu-stack.log
+  exit 127
+fi
+
+"$BOX64" "$WINEBIN" explorer /desktop=x86,${W}x${H} "$@"
 RC=$?
 
 [ -n "$IPID" ] && kill $IPID 2>/dev/null || true

@@ -155,10 +155,9 @@ object ComponentInstaller {
         if (expect.isNotBlank() && installedRuntimeId(ctx) != expect) return false
         val rootfs = File(root, "rootfs")
         val wine = File(rootfs, "opt/wine/bin/wine")
-        val box = File(rootfs, "usr/local/bin/box64")
         val prootFiles = File(EngineAssets.engineRoot(ctx), "proot")
         val prootNative = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
-        return wine.exists() && box.exists() &&
+        return wine.exists() && hasGlibcBox64(rootfs) &&
             hasValidRootfs(rootfs) &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             hasTurnipVkDeps(rootfs) &&
@@ -254,7 +253,14 @@ object ComponentInstaller {
             val arr = jo.getJSONArray("components")
             val rootfs = File(root, "rootfs")
             val hasWine = File(rootfs, "opt/wine/bin/wine").exists()
-            val hasBox = File(rootfs, "usr/local/bin/box64").exists()
+            val hasBox = hasGlibcBox64(rootfs)
+            // 舊 bionic box64 視為未裝，強制重抓 glibc 包
+            if (!hasBox) {
+                File(rootfs, "usr/local/bin/box64").takeIf { it.exists() }?.let {
+                    android.util.Log.w("ComponentInstaller", "removing non-glibc box64 ${it.length()}B")
+                    it.delete()
+                }
+            }
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
             // 舊安裝跳過 symlink → 無 /bin/sh；先補 usrmerge（保留已下的 wine／box）
@@ -703,6 +709,36 @@ object ComponentInstaller {
         }
     }
 
+    /**
+     * 客體 Box64 必須是 **glibc**（PT_INTERP `/lib/ld-linux-aarch64.so.1`，NEEDED libc.so.6）。
+     * Nightlies「Bionic／Native」.wcp 都是 `/system/bin/linker64`，在 Ubuntu proot 內
+     * exec 會被 dash 報 `box64: not found`（ENOENT on missing interpreter）。
+     */
+    fun isGlibcBox64(file: File): Boolean {
+        if (!file.isFile || file.length() < 4096L) return false
+        return runCatching {
+            file.inputStream().use { input ->
+                val buf = ByteArray(minOf(file.length(), 2_000_000L).toInt())
+                var off = 0
+                while (off < buf.size) {
+                    val n = input.read(buf, off, buf.size - off)
+                    if (n <= 0) break
+                    off += n
+                }
+                val bytes = buf.copyOf(off)
+                val asStr = runCatching { String(bytes, Charsets.ISO_8859_1) }.getOrDefault("")
+                val hasBionic = asStr.contains("/system/bin/linker64") ||
+                    asStr.contains("linker64") && asStr.contains("Android")
+                val hasGlibcInterp = asStr.contains("ld-linux-aarch64.so.1")
+                val hasGlibcLibc = asStr.contains("libc.so.6")
+                !hasBionic && hasGlibcInterp && hasGlibcLibc
+            }
+        }.getOrDefault(false)
+    }
+
+    fun hasGlibcBox64(rootfs: File): Boolean =
+        isGlibcBox64(File(rootfs, "usr/local/bin/box64"))
+
     private fun extractBox64(archive: File, binDir: File) {
         binDir.mkdirs()
         val tmp = File(binDir.parentFile, "_box64_extract").also {
@@ -712,10 +748,26 @@ object ComponentInstaller {
         extractTarXz(archive, tmp)
         val box = tmp.walkTopDown().firstOrNull { it.isFile && it.name == "box64" }
             ?: throw IllegalStateException("wcp 內找不到 box64")
+        if (!isGlibcBox64(box)) {
+            tmp.deleteRecursively()
+            throw IllegalStateException(
+                "box64 不是 glibc 客體版（偵測到 bionic／linker64 或缺 ld-linux）。" +
+                    "請改用 Box64-*-glibc.wcp（runtime-v1）。",
+            )
+        }
         val dest = File(binDir, "box64")
         box.copyTo(dest, overwrite = true)
         ExecBits.force(dest)
+        if (!isGlibcBox64(dest)) {
+            dest.delete()
+            throw IllegalStateException("安裝後 box64 校驗失敗（非 glibc）")
+        }
+        // 可選：一併落下 profile.json
+        tmp.walkTopDown().firstOrNull { it.isFile && it.name == "profile.json" }?.let { prof ->
+            prof.copyTo(File(binDir, "box64.profile.json"), overwrite = true)
+        }
         tmp.deleteRecursively()
+        android.util.Log.i("ComponentInstaller", "installed glibc box64 → ${dest.absolutePath} (${dest.length()} bytes)")
     }
 
     private fun extractTarXz(
@@ -900,7 +952,11 @@ object ComponentInstaller {
             |else
             |  IPID=
             |fi
-            |/usr/local/bin/box64 /opt/wine/bin/wine explorer /desktop=x86,${d}{W}x${d}{H} "${d}@"
+            |BOX64=/usr/local/bin/box64
+            |if [ ! -x "${d}BOX64" ] && [ ! -f "${d}BOX64" ]; then
+            |  echo "FATAL: box64 missing" >> /mnt/data/gpu-stack.log; exit 127
+            |fi
+            |"${d}BOX64" /opt/wine/bin/wine explorer /desktop=x86,${d}{W}x${d}{H} "${d}@"
             |RC=${d}?
             |[ -n "${d}IPID" ] && kill ${d}IPID 2>/dev/null || true
             |kill ${d}XPID 2>/dev/null || true

@@ -3,7 +3,7 @@
 ## Box64
 
 - 專案：https://github.com/ptitSeb/box64
-- 版本：v0.4.4（APK）／glibc 組件 0.4.3
+- 版本：v0.4.4（APK）／glibc 組件 0.4.4（runtime-v1 Box64-0.4.4-glibc.wcp；非 Nightlies bionic）
 - 授權：MIT
 - 用途：x86_64 → ARM64 動態翻譯
 

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.21",
-  "versionCode": 22,
-  "notes": "0.1.21: 修 execve(/usr/bin/sh) ENOENT — 補 usrmerge lib＋/lib/ld-linux-aarch64.so.1（dash PT_INTERP）；校驗 shell ELF＋linker；啟動優先 /usr/bin/dash"
+  "versionName": "0.1.22",
+  "versionCode": 23,
+  "notes": "0.1.22: 修 box64 not found — 改裝 glibc Box64-0.4.4（拒 bionic/linker64）；runtimeId bump 強制重抓；wine-launch 明確 FATAL"
 }

@@ -45,6 +45,11 @@ public final class InProcessX {
         return xServer;
     }
 
+    /** 供 Session 建立 InProcessXInput（Kotlin）。 */
+    public boolean hasXServer() {
+        return xServer != null;
+    }
+
     public synchronized void start(PresentXFramePump.FrameSink sink) {
         if (started) return;
         imageFsRoot.mkdirs();

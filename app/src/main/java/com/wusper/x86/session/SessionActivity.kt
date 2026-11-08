@@ -41,6 +41,7 @@ import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.GpuStack
 import com.wusper.x86.x11.InProcessX
+import com.wusper.x86.x11.InProcessXInput
 import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.engine.GraphicsBackend
 import com.wusper.x86.engine.LaunchPipeline
@@ -87,6 +88,7 @@ class SessionActivity : ComponentActivity() {
                 var inProcessX by remember { mutableStateOf<InProcessX?>(null) }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
+                val inProcessInputRef = remember { AtomicReference<InProcessXInput?>(null) }
 
                 LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke) {
                     if (ws == null) {
@@ -148,8 +150,11 @@ class SessionActivity : ComponentActivity() {
                             logText += "重建：${plan.mode}\n${plan.kindMessage}\n"
                         }
                     }
-                    // 輸入橋：GpuStack／SoftLegacy 過渡皆可用 xdotool（WinHandler 下一檔）
-                    if (plan.mode == LaunchPipeline.Mode.WineProot && !plan.needsRuntimeInstall) {
+                    // SoftLegacy：xdotool 檔案佇列；GpuStack：稍後接 InProcessX.inject*
+                    if (plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.SoftLegacy &&
+                        !plan.needsRuntimeInstall
+                    ) {
                         val input = X11InputBridge(ws.dataDir)
                         input.prepareFifo()
                         val agentCopy = java.io.File(ws.dataDir, "x11-input-agent.sh")
@@ -158,21 +163,28 @@ class SessionActivity : ComponentActivity() {
                         }
                         agentCopy.setExecutable(true, false)
                         inputBridgeRef.set(input)
-                        logText += "輸入橋：xdotool 過渡\n"
+                        logText += "輸入橋：【SoftLegacy】xdotool\n"
                     }
-                    // 進程內 X（Winlator）先於客體 Wine 啟動
+                    // 進程內 X（Winlator）先於客體 Wine；輸入走 inject*
                     if (plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.GpuStack
                     ) {
                         status = "啟動進程內 X"
                         logText += "啟動 Winlator Java X → Present…\n"
                         val x = InProcessX(this@SessionActivity)
-                        // Surface 稍後 attach；先建 AHB
                         NativeEngine.nativePresentCreate(1280, 720)
                         x.start { rgba, w, h, stride ->
                             NativeEngine.nativePresentRgba(rgba, w, h, stride)
                         }
                         inProcessX = x
+                        val xs = x.xServer
+                        if (xs != null) {
+                            val xin = InProcessXInput(xs)
+                            // 預設 letterbox；surfaceChanged 會更新
+                            xin.updateBlitFromSurface(1280, 720)
+                            inProcessInputRef.set(xin)
+                            logText += "輸入橋：InProcessX.inject*（非 xdotool）\n"
+                        }
                         logText += "InProcessX imagefs=${x.imageFsRoot.absolutePath}\n"
                     }
                     val result = LaunchPipeline.start(plan)
@@ -266,6 +278,7 @@ class SessionActivity : ComponentActivity() {
                 DisposableEffect(Unit) {
                     onDispose {
                         inputBridgeRef.get()?.shutdown()
+                        inProcessInputRef.get()?.shutdown()
                         frameBridge?.shutdown()
                         presentBridge?.shutdown()
                         inProcessX?.stop()
@@ -281,6 +294,7 @@ class SessionActivity : ComponentActivity() {
                             navigationIcon = {
                                 IconButton(onClick = {
                                     inputBridgeRef.get()?.shutdown()
+                                    inProcessInputRef.get()?.shutdown()
                                     frameBridge?.shutdown()
                                     presentBridge?.shutdown()
                                     inProcessX?.stop()
@@ -324,6 +338,11 @@ class SessionActivity : ComponentActivity() {
                                                 format: Int, width: Int, height: Int,
                                             ) {
                                                 surfaceHolderRef.set(holder)
+                                                inProcessInputRef.get()?.updateBlitFromSurface(width, height)
+                                                inputBridgeRef.get()?.blitRect =
+                                                    com.wusper.x86.graphics.DesktopLayout.fitRect(
+                                                        1280, 720, width, height,
+                                                    )
                                             }
                                             override fun surfaceDestroyed(holder: SurfaceHolder) {
                                                 frameBridge?.shutdown()
@@ -335,13 +354,19 @@ class SessionActivity : ComponentActivity() {
                                             }
                                         })
                                         setOnTouchListener { _, ev ->
-                                            inputBridgeRef.get()?.onTouch(ev) ?: false
+                                            inProcessInputRef.get()?.onTouch(ev)
+                                                ?: inputBridgeRef.get()?.onTouch(ev)
+                                                ?: false
                                         }
                                         setOnGenericMotionListener { _, ev ->
-                                            inputBridgeRef.get()?.onGenericMotion(ev) ?: false
+                                            inProcessInputRef.get()?.onGenericMotion(ev)
+                                                ?: inputBridgeRef.get()?.onGenericMotion(ev)
+                                                ?: false
                                         }
                                         setOnKeyListener { _, _, ev ->
-                                            inputBridgeRef.get()?.onKey(ev) ?: false
+                                            inProcessInputRef.get()?.onKey(ev)
+                                                ?: inputBridgeRef.get()?.onKey(ev)
+                                                ?: false
                                         }
                                     }
                                 },

@@ -69,7 +69,6 @@ object GpuStack {
             g += "缺 Present→AHardwareBuffer→Session Surface"
         }
         g += "缺 DRI3／Vortek 零拷貝（現為 Drawable→RGBA→AHB CPU present）"
-        g += "缺完整 WinHandler／觸控注入（XServer.inject* 可接；暫未接 Session 觸控）"
         g += "缺 Pulse／ALSA→AAudio 真輸出"
         g += "缺 GLX／gladiorenderer（OpenGL 客體暫 BadImplementation）"
         return g
@@ -84,6 +83,7 @@ object GpuStack {
         parts += if (hasDxvk(ctx)) "DXVK✓" else "DXVK✗"
         parts += if (PRESENTATION_READY) "Present✓" else "Present✗"
         parts += if (INPROCESS_X_READY) "X✓（Winlator）" else "X✗"
+        parts += "Input✓（inject*）"
         return parts.joinToString(" · ")
     }
 

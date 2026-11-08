@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.9",
-  "versionCode": 10,
-  "notes": "0.1.9: 進程內 Winlator Java X；拿掉 GpuStack Xvfb stub；Drawable→AHB Present"
+  "versionName": "0.1.10",
+  "versionCode": 11,
+  "notes": "0.1.10: Session 觸控／鍵鼠→InProcessX.inject*（取代 GpuStack xdotool）；SoftLegacy 仍 xdotool"
 }

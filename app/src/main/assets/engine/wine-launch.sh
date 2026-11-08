@@ -69,7 +69,7 @@ else
   echo "INPROCESS_X_OK wait=${i}" >> /mnt/data/gpu-stack.log
 fi
 
-# 輸入：過渡 xdotool 僅 SoftLegacy；GpuStack 待 WinHandler／inject
+# 輸入：xdotool 僅 SoftLegacy；GpuStack 由宿主 InProcessX.inject*（不啟動 agent）
 if [ "$BACKEND" = "soft" ]; then
   if [ -x /usr/bin/xdotool ] || command -v xdotool >/dev/null 2>&1; then
     if [ -x /usr/local/bin/x11-input-agent.sh ]; then

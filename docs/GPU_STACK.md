@@ -14,7 +14,7 @@
 [GPU 棧組件] Mesa Turnip ICD + DXVK（＋之後 VKD3D）
         ↓
 [顯示・下一步] 進程內 X／DRI3 Present → AHardwareBuffer → 同一 Session Surface
-[輸入・下一步] WinHandler 級橋（取代 xdotool 檔案佇列）
+[輸入・已接] Session 觸控／鍵鼠 → InProcessXInput → XServer.inject*（GpuStack；非 xdotool）
 ```
 
 對齊 Winlator 已驗證的層蛋糕，產品 UX 仍是「選 exe → 全螢幕」，不是假桌面。
@@ -41,7 +41,7 @@
 |--|------------------|-------------------------------------|
 | 顯示 | Present→Surface（待做） | Xvfb `-fbdir` XWD→blit ~15 FPS |
 | GL/VK | Turnip＋DXVK | `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe |
-| 輸入 | WinHandler 級（待做） | xdotool cmd 佇列 |
+| 輸入 | **InProcessX.inject***（觸控／鍵／滾輪） | xdotool cmd 佇列 |
 
 ## 本版已接（0.1.8）
 
@@ -58,14 +58,9 @@
 3. 每幀 RGBA → lock AHB → 寫入 → `ANativeWindow_lock` 拷貝 → `unlockAndPost`
 4. 幀來源優先：`files/.../present.shm` → Xvfb `xfb/Xvfb_screen0`（過渡 feeder）→ stub
 
-## 還缺什麼
+## 還缺什麼（歷史；見 0.1.10 更新）
 
-1. **完整進程內 X**（Winlator Java X／Termux-X11 Lorie 級）— 取代 Xvfb stub
-2. **DRI3／AHB 零拷貝**（現為 CPU present；結構已留 GPU_SAMPLED）
-3. WinHandler 級輸入；AAudio
-4. Turnip ICD thunk 實機驗證
-
-`GpuStack.PRESENTATION_READY` 已為 **true**（Present 通路可測）；X stub≠最終 X。
+進程內 X 與 Session→inject* 已接；剩餘見文末「還缺」。
 
 
 
@@ -77,9 +72,24 @@
 - Guest：`DISPLAY=:0` 經 PRoot bind 到 imagefs socket
 - **不做** Termux-X11／Lorie 整包（GPL-3）
 
-### 還缺
+### 還缺（0.1.9 時）
 
 1. DRI3／Vortek 零拷貝（現 CPU 轉 RGBA）
-2. Session 觸控 → `XServer.inject*`
+2. Session 觸控 → `XServer.inject*` ← **0.1.10 已接**
 3. GLX／gladiorenderer
 4. Turnip ICD thunk 實機；AAudio
+
+## 更新 0.1.10 — Session 輸入 → inject*
+
+- 新增 `InProcessXInput`：`Surface` 觸控／鍵鼠／滾輪 → `XServer.injectPointer*`＋`Keyboard.onKeyEvent`
+- `SessionActivity`：GpuStack 走 `inProcessInputRef`；**不再**對 GpuStack 建 xdotool FIFO／agent
+- SoftLegacy 仍用 `X11InputBridge`＋`x11-input-agent.sh`
+- `surfaceChanged` 更新 letterbox `blitRect`（Present 與 SoftLegacy 皆可）
+- `GpuStack.statusMessage` 標 `Input✓（inject*）`
+
+### 還缺
+
+1. DRI3／Vortek 零拷貝（現 Drawable→RGBA→AHB CPU present）
+2. 多指／右鍵／相對滑鼠／遊戲手把（WinHandler 級）
+3. GLX／gladiorenderer（OpenGL 客體）
+4. Turnip ICD thunk 實機驗證；Pulse／ALSA→AAudio

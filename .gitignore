@@ -23,3 +23,6 @@ keystore.properties
 keystore/
 google-services.json
 .secrets/
+
+.kotlin/
+

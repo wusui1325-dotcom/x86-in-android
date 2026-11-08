@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.19",
-  "versionCode": 20,
-  "notes": "0.1.19: proot／loader 只從 nativeLibraryDir exec（禁 code_cache）；TMP 可 code_cache"
+  "versionName": "0.1.20",
+  "versionCode": 21,
+  "notes": "0.1.20: 修 libtalloc.so not found — guestEnv 勿覆寫宿主 LD_LIBRARY_PATH；mergeEnv 置頂 nativeLibraryDir；nativeExec prepend dirname；DT_RUNPATH=$ORIGIN"
 }

@@ -187,3 +187,12 @@
 
 - 修 `execv(.../code_cache/proot-bundle/proot) EACCES`：禁止複製到 code_cache／files 再 exec
 - `PROOT_LOADER`／依賴 `.so` 同用 jniLibs 抽出目錄；TMP 仍可 code_cache
+
+## 更新 0.1.20 — libtalloc.so 解析（宿主 LD_LIBRARY_PATH）
+
+- 真機：`CANNOT LINK EXECUTABLE …/libproot.so: library "libtalloc.so" not found`
+- 根因：`GpuStack.guestEnv` 把 `LD_LIBRARY_PATH` 覆寫成客體路徑 `/opt/gladio/lib:/mnt/gpu/turnip`，
+  宿主 `execve(libproot.so)` 時 Bionic linker **不會**自動搜 `nativeLibraryDir`（有別於 `System.loadLibrary`），
+  因而找不到同目錄的 `libtalloc.so`／`libandroid-shmem.so`
+- 修：拿掉 guestEnv 覆寫（客體路徑改由 `wine-launch.sh` prepend）；`LaunchPipeline.mergeEnv` 強制
+  `nativeLibraryDir` 置頂；`nativeExec` 再 prepend `dirname(argv[0])`；jniLibs 設 `DT_RUNPATH=$ORIGIN`

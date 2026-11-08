@@ -136,7 +136,9 @@ object GpuStack {
         env += "X_PROTOCOL=inprocess_winlator"
         if (GLX_GLADIO_READY) {
             env += "X86_GLX=gladio"
-            env += "LD_LIBRARY_PATH=/opt/gladio/lib:/mnt/gpu/turnip"
+            // 勿在此覆寫 LD_LIBRARY_PATH：宿主 exec libproot.so 需先解析
+            // nativeLibraryDir 的 libtalloc.so／libandroid-shmem.so。
+            // 客體 Gladio／Turnip 路徑由 wine-launch.sh 在 PRoot 內 prepend。
         }
         if (AAUDIO_READY) {
             env += "ANDROID_ALSA_SERVER=/tmp/.sound/AS0"

@@ -140,6 +140,32 @@ Java_com_wusper_x86_engine_NativeEngine_nativeExec(
         for (auto& a : args) argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
 
+        // Android: execve of jniLibs/*.so does NOT auto-search nativeLibraryDir
+        // for DT_NEEDED (unlike System.loadLibrary). Always prepend dirname(argv[0])
+        // so sibling deps (libtalloc.so, libandroid-shmem.so) resolve even if a
+        // later guest env clobbered LD_LIBRARY_PATH with /opt/... guest paths.
+        {
+            std::string exe = args[0];
+            std::string dir;
+            auto slash = exe.find_last_of('/');
+            if (slash != std::string::npos) dir = exe.substr(0, slash);
+            if (!dir.empty()) {
+                const char* cur = getenv("LD_LIBRARY_PATH");
+                std::string merged = dir;
+                if (cur && cur[0]) {
+                    // avoid duplicating if already first
+                    std::string cur_s(cur);
+                    if (cur_s == dir || cur_s.rfind(dir + ":", 0) == 0) {
+                        merged = cur_s;
+                    } else {
+                        merged = dir + ":" + cur_s;
+                    }
+                }
+                setenv("LD_LIBRARY_PATH", merged.c_str(), 1);
+                dprintf(STDOUT_FILENO, "nativeExec LD_LIBRARY_PATH=%s\n", merged.c_str());
+            }
+        }
+
         execv(argv[0], argv.data());
         dprintf(STDOUT_FILENO, "execv(%s) failed: %d (%s)\n", argv[0], errno, strerror(errno));
         _exit(127);

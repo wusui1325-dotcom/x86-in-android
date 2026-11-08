@@ -203,6 +203,29 @@ object LaunchPipeline {
         return buildWineProotPlan(ctx, ws, staged, logFile)
     }
 
+
+    /**
+     * 合併 KEY=VALUE 列表；同 key 後寫覆蓋前寫。
+     * [LD_LIBRARY_PATH] 特例：把 [hostLibDir] 永遠置於最前（宿主 linker 解析 libproot 依賴），
+     * 其餘路徑去重後接在後面（客體路徑多半由 wine-launch.sh 再 prepend）。
+     */
+    fun mergeEnv(entries: List<String>, hostLibDir: String? = null): List<String> {
+        val map = linkedMapOf<String, String>()
+        for (e in entries) {
+            val i = e.indexOf('=')
+            if (i <= 0) continue
+            map[e.substring(0, i)] = e.substring(i + 1)
+        }
+        if (hostLibDir != null) {
+            val parts = mutableListOf(hostLibDir)
+            map["LD_LIBRARY_PATH"]?.split(':')?.forEach { p ->
+                if (p.isNotEmpty() && p != hostLibDir && p !in parts) parts += p
+            }
+            map["LD_LIBRARY_PATH"] = parts.joinToString(":")
+        }
+        return map.map { (k, v) -> "$k=$v" }
+    }
+
     fun buildWineProotPlan(
         ctx: Context,
         ws: Workspace,
@@ -344,6 +367,9 @@ object LaunchPipeline {
             }
         }
 
+        // 去重＋強制 nativeLibraryDir 在 LD_LIBRARY_PATH 最前（防 guestEnv 覆寫）
+        val mergedEnv = mergeEnv(env, hostLibDir = prootBundle.libDir.absolutePath)
+
         return Plan(
             argv = argv,
             cwd = ws.dataDir.absolutePath,
@@ -352,7 +378,7 @@ object LaunchPipeline {
             kindMessage = kindMessage,
             mode = Mode.WineProot,
             targetFile = pe,
-            env = env,
+            env = mergedEnv,
             needsRuntimeInstall = false,
             graphicsBackend = backend,
         )

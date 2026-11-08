@@ -38,8 +38,9 @@ object ComponentInstaller {
         val wine = File(root, "rootfs/opt/wine/bin/wine")
         val box = File(root, "rootfs/usr/local/bin/box64")
         val xvfb = File(root, "rootfs/usr/bin/Xvfb")
+        val xdotool = File(root, "rootfs/usr/bin/xdotool")
         val proot = File(EngineAssets.engineRoot(ctx), "proot")
-        return wine.exists() && box.exists() && xvfb.exists() &&
+        return wine.exists() && box.exists() && xvfb.exists() && xdotool.exists() &&
             (proot.exists() || File(root, "bin/proot").exists())
     }
 
@@ -57,6 +58,25 @@ object ComponentInstaller {
         }
         dest.setExecutable(true, false)
         File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) it.setExecutable(true, false) }
+        File(rootfs, "usr/bin/xdotool").let { if (it.exists()) it.setExecutable(true, false) }
+        ensureInputAgent(ctx)
+    }
+
+    fun ensureInputAgent(ctx: Context) {
+        val rootfs = File(runtimeRoot(ctx), "rootfs")
+        val dest = File(rootfs, "usr/local/bin/x11-input-agent.sh")
+        dest.parentFile?.mkdirs()
+        ctx.assets.open("engine/x11-input-agent.sh").use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
+        }
+        dest.setExecutable(true, false)
+        // 同步一份到 data bind，啟動腳本可 fallback
+    }
+
+    fun ensureInputAgent(rootfs: File) {
+        // install() 無 Context assets 時：若已有檔則 chmod
+        val dest = File(rootfs, "usr/local/bin/x11-input-agent.sh")
+        if (dest.exists()) dest.setExecutable(true, false)
     }
 
     /**
@@ -83,11 +103,12 @@ object ComponentInstaller {
             val hasWine = File(rootfs, "opt/wine/bin/wine").exists()
             val hasBox = File(rootfs, "usr/local/bin/box64").exists()
             val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
-            val onlyX11 = hasWine && hasBox && !hasXvfb
+            val hasXdotool = File(rootfs, "usr/bin/xdotool").exists()
+            val onlyExtras = hasWine && hasBox && (!hasXvfb || !hasXdotool)
             for (i in 0 until arr.length()) {
                 val c = arr.getJSONObject(i)
                 val id = c.getString("id")
-                if (onlyX11 && id != "x11-overlay") continue
+                if (onlyExtras && id !in setOf("x11-overlay", "input-overlay")) continue
                 val filename = c.getString("filename")
                 val url = c.getString("url")
                 val expectSha = c.optString("sha256", "")
@@ -110,6 +131,7 @@ object ComponentInstaller {
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
                     "box64-glibc" -> extractBox64(out, File(root, "rootfs/usr/local/bin"))
                     "x11-overlay" -> extractTarXz(out, File(root, "rootfs"), skipDevice = true)
+                    "input-overlay" -> extractTarXz(out, File(root, "rootfs"), skipDevice = true)
                     else -> extractTarXz(out, File(root, c.optString("extract", ".")))
                 }
             }
@@ -131,7 +153,9 @@ object ComponentInstaller {
             File(rootfs, "usr/local/bin/box64").setExecutable(true, false)
             File(rootfs, "opt/wine/bin/wine").setExecutable(true, false)
             File(rootfs, "usr/bin/Xvfb").setExecutable(true, false)
+            File(rootfs, "usr/bin/xdotool").setExecutable(true, false)
             writeWineLaunchScript(rootfs)
+            ensureInputAgent(ctx)
             onProgress(Progress("ready", message = "運行時安裝完成"))
             return Result.success(root)
         } catch (t: Throwable) {

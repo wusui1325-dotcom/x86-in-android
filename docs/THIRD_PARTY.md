@@ -35,3 +35,9 @@
 - 來源：Ubuntu noble arm64 套件（xvfb、xserver-xorg-core 及依賴）
 - 打包：`x11-overlay-arm64.tar.xz`（Release runtime-v1）
 - 用途：客體 DISPLAY=:0；`-fbdir` XWD 供 Android Surface 讀取
+
+## xdotool（input-overlay）
+
+- Ubuntu noble arm64：`xdotool`、`libxdo3`、`libxtst6` 等
+- 授權：隨套件（xdotool 多為 BSD／MIT 系；以 deb 為準）
+- 用途：客體注入 X11 指標／鍵盤事件

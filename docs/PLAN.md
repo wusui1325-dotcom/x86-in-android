@@ -249,3 +249,7 @@ com.wusper.x86（暫名）
 
 - 圖形：Xvfb -fbdir（XWD）→ SurfaceFrameBridge → Session Surface（最短路徑）。
 - X11 overlay 發布於 Release `runtime-v1`。
+
+### 進度（2026-11-09 ~00:30 HKT）
+
+- 輸入：Surface 觸控→1280×720→xdotool（cmd 佇列）；目標 Codex 可點。

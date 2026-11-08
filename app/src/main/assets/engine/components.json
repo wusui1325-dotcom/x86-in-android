@@ -1,6 +1,6 @@
 {
-  "runtimeId": "wine-proot-v1.1-x11",
-  "approxDownloadBytes": 220000000,
+  "runtimeId": "wine-proot-v1.2-input",
+  "approxDownloadBytes": 221000000,
   "components": [
     {
       "id": "rootfs",
@@ -25,13 +25,22 @@
       "url": "https://github.com/The412Banner/Nightlies/releases/download/Box64/Box64-0.4.3.wcp",
       "sha256": "",
       "extract": "rootfs/usr/local/bin",
-      "pickFiles": ["box64"]
+      "pickFiles": [
+        "box64"
+      ]
     },
     {
       "id": "x11-overlay",
       "filename": "x11-overlay-arm64.tar.xz",
       "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/x11-overlay-arm64.tar.xz",
       "sha256": "17db0c7b1f670d6ced1fd728f1c4854e535e1fcf1fc92db8d6172984036212b9",
+      "extract": "rootfs"
+    },
+    {
+      "id": "input-overlay",
+      "filename": "input-overlay-arm64.tar.xz",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/input-overlay-arm64.tar.xz",
+      "sha256": "1f30bbd557de65891219df4e4681ad63e7cd42c2373a75697769a460a3f6b6db",
       "extract": "rootfs"
     }
   ]

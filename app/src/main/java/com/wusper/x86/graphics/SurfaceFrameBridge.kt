@@ -15,9 +15,14 @@ class SurfaceFrameBridge(
     private val fbDir: File,
     private val holder: SurfaceHolder,
     private val targetFps: Int = 15,
+    private val desktopW: Int = DesktopLayout.WIDTH,
+    private val desktopH: Int = DesktopLayout.HEIGHT,
+    private val onBlitRect: ((Rect) -> Unit)? = null,
 ) : Thread("x86-surface-bridge") {
     private val running = AtomicBoolean(true)
     @Volatile var lastInfo: String = "等待幀…"
+    /** 最近一次繪製的 letterbox 區域（視圖座標），供觸控反查。 */
+    @Volatile var lastBlitRect: Rect = Rect(0, 0, desktopW, desktopH)
 
     fun shutdown() {
         running.set(false)
@@ -44,11 +49,20 @@ class SurfaceFrameBridge(
                     try {
                         canvas.drawColor(Color.rgb(10, 14, 20))
                         if (frame != null) {
-                            val dst = fitRect(frame.width, frame.height, canvas.width, canvas.height)
+                            val dst = DesktopLayout.fitRect(
+                                frame.width, frame.height, canvas.width, canvas.height,
+                            )
+                            lastBlitRect = Rect(dst)
+                            onBlitRect?.invoke(lastBlitRect)
                             canvas.drawBitmap(frame.bitmap, null, dst, null)
                             lastInfo = "${frame.width}x${frame.height} ← ${fb?.name}"
                             frame.bitmap.recycle()
                         } else {
+                            // 尚無幀時仍假設桌面等比 letterbox，方便點擊測試
+                            lastBlitRect = DesktopLayout.fitRect(
+                                desktopW, desktopH, canvas.width, canvas.height,
+                            )
+                            onBlitRect?.invoke(lastBlitRect)
                             canvas.drawText("等待 Xvfb 幀（$fbDir）", 40f, 80f, paint)
                             lastInfo = "無幀"
                         }
@@ -71,15 +85,5 @@ class SurfaceFrameBridge(
                 }
             }
         }
-    }
-
-    private fun fitRect(srcW: Int, srcH: Int, dstW: Int, dstH: Int): Rect {
-        if (srcW <= 0 || srcH <= 0) return Rect(0, 0, dstW, dstH)
-        val scale = minOf(dstW.toFloat() / srcW, dstH.toFloat() / srcH)
-        val w = (srcW * scale).toInt().coerceAtLeast(1)
-        val h = (srcH * scale).toInt().coerceAtLeast(1)
-        val left = (dstW - w) / 2
-        val top = (dstH - h) / 2
-        return Rect(left, top, left + w, top + h)
     }
 }

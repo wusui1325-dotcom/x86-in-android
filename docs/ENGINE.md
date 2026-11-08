@@ -2,56 +2,41 @@
 
 ## 目標（Boss）
 
-- 真的能跑 x86 應用（例：Codex 級 GUI／CLI）。
-- 選 `.exe` → 工作區 → 直開；畫面進 App Surface。
-- 效能：同機同負載 Box64 ≥ 原生 arm64 **70%**（CPU 微基準）。
+- 真的能跑 x86 應用（例：Codex 級 **可點可操作** GUI／CLI）。
+- 選 `.exe` → 工作區 → 畫面進 Surface → 觸控／鍵鼠進 X11。
 
-## 圖形方案（本版）
+## 圖形
 
-**最短路徑：`Xvfb -fbdir`（XWD）→ `SurfaceFrameBridge` blit 到 `SessionActivity` SurfaceView。**
+**Xvfb `-fbdir`（XWD）→ `SurfaceFrameBridge` → Session SurfaceView**（約 15 FPS 軟渲）。
+
+## 輸入（本版）
+
+**最短路徑：Surface 觸控／鍵鼠 → 命令檔佇列 → 客體 `xdotool`（XTEST）。**
 
 ```
-wine-launch.sh
-  └─ Xvfb :0 -screen 1280x720x24 -fbdir /mnt/data/xfb
-  └─ box64 wine explorer /desktop=x86,1280x720 app.exe
-Android
-  └─ 輪詢 /data/.../xfb/Xvfb_screen0（XWD）
-  └─ 解碼 → Bitmap → SurfaceHolder.lockCanvas blit（約 15 FPS）
+Android SurfaceView
+  onTouch / onKey / onGenericMotion
+    → 座標：letterbox 反查到 1280×720 絕對座標
+    → append /mnt/data/x11input.cmd
+Guest x11-input-agent.sh
+  → 輪詢 cmd 檔 → xdotool mousemove/mousedown/mouseup/key…
+  → DISPLAY=:0（同一個 Xvfb）
 ```
 
-- X11 組件：`x11-overlay-arm64.tar.xz`（GitHub Release `runtime-v1`），首次／升級時由 `ComponentInstaller` 下載解進 rootfs。
-- 啟動腳本：`assets/engine/wine-launch.sh` → rootfs `/usr/local/bin/wine-launch.sh`。
-
-### 為何不是 Xwayland／VirGL／Termux-X11
-
-| 方案 | 取捨 |
-|------|------|
-| **Xvfb＋XWD→Surface（本版）** | 實作最短、不需 GPU IPC；延遲／幀率有限，夠衝 GUI 冒煙與 Codex 級窗口出現 |
-| Termux-X11 | 業界常用但綁外部 APK／複雜整合 |
-| VirGL／Turnip／Vortek | 效能更好，工程量大（P3） |
-| Wine android.drv | 需專用 Wine 建置，非 Kron4ek Linux amd64 |
-
-## 已接上
-
-| 層 | 狀態 |
-|----|------|
-| PE→PRoot→Box64→Wine | ✅ |
-| Xvfb＋虛擬桌面 | ✅ |
-| XWD→Surface | ✅ |
-| ANDROID=1 Box64 ELF | ✅ |
-| 70% microbench 芯片 | ✅ |
+- 至少：**button1 click／drag／move**；外接滑鼠 hover／滾輪；常見鍵盤鍵。
+- 組件：`input-overlay-arm64.tar.xz`（xdotool 等，Release `runtime-v1`）。
 
 ## 限制
 
-1. **軟渲＋檔案輪詢**：預期 10–20 FPS 級，非遊戲幀率；色彩／對齊依 Xvfb XWD 布局可能需微調。
-2. **無觸控→X11 輸入映射**（下步）；暫靠外接鍵鼠／鍵盤（若系統送達）。
-3. **無音訊**。
-4. Codex 等複雜 Electron／GPU 應用可能仍缺庫或需 DXVK／Vulkan（未接）。
-5. 首次運行時下載約 **220MB+**（含 X11 overlay）。
-6. minSdk 28。
+1. 輸入經檔案佇列＋xdotool，有數十 ms 級延遲；快速拖曳可能掉點。
+2. 多點觸控只取主指標；無完整手勢。
+3. IME／中文輸入法未接（ASCII／硬體鍵為主）。
+4. 圖形仍軟渲 XWD；無 DXVK／觸控精密校准 UI。
+5. Codex 級 Electron 仍可能缺庫／GPU；但窗口應可點。
 
 ## 手動驗收
 
-1. 有網路裝置安裝 APK →「跑 Wine whoami.exe」或選任意 GUI `.exe`。  
-2. Session Surface 應不再只是佔位字，出現 Xvfb 桌面／視窗像素（whoami 可能一閃即逝；可用 notepad／winecfg 測）。  
-3. 日誌含「圖形橋：Xvfb fbdir → Surface」。  
+1. 安裝 0.1.5+，首次補下載 input-overlay（若舊運行時缺 xdotool）。  
+2. 跑 GUI `.exe`／whoami 桌面 → Surface 有畫面。  
+3. 手指點／拖：游標／按鈕應有反應；硬體鍵盤可打字。  
+4. `/data/.../x11input.log` 可見 cmd 記錄。  

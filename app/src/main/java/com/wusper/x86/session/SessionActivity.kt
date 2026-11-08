@@ -41,6 +41,8 @@ import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.graphics.SurfaceFrameBridge
+import com.wusper.x86.graphics.X11InputBridge
+import android.view.MotionEvent
 import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.ui.theme.X86Theme
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +80,7 @@ class SessionActivity : ComponentActivity() {
                 var logFile by remember { mutableStateOf<File?>(null) }
                 var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
+                val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
 
                 LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke) {
                     if (ws == null) {
@@ -120,22 +123,37 @@ class SessionActivity : ComponentActivity() {
                         )
                         logText += "模式：${plan.mode}\n${plan.kindMessage}\n"
                     }
+                    if (plan.mode == LaunchPipeline.Mode.WineProot && !plan.needsRuntimeInstall) {
+                        val input = X11InputBridge(ws.dataDir)
+                        input.prepareFifo()
+                        // 客體 agent fallback 腳本
+                        val agentCopy = java.io.File(ws.dataDir, "x11-input-agent.sh")
+                        this@SessionActivity.assets.open("engine/x11-input-agent.sh").use { inp ->
+                            agentCopy.outputStream().use { out -> inp.copyTo(out) }
+                        }
+                        agentCopy.setExecutable(true, false)
+                        inputBridgeRef.set(input)
+                        logText += "輸入橋：cmd佇列 ${java.io.File(ws.dataDir, "x11input.cmd").absolutePath}\n"
+                    }
                     val result = LaunchPipeline.start(plan)
                     status = if (result.ok) "執行中 pid=${result.pid}" else "失敗"
                     logText += result.message + "\n"
                     if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot) {
                         val fbDir = java.io.File(ws.dataDir, "xfb").also { it.mkdirs() }
-                        // 等 Surface 就緒後開 bridge
                         var waited = 0
                         while (surfaceHolderRef.get() == null && waited < 50) {
                             delay(100); waited++
                         }
                         surfaceHolderRef.get()?.let { sh ->
                             frameBridge?.shutdown()
-                            val bridge = SurfaceFrameBridge(fbDir, sh, targetFps = 15)
+                            val input = inputBridgeRef.get()
+                            val bridge = SurfaceFrameBridge(
+                                fbDir, sh, targetFps = 15,
+                                onBlitRect = { r -> input?.blitRect = r },
+                            )
                             frameBridge = bridge
                             bridge.start()
-                            logText += "圖形橋：Xvfb fbdir → Surface（${fbDir.absolutePath}）\n"
+                            logText += "圖形橋：Xvfb fbdir → Surface；觸控→xdotool\n"
                         }
                     }
                     while (true) {
@@ -158,6 +176,7 @@ class SessionActivity : ComponentActivity() {
 
                 DisposableEffect(Unit) {
                     onDispose {
+                        inputBridgeRef.get()?.shutdown()
                         frameBridge?.shutdown()
                         LaunchPipeline.stop()
                         EngineForegroundService.stop(this@SessionActivity)
@@ -170,6 +189,7 @@ class SessionActivity : ComponentActivity() {
                             title = { Text(ws?.displayName ?: getString(com.wusper.x86.R.string.session_title)) },
                             navigationIcon = {
                                 IconButton(onClick = {
+                                    inputBridgeRef.get()?.shutdown()
                                     LaunchPipeline.stop()
                                     EngineForegroundService.stop(this@SessionActivity)
                                     finish()
@@ -198,9 +218,12 @@ class SessionActivity : ComponentActivity() {
                             AndroidView(
                                 factory = { ctx ->
                                     SurfaceView(ctx).apply {
+                                        isFocusable = true
+                                        isFocusableInTouchMode = true
                                         holder.addCallback(object : SurfaceHolder.Callback {
                                             override fun surfaceCreated(holder: SurfaceHolder) {
                                                 surfaceHolderRef.set(holder)
+                                                requestFocus()
                                             }
                                             override fun surfaceChanged(
                                                 holder: SurfaceHolder,
@@ -214,6 +237,15 @@ class SessionActivity : ComponentActivity() {
                                                 surfaceHolderRef.set(null)
                                             }
                                         })
+                                        setOnTouchListener { _, ev ->
+                                            inputBridgeRef.get()?.onTouch(ev) ?: false
+                                        }
+                                        setOnGenericMotionListener { _, ev ->
+                                            inputBridgeRef.get()?.onGenericMotion(ev) ?: false
+                                        }
+                                        setOnKeyListener { _, _, ev ->
+                                            inputBridgeRef.get()?.onKey(ev) ?: false
+                                        }
                                     }
                                 },
                                 modifier = Modifier.fillMaxSize(),

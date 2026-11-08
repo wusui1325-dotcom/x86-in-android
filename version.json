@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.4",
-  "versionCode": 5,
-  "notes": "0.1.4: Xvfb→XWD→Surface 圖形橋；Wine GUI 進 Session Surface；x11-overlay Release"
+  "versionName": "0.1.5",
+  "versionCode": 6,
+  "notes": "0.1.5: 觸控／鍵鼠→X11（xdotool cmd 佇列）；1280×720 座標對齊；input-overlay"
 }

@@ -1,3 +1,24 @@
+## 0.1.41 — wineboot/--version exit 1 after hole-fit (muted err)
+
+**Symptom (0.1.40 Boss):** `HOLEFIT ok 0x800000:0x10000000`, DOS+mid+hi `done`, then
+`WINE_PE_SMOKE exit=1 (no version line)` and `WINE_START` → `WINE_EXIT=1`. No 134.
+
+**Root cause (diagnostic):**
+1. Wine11 unix stub has **no `--version` short-circuit** → empty prefix always runs
+   `wineboot.exe --init`; exit 1 after ntdll load was opaque because
+   `WINEDEBUG=-all` (Kotlin) suppressed all `err:` / `wine:` channels.
+2. PE smoke only `head -60` of BOX64 chatter; real `explorer` stdout/stderr not saved.
+3. Real prefix may never have gotten a successful `wineboot --init` (`system.reg`).
+
+**Fix:**
+- PE smoke + real run: `WINEDEBUG=err+all,fix+all` + `BOX64_LOG=1`
+- Dump **key lines + tail** of `wine-version.out`; detect `system.reg` / `drive_c` as boot_ok
+- Explicit `WINEBOOT_INIT` before explorer if no `system.reg`; capture `wine-run.out`
+
+**Retest:** Cover-install **0.1.41** → `WINE_LAUNCH_STAMP=0.1.41` → `HOLEFIT ok` →
+`WINEBOOT_INIT` key lines (or skip) → `WINE_EXIT=0` / Present. If still exit 1, paste
+`WINEBOOT_INIT` / `wine-run` **key lines** (now unmuted).
+
 ## 0.1.39 — hole-fit endless scan / 100000-1 occupies low page
 
 **Symptom (0.1.38 Boss):** 「感覺不太對」. HOLEFIT tried shrinking sizes at `0x100000`

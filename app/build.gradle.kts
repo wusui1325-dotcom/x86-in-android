@@ -135,8 +135,9 @@ android.applicationVariants.configureEach {
     val variant = this
     outputs.configureEach {
         val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+        // 0.1.40+: unique versioned APK name avoids CDN/browser cache serving stale bits
         out.outputFileName = if (variant.buildType.name == "release") {
-            "x86-in-android-release.apk"
+            "x86-in-android-${appVersionName}.apk"
         } else {
             "x86-in-android-${variant.buildType.name}.apk"
         }

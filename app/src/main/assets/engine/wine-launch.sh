@@ -13,8 +13,8 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.40: first fingerprint so smoke proves which script ran (cover-install / cache proof)
-WINE_LAUNCH_STAMP=0.1.40
+# 0.1.41: fingerprint; unmute wine err; capture full PE/run logs; explicit wineboot
+WINE_LAUNCH_STAMP=0.1.41
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -535,11 +535,13 @@ else
 fi
 
 # PE 短探測：驗證 prereserve + 能否走過 loader（空 prefix 仍可能 wineboot）
+# 0.1.41: WINEDEBUG must NOT be -all — that hid wineboot/err (c0000018 etc.) behind exit=1
 log "WINE_PE_SMOKE begin timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (expect prereserve mid holefit=${HOLEFIT_ADDR:-0x100000}:${HOLEFIT_SIZE:-?})"
 SMOKE_WINEDEBUG_SAVE="${WINEDEBUG-}"
 SMOKE_PREFIX_SAVE="${WINEPREFIX-}"
 SMOKE_LOG_SAVE="${BOX64_LOG-}"
-export WINEDEBUG="${WINEDEBUG:--all}"
+export WINEDEBUG="${WINE_PE_SMOKE_WINEDEBUG:-err+all,fix+all}"
+log "WINE_PE_SMOKE WINEDEBUG=$WINEDEBUG"
 export WINEPREFIX="$SMOKE_PREFIX"
 # PE 探測開短暫 LOG 以便抓 LdrInitializeThunk／prereserve
 export BOX64_LOG="${BOX64_PE_SMOKE_LOG:-1}"
@@ -613,17 +615,33 @@ if [ "$SZ" -gt "$SMOKE_BYTES" ] 2>/dev/null; then
 fi
 "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
 wait "$SMOKE_PID" 2>/dev/null || true
+# 0.1.41: did wineboot actually create a prefix? (--version often exit=1 after wineboot on Wine11)
+PE_BOOT_OK=0
+if [ -f "$SMOKE_PREFIX/system.reg" ]; then
+  PE_BOOT_OK=1
+  log "WINE_PE_SMOKE wineboot progressed (system.reg exists)"
+elif [ -d "$SMOKE_PREFIX/drive_c/windows" ]; then
+  PE_BOOT_OK=1
+  log "WINE_PE_SMOKE wineboot progressed (drive_c/windows exists)"
+else
+  log "WINE_PE_SMOKE wineboot NO prefix files (system.reg missing) — early loader/wineboot fail"
+fi
+ls -la "$SMOKE_PREFIX" 2>/dev/null | head -20 | tee -a /mnt/data/gpu-stack.log || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
-if [ -n "$SMOKE_WINEDEBUG_SAVE" ]; then export WINEDEBUG="$SMOKE_WINEDEBUG_SAVE"; else export WINEDEBUG="-all"; fi
+# Keep err unmuted for real run until Present works (Kotlin WINEDEBUG=-all hid root cause)
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,fix+all}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
-if [ -n "$SMOKE_LOG_SAVE" ]; then export BOX64_LOG="$SMOKE_LOG_SAVE"; else export BOX64_LOG=0; fi
+# Real run: BOX64_LOG=1 until WINE_EXIT=0 (Parent: capture beyond truncated smoke)
+export BOX64_LOG="${BOX64_RUN_LOG:-1}"
 export BOX64_SHOWSEGV=0
 export BOX64_SHOWBT=0
 set -e
 
-log "WINE_PE_SMOKE exit=$WV"
-log "--- WINE_PE_SMOKE output begin (head) ---"
-head -60 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+log "WINE_PE_SMOKE exit=$WV boot_ok=$PE_BOOT_OK out_bytes=$(wc -c </mnt/data/wine-version.out 2>/dev/null | tr -d ' ')"
+log "--- WINE_PE_SMOKE key lines ---"
+grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|version|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emulated|Emit Signal' /mnt/data/wine-version.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
+log "--- WINE_PE_SMOKE output tail ---"
+tail -80 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 log "--- WINE_PE_SMOKE output end ---"
 
 # prereserve 期待：DOS + mid(holefit useful size>0x1000) + hi — never treat 0x*:0x1 as mid OK
@@ -671,6 +689,8 @@ fi
 PE_OK=0
 if [ "$WV" = "0" ]; then PE_OK=1; fi
 if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then PE_OK=1; SMOKE_OK=1; fi
+# Wine11 unix stub has no --version short-circuit: wineboot may succeed then exit 1 on "--version" argv
+if [ "${PE_BOOT_OK:-0}" = "1" ] && [ -n "$MID_OK_LINE" ]; then PE_OK=1; fi
 
 if [ -n "$PE_FATAL" ] || [ "$WV" = "139" ]; then
   log "FATAL: Wine PE loader SIGSEGV under Box64 ($PE_FATAL)."
@@ -706,8 +726,8 @@ if [ "$SMOKE_OK" = "1" ]; then
     log "WINE_VERSION_SMOKE ok (inf=$WINE_INF_VER pe_exit=$WV)"
   else
     # 非 0／無 version 行，但非 hang／SEGV：警告後仍嘗試真實啟動（prefix 可能已半初始化）
-    log "WARN: WINE_PE_SMOKE exit=$WV (no version line) — continuing with wine.inf; watch WINE_START"
-    log "WINE_VERSION_SMOKE ok (inf-only=$WINE_INF_VER pe_exit=$WV)"
+    log "WARN: WINE_PE_SMOKE exit=$WV (no version line, boot_ok=${PE_BOOT_OK:-0}) — continuing with wine.inf; watch WINE_START"
+    log "WINE_VERSION_SMOKE ok (inf-only=$WINE_INF_VER pe_exit=$WV boot_ok=${PE_BOOT_OK:-0})"
   fi
 else
   log "FATAL: wine version unknown (no wine.inf) and PE smoke failed (exit=$WV)."
@@ -716,16 +736,63 @@ else
   exit 1
 fi
 
+# 0.1.41: explicit wineboot on real prefix if empty — same path PE smoke hits; capture err
+mkdir -p "$WINEPREFIX"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,fix+all}"
+export BOX64_LOG="${BOX64_RUN_LOG:-1}"
+log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX"
+if [ ! -f "$WINEPREFIX/system.reg" ]; then
+  log "WINEBOOT_INIT begin (no system.reg) timeout=90s"
+  : > /mnt/data/wineboot-init.out
+  set +e
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineboot --init >>/mnt/data/wineboot-init.out 2>&1 &
+  WB_PID=$!
+  WB_T=0
+  while kill -0 "$WB_PID" 2>/dev/null; do
+    WB_T=$((WB_T+1))
+    if [ "$WB_T" -ge 90 ]; then
+      log "WINEBOOT_INIT TIMEOUT — killing"
+      kill -TERM "$WB_PID" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$WB_PID" 2>/dev/null || true
+      "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  wait "$WB_PID" 2>/dev/null
+  WB_RC=$?
+  set -e
+  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no)"
+  log "--- WINEBOOT_INIT key lines ---"
+  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
+  log "--- WINEBOOT_INIT tail ---"
+  tail -60 /mnt/data/wineboot-init.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+  if [ ! -f "$WINEPREFIX/system.reg" ]; then
+    log "FATAL: wineboot --init did not create system.reg (exit=$WB_RC). See WINEBOOT_INIT key lines."
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit "${WB_RC:-1}"
+  fi
+else
+  log "WINEBOOT_INIT skip (system.reg present)"
+fi
+
 log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} $*"
+: > /mnt/data/wine-run.out
 set +e
-"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} "$@"
+"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} "$@" >>/mnt/data/wine-run.out 2>&1
 RC=$?
 set -e
-log "WINE_EXIT=$RC"
+# live-ish: also append a short key extract to gpu-stack so Session sees it without opening wine-run.out
+log "WINE_EXIT=$RC wine-run_bytes=$(wc -c </mnt/data/wine-run.out 2>/dev/null | tr -d ' ')"
+grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
 
 if [ "$RC" != "0" ]; then
+  log "--- wine-run.out tail ---"
+  tail -100 /mnt/data/wine-run.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
   log "--- gpu-stack.log tail ---"
-  tail -60 /mnt/data/gpu-stack.log 2>/dev/null || true
+  tail -40 /mnt/data/gpu-stack.log 2>/dev/null || true
 fi
 
 [ -n "$IPID" ] && kill $IPID 2>/dev/null || true

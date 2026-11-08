@@ -25,12 +25,15 @@ fi
 
 ./gradlew assembleRelease --no-daemon "$@"
 
-APK="$ROOT/app/build/outputs/apk/release/x86-in-android-release.apk"
+VER=$(python3 -c 'import json;print(json.load(open("version.json"))["versionName"])')
+APK="$ROOT/app/build/outputs/apk/release/x86-in-android-${VER}.apk"
+if [[ ! -f "$APK" ]]; then
+  APK="$ROOT/app/build/outputs/apk/release/x86-in-android-release.apk"
+fi
 if [[ -f "$APK" ]]; then
   echo "OK: $APK"
   ls -lh "$APK"
 else
-  # fallback name
   find "$ROOT/app/build/outputs/apk/release" -name '*.apk' -print -exec ls -lh {} \;
 fi
 

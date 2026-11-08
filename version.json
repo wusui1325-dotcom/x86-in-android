@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.40",
-  "versionCode": 41,
-  "notes": "0.1.40: WINE_LAUNCH_STAMP fingerprint; size-outer prefer largest mid; FATAL if hole-fit fails; never treat 0x100000:0x1 as mid OK; bump runtimeId + clear sticky holefit marker on extractBox64/script refresh; unique APK filename"
+  "versionName": "0.1.41",
+  "versionCode": 42,
+  "notes": "0.1.41: unmute WINEDEBUG err+fix for PE smoke + real run; dump key/tail of wine-version.out; detect wineboot prefix progress (system.reg); explicit WINEBOOT_INIT before explorer; capture wine-run.out + BOX64_LOG=1; stamp fingerprint"
 }

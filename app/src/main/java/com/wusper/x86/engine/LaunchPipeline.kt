@@ -371,7 +371,10 @@ object LaunchPipeline {
             // Box64 搜尋 x86_64 模擬庫（與 aarch64 LD_LIBRARY_PATH 分離）；含 Wine unix＋x64lib
             "BOX64_LD_LIBRARY_PATH=/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu",
             "WINEDLLPATH=/opt/wine/lib/wine",
-            "WINELOADER=/opt/wine/bin/wine",
+            "WINELOADER=/usr/local/bin/wine",
+            "WINELOADERNOEXEC=1",
+            "WINE_REAL=/opt/wine/bin/wine",
+            "WINESERVER_REAL=/opt/wine/bin/wineserver",
             "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",
             "LANG=C.UTF-8",
             "LD_PRELOAD=", // 清掉可能的 termux-exec

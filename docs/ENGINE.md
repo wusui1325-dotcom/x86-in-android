@@ -117,3 +117,20 @@ ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（12
 找茬 R1：即便 `NOHOSTEXT=1`／AVX=0，dynarec 仍可能宿主 SIGILL。Wine／PE 預設改
 `BOX64_DYNAREC=0`（interpreter）先過冒煙；通過後再切回 `dynarecSafe`。
 「重裝運行時」對 SIGILL **通常無效**；看日誌 `BOX64_SELFTEST`／`BOX64_FLAGS`／`WINE_START`。
+
+## Wine SIGILL under interpreter／x64lib bookworm（0.1.30）
+
+0.1.29 已證：`BOX64_SELFTEST=0`、`DYNAREC=0`、`NOHOSTEXT=1`、ISA 廣告全關，載入
+`ntdll.so`＋`libgcc_s.so.1` 後仍立刻 `Illegal instruction`（exit 132）。**dynarec 發射非法
+宿主指令**假說已否證；故障在**模擬中的 Wine 早期／x64lib**（或子行程未回 Box64）。
+
+修復：
+- 換 **Debian bookworm `libgcc_s.so.1`（gcc-12）** 取代上游 x64lib 內 gcc-15 版；stamp
+  `.x64lib-stamp`；缺 stamp 會再拉 `box64-x64lib`
+- 客體內寫入 **aarch64 `/usr/local/bin/wine`／`wineserver` 包裝**（`exec box64 $REAL`），
+  `WINELOADER` 指包裝；`WINELOADERNOEXEC=1`
+- 啟動階梯：`box64 -v` → **`wine --version` smoke** → 再 `explorer /desktop=…`
+- 補 `CPUTYPE=0`／`X87DOUBLE=1`／`WAIT=1`／`ALIGNED_ATOMICS=1`／`NORCFILES=1`／`X11GLX=1`
+
+請**更新 APK 後重裝運行時**（換 x64lib）；日誌必看 `BOX64_X64LIB_STAMP`、
+`WINE_VERSION_SMOKE`。

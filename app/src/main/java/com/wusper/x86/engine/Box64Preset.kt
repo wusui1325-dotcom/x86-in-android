@@ -1,15 +1,12 @@
 package com.wusper.x86.engine
 
 /**
- * Wine／PE 預設走 **interpreter（DYNAREC=0）** 直到 whoami／explorer 冒煙過關
- * （找茬 R1：dynarec 發射非法宿主指令 → exit 132）。Winlator safe 風格。
- *
- * 效能向 preset 仍保留給日後 ELF microbench／通過冒煙後再切回。
+ * Wine／PE 預設走 **interpreter（DYNAREC=0）**。
+ * 0.1.29 已證 dynarec 非本機 SIGILL 主因；0.1.30 改打 x64lib／wine 包裝鏈。
  */
 object Box64Preset {
     /**
-     * Wine／PE 預設（0.1.29+）：核選項 DYNAREC=0 + 客體 ISA 全關 + NOHOSTEXT。
-     * 慢，但先證明能過 SIGILL。
+     * Wine／PE 預設（0.1.30+）：DYNAREC=0 + NOHOSTEXT + ISA 廣告關 + Winlator COMPAT 向收斂。
      */
     val performance: Array<String> = arrayOf(
         "BOX64_DYNAREC=0",
@@ -21,21 +18,26 @@ object Box64Preset {
         "BOX64_DYNAREC_STRONGMEM=1",
         "BOX64_DYNAREC_SAFEFLAGS=2",
         "BOX64_DYNAREC_BIGBLOCK=0",
+        "BOX64_DYNAREC_X87DOUBLE=1",
+        "BOX64_DYNAREC_WAIT=1",
+        "BOX64_DYNAREC_ALIGNED_ATOMICS=1",
         "BOX64_AVX=0",
         "BOX64_SSE42=0",
         "BOX64_AES=0",
         "BOX64_SHAEXT=0",
         "BOX64_PCLMULQDQ=0",
+        "BOX64_CPUTYPE=0",
+        "BOX64_NORCFILES=1",
+        "BOX64_X11GLX=1",
         "BOX64_LOG=1",
         "BOX64_SHOWSEGV=1",
         "BOX64_SHOWBT=1",
+        "BOX64_ROLLING_LOG=1",
         "BOX64_NOBANNER=0",
     )
 
-    /** 同 performance（Wine 冒煙期）；日後可再分叉 */
     val stability: Array<String> = performance
 
-    /** ELF microbench／通過 SIGILL 後可改回的 dynarec 安全檔 */
     val dynarecSafe: Array<String> = arrayOf(
         "BOX64_DYNAREC=1",
         "BOX64_DYNAREC_NOHOSTEXT=1",
@@ -46,14 +48,21 @@ object Box64Preset {
         "BOX64_DYNAREC_STRONGMEM=1",
         "BOX64_DYNAREC_SAFEFLAGS=2",
         "BOX64_DYNAREC_BIGBLOCK=0",
+        "BOX64_DYNAREC_X87DOUBLE=1",
+        "BOX64_DYNAREC_WAIT=1",
+        "BOX64_DYNAREC_ALIGNED_ATOMICS=1",
         "BOX64_AVX=0",
         "BOX64_SSE42=0",
         "BOX64_AES=0",
         "BOX64_SHAEXT=0",
         "BOX64_PCLMULQDQ=0",
+        "BOX64_CPUTYPE=0",
+        "BOX64_NORCFILES=1",
+        "BOX64_X11GLX=1",
         "BOX64_LOG=1",
         "BOX64_SHOWSEGV=1",
         "BOX64_SHOWBT=1",
+        "BOX64_ROLLING_LOG=1",
         "BOX64_NOBANNER=0",
     )
 }

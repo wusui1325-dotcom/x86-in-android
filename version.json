@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.29",
-  "versionCode": 30,
-  "notes": "0.1.29: SIGILL R1 — Wine/PE 預設 BOX64_DYNAREC=0（interpreter）+ SSE42/AVX/AES 全關 + NOHOSTEXT；ExitStatus 不再怪 AVX、不以重裝運行時為主；runtimeId wine-gpustack-v0.1.29-box64-interp"
+  "versionName": "0.1.30",
+  "versionCode": 31,
+  "notes": "0.1.30: SIGILL after ntdll under interpreter — bookworm libgcc x64lib + aarch64 wine/wineserver wrappers + WINELOADERNOEXEC + wine --version smoke; runtimeId wine-gpustack-v0.1.30-x64lib-bookworm"
 }

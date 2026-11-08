@@ -106,10 +106,10 @@ object ExitStatusMessages {
                 "請優先點「重裝運行時」（不要只改系統儲存權限）。"
             )
         132 -> (
-            "客體退出碼 132＝SIGILL（Illegal instruction）：多半是 Box64 dynarec 產生了本機 CPU 無法執行的指令，" +
-                "或 x86_64 二進位未經過 Box64。0.1.29+ 預設 BOX64_DYNAREC=0（interpreter）並關閉 SSE42／AVX 等廣告。" +
-                "請更新 App 後直接重開，並查看日誌中的 BOX64_SELFTEST／BOX64_FLAGS／WINE_START。" +
-                "「重裝運行時」通常無助於此症；若 SELFTEST 本身就是 132，才需要換 Box64 組件。"
+            "客體退出碼 132＝SIGILL（Illegal instruction）。0.1.30+：interpreter（DYNAREC=0）仍炸時，多半是模擬中的 ntdll／libgcc 或 wine 子行程未回 Box64，" +
+                "不是 AVX／dynarec 發射。請更新 App 後「重裝運行時」（換 bookworm libgcc x64lib），並看日誌 " +
+                "BOX64_SELFTEST／WINE_VERSION_SMOKE／BOX64_X64LIB_STAMP／BOX64_FLAGS。" +
+                "若 WINE_VERSION_SMOKE 已是 132，問題在 Wine／x64lib；若只有 explorer 炸，再查 GPU／PE。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +
@@ -125,6 +125,7 @@ object ExitStatusMessages {
             "libtalloc", "cannot link", "linker",
             "ld-linux", "enoent", "/usr/bin/sh", "not found",
             "box64", "動態連結", "ntdll", "cannot dlopen", "x64lib", "libgcc",
+            "illegal instruction", "sigill", "wine_version_smoke", "x64lib_stamp",
         ).any { it in s }
     }
 

@@ -241,10 +241,12 @@ object ComponentInstaller {
         return wine.isFile && wine.length() > 0L && ntdll.isFile && ntdll.length() > 1024L
     }
 
-    /** Box64 模擬用 x86_64 依賴庫（至少 libgcc_s.so.1；Wine ntdll NEEDED）。 */
+    /** Box64 模擬用 x86_64 依賴庫（libgcc_s + 0.1.30+ bookworm stamp）。 */
     fun hasBox64X64lib(rootfs: File): Boolean {
         val gcc = File(rootfs, "usr/lib/box64-x86_64-linux-gnu/libgcc_s.so.1")
-        return gcc.isFile && gcc.length() > 0L
+        val stamp = File(rootfs, "usr/lib/box64-x86_64-linux-gnu/.x64lib-stamp")
+        // 缺 stamp＝舊 gcc-15 x64lib，強制重拉 bookworm 組件
+        return gcc.isFile && gcc.length() > 0L && stamp.isFile && stamp.length() > 0L
     }
 
     /** Turnip glibc ICD 依賴：Vulkan loader＋drm／xcb（來自 x11-overlay） */

@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.29-box64-interp",
+  "runtimeId": "wine-gpustack-v0.1.30-x64lib-bookworm",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -32,11 +32,11 @@
     },
     {
       "id": "box64-x64lib",
-      "filename": "box64-x64lib-0.4.4.tar.xz",
-      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/box64-x64lib-0.4.4.tar.xz",
-      "sha256": "982052d6c786a89ae596372278ef93ff547165adaaa0ef25bc7c757c72a3ad10",
+      "filename": "box64-x64lib-0.4.4-bookworm.tar.xz",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/box64-x64lib-0.4.4-bookworm.tar.xz",
+      "sha256": "09fa191abc442c466d26c545d7a95e77140c5e3d2d3960788aa889691a9e622a",
       "extract": "rootfs",
-      "notes": "Box64 emulated x86_64 libs (libgcc_s etc.) at /usr/lib/box64-x86_64-linux-gnu — required for Wine ntdll.so dlopen under Box64"
+      "notes": "Box64 x64libs + Debian bookworm libgcc_s (gcc-12) + aarch64 wine/wineserver wrappers; stamp .x64lib-stamp"
     },
     {
       "id": "x11-overlay",
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack default; box64 x64lib; Wine default BOX64_DYNAREC=0 (interpreter) + NOHOSTEXT + ISA ads off"
+  "notes": "GpuStack; bookworm libgcc x64lib; aarch64 wine/wineserver wrappers; wine --version smoke; DYNAREC=0+NOHOSTEXT"
 }

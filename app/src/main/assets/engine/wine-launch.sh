@@ -137,7 +137,6 @@ if [ "$BACKEND" = "soft" ]; then
 fi
 
 # Box64：必須是 glibc 客體二進位（INTERP /lib/ld-linux-aarch64.so.1）
-# 舊版誤裝 bionic（/system/bin/linker64）→ dash 報 "not found"
 BOX64=
 for c in \
   /usr/local/bin/box64 \
@@ -153,30 +152,60 @@ if [ -z "$BOX64" ]; then
 fi
 log "BOX64=$BOX64 $(ls -la "$BOX64" 2>&1)"
 chmod +x "$BOX64" 2>/dev/null || true
+export BOX64
 
-# 自檢：無參數跑 box64（純 aarch64 路徑）。若此步 SIGILL＝box64 二進位／宿主 CPU 不合。
+# 0.1.30：aarch64 wine／wineserver 包裝（PRoot 下 raw execve 仍回 Box64）
+WINE_REAL=/opt/wine/bin/wine
+WINESERVER_REAL=/opt/wine/bin/wineserver
+mkdir -p /usr/local/bin
+if [ ! -x /usr/local/bin/wine ] || ! grep -q 'BOX64' /usr/local/bin/wine 2>/dev/null; then
+  cat > /usr/local/bin/wine << 'WRAP'
+#!/bin/sh
+BOX64="${BOX64:-/usr/local/bin/box64}"
+REAL="${WINE_REAL:-/opt/wine/bin/wine}"
+exec "$BOX64" "$REAL" "$@"
+WRAP
+  chmod +x /usr/local/bin/wine
+fi
+if [ ! -x /usr/local/bin/wineserver ] || ! grep -q 'BOX64' /usr/local/bin/wineserver 2>/dev/null; then
+  cat > /usr/local/bin/wineserver << 'WRAP'
+#!/bin/sh
+BOX64="${BOX64:-/usr/local/bin/box64}"
+REAL="${WINESERVER_REAL:-/opt/wine/bin/wineserver}"
+exec "$BOX64" "$REAL" "$@"
+WRAP
+  chmod +x /usr/local/bin/wineserver
+fi
+export WINE_REAL WINESERVER_REAL
+# PATH：包裝優先於 /opt/wine/bin
+export PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/wine/bin"
+
+# 自檢：box64 -v（勿無參，會印 Missing operand）
 log "BOX64_SELFTEST begin"
 set +e
-"$BOX64" >/mnt/data/box64-selftest.out 2>&1
+"$BOX64" -v >/mnt/data/box64-selftest.out 2>&1
 ST=$?
+if [ "$ST" != "0" ]; then
+  "$BOX64" --version >/mnt/data/box64-selftest.out 2>&1
+  ST=$?
+fi
 set -e
 log "BOX64_SELFTEST exit=$ST"
-head -20 /mnt/data/box64-selftest.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
-# exit 132＝SIGILL；非 0／1／255 也值得記。仍繼續試 Wine（有些 build 無參會非 0）
+head -30 /mnt/data/box64-selftest.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 if [ "$ST" = "132" ]; then
   log "FATAL: box64 itself SIGILL (exit 132). Host CPU cannot run this Box64 build."
   exit 132
 fi
 
-WINEBIN=/opt/wine/bin/wine
-if [ ! -x "$WINEBIN" ] && [ ! -f "$WINEBIN" ]; then
-  log "FATAL: wine missing at $WINEBIN"
+if [ ! -x "$WINE_REAL" ] && [ ! -f "$WINE_REAL" ]; then
+  log "FATAL: wine missing at $WINE_REAL"
   exit 127
 fi
 
 # Wine amd64 unix libs（ntdll.so）+ Box64 模擬用 x86_64 依賴（libgcc_s 等）
 NTDLL=/opt/wine/lib/wine/x86_64-unix/ntdll.so
 X64LIB_GCC=/usr/lib/box64-x86_64-linux-gnu/libgcc_s.so.1
+X64LIB_STAMP=/usr/lib/box64-x86_64-linux-gnu/.x64lib-stamp
 if [ ! -f "$NTDLL" ]; then
   log "FATAL: wine ntdll.so missing ($NTDLL). Reinstall runtime."
   ls -la /opt/wine/lib/wine/x86_64-unix 2>&1 | tee -a /mnt/data/gpu-stack.log || true
@@ -187,16 +216,25 @@ if [ ! -f "$X64LIB_GCC" ]; then
   ls -la /usr/lib/box64-x86_64-linux-gnu 2>&1 | tee -a /mnt/data/gpu-stack.log || true
   exit 127
 fi
+if [ -f "$X64LIB_STAMP" ]; then
+  log "BOX64_X64LIB_STAMP=$(cat "$X64LIB_STAMP" 2>/dev/null)"
+else
+  log "WARN: x64lib stamp missing (want bookworm libgcc). Reinstall runtime recommended."
+fi
 
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
-export WINELOADER="${WINELOADER:-$WINEBIN}"
+# WINELOADER → aarch64 包裝，子行程 exec 仍進 Box64
+export WINELOADER="${WINELOADER:-/usr/local/bin/wine}"
+# 跳過 wine-preloader 再 exec（Box64 亦會偵測並略過 preloader）
+export WINELOADERNOEXEC=1
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
+log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC"
 
-# 強制安全預設（覆蓋 Kotlin env 以防漏設／舊值）
-# NOHOSTEXT=1：dynarec 只用 ASIMD，禁止 LSE／FLAGM／AES 等宿主擴展（防 HWCAP 誤報 → SIGILL）
+# 強制安全預設（覆蓋 Kotlin env）
+# 0.1.30：DYNAREC=0（interpreter）已證非 dynarec 發射；保留 NOHOSTEXT 給日後切回
 export BOX64_DYNAREC_NOHOSTEXT=1
 export BOX64_DYNAREC_NATIVEFLAGS=0
 export BOX64_AVX=0
@@ -211,22 +249,48 @@ export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-0}"
 export BOX64_DYNAREC_CALLRET="${BOX64_DYNAREC_CALLRET:-0}"
 export BOX64_DYNAREC_FASTNAN="${BOX64_DYNAREC_FASTNAN:-0}"
 export BOX64_DYNAREC_FASTROUND="${BOX64_DYNAREC_FASTROUND:-0}"
+export BOX64_DYNAREC_X87DOUBLE="${BOX64_DYNAREC_X87DOUBLE:-1}"
+export BOX64_DYNAREC_WAIT="${BOX64_DYNAREC_WAIT:-1}"
+export BOX64_DYNAREC_ALIGNED_ATOMICS="${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}"
+export BOX64_CPUTYPE="${BOX64_CPUTYPE:-0}"
+export BOX64_NORCFILES=1
+export BOX64_X11GLX=1
 export BOX64_LOG="${BOX64_LOG:-1}"
 export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-1}"
 export BOX64_SHOWBT="${BOX64_SHOWBT:-1}"
+export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-1}"
 export BOX64_NOBANNER=0
-log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS"
+log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS"
 
-log "WINE_START $WINEBIN explorer /desktop=x86,${W}x${H} $*"
+# 冒煙：wine --version（無 X／無 explorer／無 PE）— 隔離 ntdll／libgcc／包裝鏈
+log "WINE_VERSION_SMOKE begin"
 set +e
-"$BOX64" "$WINEBIN" explorer /desktop=x86,${W}x${H} "$@"
+"$BOX64" "$WINE_REAL" --version >/mnt/data/wine-version.out 2>&1
+WV=$?
+set -e
+log "WINE_VERSION_SMOKE exit=$WV"
+head -40 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+if [ "$WV" = "132" ]; then
+  log "FATAL: wine --version SIGILL (exit 132). Likely emulated ntdll／libgcc／loader — not dynarec, not GPU."
+  log "HINT: reinstall runtime for bookworm x64lib; check BOX64_X64LIB_STAMP / WINE_VERSION_SMOKE log above."
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 132
+fi
+if [ "$WV" != "0" ]; then
+  log "WARN: wine --version failed (exit=$WV); continuing to explorer anyway"
+fi
+
+log "WINE_START $WINE_REAL explorer /desktop=x86,${W}x${H} $*"
+set +e
+"$BOX64" "$WINE_REAL" explorer /desktop=x86,${W}x${H} "$@"
 RC=$?
 set -e
 log "WINE_EXIT=$RC"
 
 if [ "$RC" != "0" ]; then
   log "--- gpu-stack.log tail ---"
-  tail -40 /mnt/data/gpu-stack.log 2>/dev/null || true
+  tail -60 /mnt/data/gpu-stack.log 2>/dev/null || true
 fi
 
 [ -n "$IPID" ] && kill $IPID 2>/dev/null || true

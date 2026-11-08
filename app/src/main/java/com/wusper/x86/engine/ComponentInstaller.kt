@@ -144,12 +144,15 @@ object ComponentInstaller {
     }
 
     fun ensureProot(ctx: Context): File {
-        val proot = EngineAssets.ensureProot(ctx)
-        ExecBits.force(proot)
-        // files 鏡像也 chmod（LaunchPipeline 舊路徑）
+        val bundle = EngineAssets.ensureProotBundle(ctx)
+        ExecBits.force(bundle.proot)
+        ExecBits.force(bundle.loader)
         ExecBits.force(File(EngineAssets.engineRoot(ctx), "proot"))
-        return proot
+        return bundle.proot
     }
+
+    fun ensureProotBundle(ctx: Context): EngineAssets.ProotBundle =
+        EngineAssets.ensureProotBundle(ctx)
 
     fun ensureWineLaunchScript(ctx: Context) {
         val rootfs = File(runtimeRoot(ctx), "rootfs")

@@ -177,3 +177,8 @@
 
 - 修 tar 解壓跳過 symlink；補 `bin`→`usr/bin`、`sh`→`dash`
 - 校驗 `rootfsOk`；客體設 `PATH`；缺 shell 實體才重解
+
+## 更新 0.1.18 — Termux proot＋loader（修 ENOSYS）
+
+- 真機 `execve/chmod/chdir … Function not implemented`：舊靜態 proot 經 strip 破壞內嵌 loader，或未帶齊 loader／talloc
+- 改 Termux `proot`＋`loader`＋`libtalloc`＋`libandroid-shmem`；`PROOT_TMP_DIR`→codeCacheDir；bind `/mnt/app` 確保源目錄存在

@@ -34,3 +34,10 @@
 
 Ubuntu Noble **usrmerge**：`bin`→`usr/bin`、`usr/bin/sh`→`dash`。解壓必須建立 symlink（舊版曾跳過 → proot `'/bin/sh' not found`）。
 安裝時 `ensureUsrmergeShell` 可就地補齊；`VERSION.json` 含 `rootfsOk`／`rootfsShell`。客體 `PATH` 預設含 `/bin`／`/usr/bin`。
+
+## proot 組合（0.1.18）
+
+對齊 Termux／Winlator 可用鏈：
+- `proot`（Termux 5.1.107）＋`libexec/proot/loader{,32}`＋`libtalloc.so.2`＋`libandroid-shmem.so`
+- 部署於 `codeCacheDir/proot-bundle`；`PROOT_LOADER`／`LD_LIBRARY_PATH`／`PROOT_TMP_DIR`（可 exec）
+- **禁止 strip** `libproot*.so`（靜態包內嵌 loader 被 strip → ENOSYS）

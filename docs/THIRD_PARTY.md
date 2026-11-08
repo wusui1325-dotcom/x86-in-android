@@ -7,11 +7,13 @@
 - 授權：MIT
 - 用途：x86_64 → ARM64 動態翻譯
 
-## PRoot（Android portable）
+## PRoot（Termux 組合 · 0.1.18）
 
-- https://github.com/skirsten/proot-portable-android-binaries
-- 授權：GPL-3（隨 Termux proot）
-- 用途：無 root 進入 glibc rootfs
+- https://github.com/termux/proot （套件 `proot` 5.1.107.102 aarch64）
+- 依賴：`libtalloc`、`libandroid-shmem`（Termux apt）
+- 授權：GPL-3
+- 用途：無 root 進入 glibc rootfs（`PROOT_LOADER`＋loader）
+- 備援靜態包：https://github.com/skirsten/proot-portable-android-binaries（`proot-static`；勿 strip）
 
 ## Ubuntu rootfs（proot-distro）
 

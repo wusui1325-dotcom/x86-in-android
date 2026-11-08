@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.17",
-  "versionCode": 18,
-  "notes": "0.1.17: 修 rootfs /bin/sh（usrmerge symlink 解壓＋校驗＋PATH）"
+  "versionName": "0.1.18",
+  "versionCode": 19,
+  "notes": "0.1.18: Termux proot＋loader＋talloc（修 ENOSYS）；TMP／/mnt/app bind"
 }

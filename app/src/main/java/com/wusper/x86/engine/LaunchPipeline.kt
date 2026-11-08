@@ -236,8 +236,10 @@ object LaunchPipeline {
             }
         }
 
-        val proot = ComponentInstaller.ensureProot(ctx)
+        val prootBundle = ComponentInstaller.ensureProotBundle(ctx)
+        val proot = prootBundle.proot
         ExecBits.force(proot)
+        ExecBits.force(prootBundle.loader)
         ComponentInstaller.ensureWineLaunchScript(ctx)
         val rootfsDir = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
         ComponentInstaller.ensureUsrmergeShell(rootfsDir)
@@ -250,8 +252,13 @@ object LaunchPipeline {
         val guestShell = ComponentInstaller.shellPathInRootfs(rootfsDir)
         val runtime = ComponentInstaller.runtimeRoot(ctx)
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
-        val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
+        val tmp = prootBundle.tmpDir
         File(ws.dataDir, "xfb").mkdirs()
+        ws.exeDir.mkdirs()
+        // 確保綁定源存在（缺目錄會導致 chdir /mnt/app 失敗）
+        if (!File(ws.exeDir, "app.exe").exists() && pe.exists()) {
+            pe.copyTo(File(ws.exeDir, "app.exe"), overwrite = true)
+        }
         val guestExe = "/mnt/app/app.exe"
 
         val bindGpu = mutableListOf<String>()
@@ -273,29 +280,28 @@ object LaunchPipeline {
             GpuStack.stageAlsaAAudioIntoRootfs(ctx)
         }
 
+        val appBindSrc = ws.exeDir.absolutePath
         val argv = buildList {
             add(proot.absolutePath)
             add("--kill-on-exit")
+            add("--link2symlink")
+            add("--sysvipc")
+            add("--kernel-release=6.2.1")
             add("-r"); add(File(runtime, "rootfs").absolutePath)
             add("-b"); add("/dev")
             add("-b"); add("/proc")
-            add("-b"); add("${ws.exeDir.absolutePath}:/mnt/app")
+            add("-b"); add("/sys")
+            add("-b"); add("${appBindSrc}:/mnt/app")
             add("-b"); add("${prefix.absolutePath}:/home/xuser/.wine")
             add("-b"); add("${ws.dataDir.absolutePath}:/mnt/data")
-            // 進程內 X／SysVSHM socket（宿主 imagefs）
+            // 進程內 X／SysVSHM／音訊 socket（宿主 imagefs）
             val imageFs = File(ctx.filesDir, "engine/imagefs")
-            val x11 = File(imageFs, "tmp/.X11-unix")
-            val shm = File(imageFs, "tmp/.sysvshm")
-            if (x11.isDirectory) {
-                add("-b"); add("${x11.absolutePath}:/tmp/.X11-unix")
-            }
-            if (shm.isDirectory) {
-                add("-b"); add("${shm.absolutePath}:/tmp/.sysvshm")
-            }
-            val sound = File(imageFs, "tmp/.sound")
-            if (sound.isDirectory) {
-                add("-b"); add("${sound.absolutePath}:/tmp/.sound")
-            }
+            val x11 = File(imageFs, "tmp/.X11-unix").also { it.mkdirs() }
+            val shm = File(imageFs, "tmp/.sysvshm").also { it.mkdirs() }
+            val sound = File(imageFs, "tmp/.sound").also { it.mkdirs() }
+            add("-b"); add("${x11.absolutePath}:/tmp/.X11-unix")
+            add("-b"); add("${shm.absolutePath}:/tmp/.sysvshm")
+            add("-b"); add("${sound.absolutePath}:/tmp/.sound")
             addAll(bindGpu)
             add("-w"); add("/mnt/app")
             add(guestShell)
@@ -304,7 +310,6 @@ object LaunchPipeline {
         }
 
         val env = mutableListOf(
-            "PROOT_TMP_DIR=${tmp.absolutePath}",
             "HOME=/home/xuser",
             "USER=xuser",
             "LOGNAME=xuser",
@@ -318,7 +323,9 @@ object LaunchPipeline {
             "BOX64_PATH=/opt/wine/bin",
             "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",
             "LANG=C.UTF-8",
+            "LD_PRELOAD=", // 清掉可能的 termux-exec
         )
+        env += prootBundle.envVars()
         env += Box64Preset.performance.toList()
 
         val kindMessage: String

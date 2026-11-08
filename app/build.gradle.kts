@@ -111,6 +111,14 @@ android {
         }
         jniLibs {
             useLegacyPackaging = true
+            // proot 靜態包內嵌 loader ELF；strip 會就地破壞 → 真機 ENOSYS（chmod/chdir/execve）
+            keepDebugSymbols += setOf(
+                "**/libproot.so",
+                "**/libprootloader.so",
+                "**/libprootloader32.so",
+                "**/libtalloc.so",
+                "**/libandroid-shmem.so",
+            )
         }
     }
 }

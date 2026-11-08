@@ -9,6 +9,7 @@ import com.winlator.xenvironment.components.SysVSharedMemoryComponent;
 import com.winlator.xenvironment.components.XServerComponent;
 import com.winlator.xserver.ScreenInfo;
 import com.winlator.xserver.XServer;
+import com.winlator.winhandler.WinHandler;
 import com.winlator.xserver.Window;
 import com.winlator.renderer.GPUImage;
 import com.winlator.widget.XServerView;
@@ -31,6 +32,7 @@ public final class InProcessX {
     private XServerComponent xServerComponent;
     private SysVSharedMemoryComponent sysVComponent;
     private PresentXFramePump framePump;
+    private WinHandler winHandler;
     private boolean started;
 
     public InProcessX(Context ctx) {
@@ -52,6 +54,10 @@ public final class InProcessX {
         return xServer != null;
     }
 
+    public WinHandler getWinHandler() {
+        return winHandler;
+    }
+
     public synchronized void start() {
         start(null);
     }
@@ -67,6 +73,8 @@ public final class InProcessX {
         xServer = new XServer(host, screenInfo);
         xServerView = new XServerView(appCtx, xServer);
         xServer.setRenderer(xServerView.getRenderer());
+        winHandler = new WinHandler();
+        winHandler.attachXServer(xServer);
 
         UnixSocketConfig xCfg = UnixSocketConfig.create(
                 imageFsRoot.getAbsolutePath(), UnixSocketConfig.XSERVER_PATH);
@@ -113,6 +121,8 @@ public final class InProcessX {
         framePump = null;
         xServerComponent = null;
         sysVComponent = null;
+        if (xServer != null) xServer.setWinHandler(null);
+        winHandler = null;
         xServer = null;
         started = false;
         Log.i(TAG, "stopped");

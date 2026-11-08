@@ -189,7 +189,7 @@ class SessionActivity : ComponentActivity() {
                             // 預設 letterbox；surfaceChanged 會更新
                             xin.updateBlitFromSurface(1280, 720)
                             inProcessInputRef.set(xin)
-                            logText += "輸入橋：InProcessX.inject*（非 xdotool）\n"
+                            logText += "輸入橋：WinHandler 級（相對滑鼠／雙指右鍵／長按右鍵／滾輪／可選手把）\n"
                         }
                         logText += "InProcessX imagefs=${x.imageFsRoot.absolutePath}\n"
                     }

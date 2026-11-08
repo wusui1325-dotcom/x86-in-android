@@ -29,6 +29,7 @@ object GpuStack {
     const val GLX_GLADIO_READY: Boolean = true
     /** ALSA android_aserver → 宿主 AAudio */
     const val AAUDIO_READY: Boolean = true
+    const val WINHANDLER_INPUT_READY: Boolean = true
 
     /** Winlator 等價 glibc Turnip（KGSL）；非 nihui bionic zip */
     const val TURNIP_VERSION = "25.1.0-R2"
@@ -86,6 +87,8 @@ object GpuStack {
         if (!GLX_GLADIO_READY) {
             g += "缺 GLX／gladiorenderer（OpenGL 客體）"
         }
+        // WinHandler 級觸控／相對滑鼠／右鍵／滾輪／鍵位手把已接；完整 dinput UDP 另項
+        g += "缺完整 dinput 手把 UDP（winhandler.dll；現為鍵位映射）"
         return g
     }
 
@@ -98,7 +101,7 @@ object GpuStack {
         parts += if (hasDxvk(ctx)) "DXVK✓" else "DXVK✗"
         parts += if (PRESENTATION_READY) "Present✓" else "Present✗"
         parts += if (INPROCESS_X_READY) "X✓（Winlator）" else "X✗"
-        parts += "Input✓（inject*）"
+        parts += "Input✓（WinHandler）"
         parts += if (DRI3_ZEROCOPY_READY) "DRI3✓" else "DRI3✗"
         parts += if (TURNIP_ICD_READY && hasTurnip(ctx)) "ICD✓（glibc）" else "ICD✗"
         parts += if (GLX_GLADIO_READY) "GLX✓（Gladio）" else "GLX✗"

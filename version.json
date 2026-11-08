@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.14",
-  "versionCode": 15,
-  "notes": "0.1.14: 客體 ALSA android_aserver → 宿主 AAudio（定案 A；對齊 Winlator／Termux）"
+  "versionName": "0.1.15",
+  "versionCode": 16,
+  "notes": "0.1.15: WinHandler 級輸入（相對滑鼠／雙指・長按右鍵／滾輪／可選手把）"
 }

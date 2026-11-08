@@ -137,10 +137,26 @@
 - 客體 env：`ANDROID_ALSA_SERVER`／`ANDROID_ASERVER_USE_SHM`／`ALSA_PLUGIN_DIR`；`WINEDLLOVERRIDES` 合併 `winepulse.drv=d;winealsa.drv=b`
 - Assets：`engine/audio/`（plugin＋`android_aserver.conf`＋`alsa.conf`）；`GpuStack.stageAlsaAAudioIntoRootfs`
 
-### 還缺
+### 還缺（0.1.14 時）
 
 1. VirGL／Zink 客體包（可選備援）
 2. Vortek／adrenotools（Mali／非 KGSL）
 3. Turnip＋DXVK＋Gladio＋AAudio **實機冒煙**（Adreno）
-4. WinHandler 級輸入（多指／相對滑鼠／手把）
+4. WinHandler 級輸入 ← **0.1.15 已接**
 5. 完整 Pulse 通路（可選；現主線 ALSA→AAudio）
+
+## 更新 0.1.15 — WinHandler 級輸入
+
+- 對齊 Winlator **TouchpadView**／本機 **WinHandler**（無客體 winhandler.dll UDP）
+- `InProcessXInput`：相對滑鼠（`injectPointerMoveDelta`）、輕觸左鍵、**雙指輕觸／長按右鍵**、雙指滾輪、外接滑鼠多鍵＋多格滾輪
+- `WinHandler.mouseEvent` → 進程內 X inject（相對 MOVE／鍵／WHEEL）
+- 可選手把：Android gamepad → WASD／方向鍵／A=Enter／B=Esc…（非完整 dinput）
+- 預設 `Style.TOUCHPAD`；可切 `TOUCHSCREEN` 絕對點按
+
+### 還缺
+
+1. VirGL／Zink 客體包（可選備援）
+2. Vortek／adrenotools（Mali／非 KGSL）
+3. Turnip＋DXVK＋Gladio＋AAudio＋輸入 **實機冒煙**
+4. 完整 dinput 手把 UDP（客體 winhandler.dll）
+5. 完整 Pulse 通路（可選）

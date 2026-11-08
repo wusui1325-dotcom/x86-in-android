@@ -172,3 +172,8 @@
 2. Vortek／adrenotools（Mali）
 3. 真機冒煙複驗（本修後）
 4. 完整 dinput UDP；完整 Pulse（可選）
+
+## 更新 0.1.17 — rootfs /bin/sh（usrmerge symlink）
+
+- 修 tar 解壓跳過 symlink；補 `bin`→`usr/bin`、`sh`→`dash`
+- 校驗 `rootfsOk`；客體設 `PATH`；缺 shell 實體才重解

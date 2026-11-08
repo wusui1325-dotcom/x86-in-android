@@ -239,7 +239,15 @@ object LaunchPipeline {
         val proot = ComponentInstaller.ensureProot(ctx)
         ExecBits.force(proot)
         ComponentInstaller.ensureWineLaunchScript(ctx)
+        val rootfsDir = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
+        ComponentInstaller.ensureUsrmergeShell(rootfsDir)
+        if (!ComponentInstaller.hasValidRootfs(rootfsDir)) {
+            throw IllegalStateException(
+                "rootfs 缺 /bin/sh（${rootfsDir.absolutePath}）。請重裝運行時或清除 files/engine/runtime",
+            )
+        }
         ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), ComponentInstaller.runtimeRoot(ctx))
+        val guestShell = ComponentInstaller.shellPathInRootfs(rootfsDir)
         val runtime = ComponentInstaller.runtimeRoot(ctx)
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
         val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
@@ -290,7 +298,7 @@ object LaunchPipeline {
             }
             addAll(bindGpu)
             add("-w"); add("/mnt/app")
-            add("/bin/sh")
+            add(guestShell)
             add("/usr/local/bin/wine-launch.sh")
             add(guestExe)
         }
@@ -298,6 +306,9 @@ object LaunchPipeline {
         val env = mutableListOf(
             "PROOT_TMP_DIR=${tmp.absolutePath}",
             "HOME=/home/xuser",
+            "USER=xuser",
+            "LOGNAME=xuser",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "WINEPREFIX=/home/xuser/.wine",
             "WINEDEBUG=-all",
             "WINEARCH=win64",
@@ -306,6 +317,7 @@ object LaunchPipeline {
             "WINE_DESKTOP_H=720",
             "BOX64_PATH=/opt/wine/bin",
             "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",
+            "LANG=C.UTF-8",
         )
         env += Box64Preset.performance.toList()
 

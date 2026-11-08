@@ -9,6 +9,8 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.nio.file.Files
+import java.nio.file.Paths
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
@@ -71,6 +73,30 @@ object ComponentInstaller {
             File(lib, "libxcb-dri3.so.0").exists()
     }
 
+    /** rootfs 必須有可用 shell（/bin/sh 或 bash／dash；含 symlink） */
+    fun hasValidRootfs(rootfs: File): Boolean {
+        if (!rootfs.isDirectory) return false
+        val sh = File(rootfs, "bin/sh")
+        val bash = File(rootfs, "bin/bash")
+        val dash = File(rootfs, "bin/dash")
+        val usrBash = File(rootfs, "usr/bin/bash")
+        val usrDash = File(rootfs, "usr/bin/dash")
+        fun ok(f: File): Boolean =
+            runCatching {
+                Files.exists(f.toPath()) || Files.isSymbolicLink(f.toPath())
+            }.getOrDefault(f.exists())
+        return ok(sh) || ok(bash) || ok(dash) || ok(usrBash) || ok(usrDash)
+    }
+
+    fun shellPathInRootfs(rootfs: File): String {
+        val candidates = listOf("bin/sh", "bin/bash", "bin/dash", "usr/bin/bash", "usr/bin/dash")
+        for (rel in candidates) {
+            val f = File(rootfs, rel)
+            if (f.exists()) return "/$rel"
+        }
+        return "/bin/sh"
+    }
+
     /**
      * Wine／glibc 基底就緒。
      * 不再把 Xvfb／xdotool 當硬依賴（GpuStack 預設不走軟渲）；
@@ -88,6 +114,7 @@ object ComponentInstaller {
         val prootFiles = File(EngineAssets.engineRoot(ctx), "proot")
         val prootNative = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
         return wine.exists() && box.exists() &&
+            hasValidRootfs(rootfs) &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             hasTurnipVkDeps(rootfs) &&
             (prootNative.exists() || prootFiles.exists() || File(root, "bin/proot").exists())
@@ -165,6 +192,7 @@ object ComponentInstaller {
             cancelRequested.set(false)
             ensureProot(ctx)
             if (isReady(ctx)) {
+                ensureUsrmergeShell(File(runtimeRoot(ctx), "rootfs"))
                 ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), runtimeRoot(ctx))
                 ensureWineLaunchScript(ctx)
                 onProgress(Progress("ready", message = "運行時已就緒"))
@@ -181,17 +209,30 @@ object ComponentInstaller {
             val hasBox = File(rootfs, "usr/local/bin/box64").exists()
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
-            val baseOk = hasWine && hasBox
+            // 舊安裝跳過 symlink → 無 /bin/sh；先補 usrmerge（保留已下的 wine／box）
+            if (rootfs.isDirectory) {
+                ensureUsrmergeShell(rootfs)
+            }
+            var rootfsOk = hasValidRootfs(rootfs)
+            val hasDashOrBash =
+                File(rootfs, "usr/bin/dash").isFile || File(rootfs, "usr/bin/bash").isFile
+            // 連 dash／bash 實體都沒有 → 必須重解整棵 rootfs（會清掉樹上 wine，故全組件重裝）
+            val needsRootfsRetar = !rootfsOk && !hasDashOrBash
+            val baseOk = hasWine && hasBox && rootfsOk
             // GpuStack：x11-overlay 提供 libvulkan／drm／xcb（Turnip 依賴）；不強制 Xvfb
             val hasVkDeps = hasTurnipVkDeps(rootfs)
             val needExtras = mutableSetOf<String>()
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
             if (!hasVkDeps) needExtras += "x11-overlay"
-            val onlyExtras = baseOk && needExtras.isNotEmpty()
-            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps
+            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps && !needsRootfsRetar
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
+            }
+            if (!rootfsOk && hasDashOrBash) {
+                onProgress(Progress("extract", message = "補齊 usrmerge／bin/sh symlink…"))
+                ensureUsrmergeShell(rootfs)
+                rootfsOk = hasValidRootfs(rootfs)
             }
             // 收集待處理組件
             val jobs = mutableListOf<JSONObject>()
@@ -199,8 +240,19 @@ object ComponentInstaller {
                 for (i in 0 until arr.length()) {
                     val c = arr.getJSONObject(i)
                     val id = c.getString("id")
+                    if (needsRootfsRetar) {
+                        // 全量重裝
+                        jobs += c
+                        continue
+                    }
                     if (baseOk && id in setOf("rootfs", "wine", "box64-glibc")) continue
                     if (baseOk && needExtras.isNotEmpty() && id !in needExtras) continue
+                    if (!baseOk) {
+                        // 缺基底：該下的都下（略過已有的）
+                        if (id == "rootfs" && rootfsOk) continue
+                        if (id == "wine" && hasWine) continue
+                        if (id == "box64-glibc" && hasBox) continue
+                    }
                     jobs += c
                 }
             }
@@ -259,7 +311,16 @@ object ComponentInstaller {
                     ),
                 )
                 when (id) {
-                    "rootfs" -> extractRootfs(out, File(root, "rootfs"), c.optString("stripPrefix", ""))
+                    "rootfs" -> {
+                        val rf = File(root, "rootfs")
+                        val shellsMissing =
+                            !File(rf, "usr/bin/dash").isFile && !File(rf, "usr/bin/bash").isFile
+                        if (rf.exists() && shellsMissing) {
+                            onProgress(Progress("extract", message = "rootfs 缺 shell 實體，清除後重解…"))
+                            rf.deleteRecursively()
+                        }
+                        extractRootfs(out, rf, c.optString("stripPrefix", ""))
+                    }
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
                     "box64-glibc" -> extractBox64(out, File(root, "rootfs/usr/local/bin"))
                     "x11-overlay", "input-overlay", "electron-overlay", "wine-addons-overlay" ->
@@ -292,10 +353,25 @@ object ComponentInstaller {
                 asound.parentFile?.mkdirs()
                 asound.writeText("pcm.!default { type null }\nctl.!default { type null }\n")
             }
+            ensureUsrmergeShell(rootfs)
+            if (!hasValidRootfs(rootfs)) {
+                return Result.failure(
+                    IllegalStateException("安裝後 rootfs 仍缺 /bin/sh，請清除 files/engine 後重試"),
+                )
+            }
             ensureWineLaunchScript(ctx)
             ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), root)
             ensureProot(ctx)
-            onProgress(Progress("ready", message = "運行時安裝完成"))
+            // 刷新 stamp（含 rootfs 校驗）
+            File(root, "VERSION.json").writeText(
+                JSONObject()
+                    .put("runtimeId", runtimeId)
+                    .put("installedAt", System.currentTimeMillis())
+                    .put("rootfsShell", shellPathInRootfs(rootfs))
+                    .put("rootfsOk", true)
+                    .toString(2),
+            )
+            onProgress(Progress("ready", message = "運行時安裝完成（shell=${shellPathInRootfs(rootfs)}）"))
             return Result.success(root)
         } catch (t: Throwable) {
             return Result.failure(t)
@@ -425,16 +501,72 @@ object ComponentInstaller {
 
     private fun extractRootfs(archive: File, dest: File, stripPrefix: String) {
         dest.mkdirs()
-        extractTarXz(archive, dest, skipDevice = true)
-        if (stripPrefix.isNotBlank()) {
-            val nested = File(dest, stripPrefix)
-            if (nested.isDirectory) {
-                nested.listFiles()?.forEach { child ->
-                    val target = File(dest, child.name)
-                    if (!target.exists()) child.renameTo(target)
-                }
-                nested.deleteRecursively()
+        extractTarXz(archive, dest, skipDevice = true, stripPrefix = stripPrefix)
+        ensureUsrmergeShell(dest)
+        if (!hasValidRootfs(dest)) {
+            throw IllegalStateException(
+                "rootfs 解壓後仍無 /bin/sh（usrmerge symlink 失敗）。請清除 cache 重試。",
+            )
+        }
+    }
+
+    /**
+     * Ubuntu Noble usrmerge：bin→usr/bin、usr/bin/sh→dash。
+     * 若舊版解壓跳過 symlink，在此補齊。
+     */
+    fun ensureUsrmergeShell(rootfs: File) {
+        if (!rootfs.isDirectory) return
+        val usrBin = File(rootfs, "usr/bin")
+        if (usrBin.isDirectory) {
+            ensureRelativeSymlink(File(rootfs, "bin"), "usr/bin")
+            ensureRelativeSymlink(File(rootfs, "sbin"), "usr/sbin")
+            ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
+        }
+        val dash = File(usrBin, "dash")
+        val bash = File(usrBin, "bash")
+        val sh = File(usrBin, "sh")
+        when {
+            dash.isFile -> ensureRelativeSymlink(sh, "dash")
+            bash.isFile -> ensureRelativeSymlink(sh, "bash")
+        }
+        // 若仍無 bin/sh 路徑：寫一個最小 wrapper（極少走到）
+        val binSh = File(rootfs, "bin/sh")
+        if (!binSh.exists() && !Files.isSymbolicLink(binSh.toPath())) {
+            val target = when {
+                dash.isFile -> dash
+                bash.isFile -> bash
+                else -> null
             }
+            if (target != null) {
+                File(rootfs, "bin").mkdirs()
+                runCatching {
+                    if (binSh.exists()) binSh.delete()
+                    Files.createSymbolicLink(binSh.toPath(), Paths.get("usr/bin/${target.name}"))
+                }.onFailure {
+                    target.copyTo(binSh, overwrite = true)
+                    ExecBits.force(binSh)
+                }
+            }
+        }
+        ExecBits.force(File(rootfs, "usr/bin/dash"))
+        ExecBits.force(File(rootfs, "usr/bin/bash"))
+        // symlink 本身不需 chmod 目標已 force
+    }
+
+    private fun ensureRelativeSymlink(link: File, targetRel: String) {
+        try {
+            if (Files.isSymbolicLink(link.toPath())) {
+                val cur = runCatching { Files.readSymbolicLink(link.toPath()).toString() }.getOrDefault("")
+                if (cur == targetRel || cur.endsWith(targetRel)) return
+                link.delete()
+            } else if (link.exists()) {
+                // 錯誤地被建成空目錄／檔 → 清掉再連
+                if (link.isDirectory) link.deleteRecursively() else link.delete()
+            }
+            link.parentFile?.mkdirs()
+            Files.createSymbolicLink(link.toPath(), Paths.get(targetRel))
+        } catch (t: Throwable) {
+            android.util.Log.w("ComponentInstaller", "symlink ${link.name} → $targetRel: ${t.message}")
         }
     }
 
@@ -472,30 +604,95 @@ object ComponentInstaller {
         archive: File,
         dest: File,
         skipDevice: Boolean = false,
+        stripPrefix: String = "",
     ) {
         dest.mkdirs()
+        val strip = stripPrefix.trim().trim('/')
+        val stripWithSlash = if (strip.isNotEmpty()) "$strip/" else ""
         FileInputStream(archive).use { fis ->
             BufferedInputStream(fis).use { bis ->
                 XZInputStream(bis).use { xzis ->
                     TarArchiveInputStream(xzis).use { tis ->
                         var entry: TarArchiveEntry? = tis.nextEntry
                         while (entry != null) {
-                            val name = entry.name.removePrefix("./")
-                            if (skipDevice && (name.contains("/dev/") || name.startsWith("dev/"))) {
+                            var name = entry.name.removePrefix("./")
+                            if (strip.isNotEmpty()) {
+                                when {
+                                    name == strip -> {
+                                        entry = tis.nextEntry
+                                        continue
+                                    }
+                                    name.startsWith(stripWithSlash) ->
+                                        name = name.removePrefix(stripWithSlash)
+                                    else -> {
+                                        entry = tis.nextEntry
+                                        continue
+                                    }
+                                }
+                            }
+                            if (name.isEmpty()) {
                                 entry = tis.nextEntry
                                 continue
                             }
-                            val out = File(dest, name)
-                            if (entry.isDirectory) {
-                                out.mkdirs()
-                            } else if (entry.isSymbolicLink) {
-                                // skip symlinks that may escape; best-effort
-                                out.parentFile?.mkdirs()
-                            } else {
-                                out.parentFile?.mkdirs()
-                                FileOutputStream(out).use { fos -> tis.copyTo(fos) }
-                                if (entry.mode and 0b001001001 != 0) {
-                                    ExecBits.force(out)
+                            if (skipDevice && (name == "dev" || name.startsWith("dev/") || name.contains("/dev/"))) {
+                                entry = tis.nextEntry
+                                continue
+                            }
+                            // 路徑穿越防護
+                            val out = File(dest, name).canonicalFile
+                            if (!out.path.startsWith(dest.canonicalFile.path)) {
+                                entry = tis.nextEntry
+                                continue
+                            }
+                            when {
+                                entry.isDirectory -> out.mkdirs()
+                                entry.isSymbolicLink -> {
+                                    out.parentFile?.mkdirs()
+                                    val target = entry.linkName ?: ""
+                                    if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
+                                        runCatching {
+                                            if (out.exists() || Files.isSymbolicLink(out.toPath())) {
+                                                if (out.isDirectory && !Files.isSymbolicLink(out.toPath())) {
+                                                    out.deleteRecursively()
+                                                } else {
+                                                    out.delete()
+                                                }
+                                            }
+                                            Files.createSymbolicLink(out.toPath(), Paths.get(target))
+                                        }
+                                    } else if (target.isNotBlank() && !target.startsWith("/")) {
+                                        // 允許相對含 .. 但解析後仍在 dest 內
+                                        runCatching {
+                                            val resolved = out.parentFile!!.toPath().resolve(target).normalize()
+                                            if (resolved.startsWith(dest.canonicalFile.toPath())) {
+                                                if (out.exists() || Files.isSymbolicLink(out.toPath())) out.delete()
+                                                Files.createSymbolicLink(out.toPath(), Paths.get(target))
+                                            }
+                                        }
+                                    }
+                                }
+                                entry.isLink -> {
+                                    // hard link：盡量指向已解出的檔
+                                    out.parentFile?.mkdirs()
+                                    val linkTarget = entry.linkName ?: ""
+                                    val src = if (strip.isNotEmpty() && linkTarget.startsWith(stripWithSlash)) {
+                                        File(dest, linkTarget.removePrefix(stripWithSlash))
+                                    } else if (strip.isNotEmpty() && linkTarget.startsWith("$strip/")) {
+                                        File(dest, linkTarget.removePrefix("$strip/"))
+                                    } else {
+                                        File(dest, linkTarget.removePrefix("./"))
+                                    }
+                                    if (src.isFile) {
+                                        src.copyTo(out, overwrite = true)
+                                        if (entry.mode and 0b001001001 != 0) ExecBits.force(out)
+                                    }
+                                }
+                                else -> {
+                                    out.parentFile?.mkdirs()
+                                    FileOutputStream(out).use { fos -> tis.copyTo(fos) }
+                                    if (entry.mode and 0b001001001 != 0) {
+                                        ExecBits.force(out)
+                                    }
                                 }
                             }
                             entry = tis.nextEntry

@@ -29,3 +29,8 @@
 - 宿主 `proot` 以 `jniLibs/arm64-v8a/libproot.so` 為準（`nativeLibraryDir`，避開 filesDir `execv EACCES`）
 - 落地後一律 `Os.chmod`（[ExecBits]）；安裝完成掃描 wine／box64／腳本
 - 首次下載：並行＋斷點續傳＋進度條＋可取消
+
+## rootfs /bin/sh（0.1.17）
+
+Ubuntu Noble **usrmerge**：`bin`→`usr/bin`、`usr/bin/sh`→`dash`。解壓必須建立 symlink（舊版曾跳過 → proot `'/bin/sh' not found`）。
+安裝時 `ensureUsrmergeShell` 可就地補齊；`VERSION.json` 含 `rootfsOk`／`rootfsShell`。客體 `PATH` 預設含 `/bin`／`/usr/bin`。

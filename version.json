@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.16",
-  "versionCode": 17,
-  "notes": "0.1.16: 修 proot execv EACCES（libproot.so／Os.chmod）；首次下載進度／取消／並行斷點"
+  "versionName": "0.1.17",
+  "versionCode": 18,
+  "notes": "0.1.17: 修 rootfs /bin/sh（usrmerge symlink 解壓＋校驗＋PATH）"
 }

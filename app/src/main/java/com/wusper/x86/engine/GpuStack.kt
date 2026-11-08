@@ -65,32 +65,23 @@ object GpuStack {
 
     fun componentsInstalled(ctx: Context): Boolean = hasTurnip(ctx) && hasDxvk(ctx)
 
-    /** 可對使用者顯示的缺口（繁中） */
+    /** 僅列出會阻斷 [canLaunchGpuSession] 的缺口（繁中）；非阻斷項不嚇用戶。 */
     fun gaps(ctx: Context): List<String> {
         val g = mutableListOf<String>()
         if (!hasTurnip(ctx)) {
-            g += "缺 Mesa Turnip glibc ICD（$TURNIP_VERSION；KGSL／Adreno）"
+            g += "尚未安裝 GPU 驅動組件（Turnip／Adreno）"
         }
         if (!hasDxvk(ctx)) {
-            g += "缺 DXVK $DXVK_VERSION（d3d8/9/10/11→Vulkan DLL）"
+            g += "尚未安裝 Direct3D 轉譯組件（DXVK）"
         }
         if (!PRESENTATION_READY) {
-            g += "缺 Present→AHardwareBuffer→Session Surface"
+            g += "畫面輸出通路未就緒"
         }
-        if (!DRI3_ZEROCOPY_READY) {
-            g += "缺 DRI3／AHB GPU Present"
-        }
-        g += "缺 Vortek／adrenotools 通路（Mali／非 KGSL；現為 glibc Turnip 直載）"
-        if (!AAUDIO_READY) {
-            g += "缺 ALSA→AAudio 真輸出"
-        }
-        if (!GLX_GLADIO_READY) {
-            g += "缺 GLX／gladiorenderer（OpenGL 客體）"
-        }
-        // WinHandler 級觸控／相對滑鼠／右鍵／滾輪／鍵位手把已接；完整 dinput UDP 另項
-        g += "缺完整 dinput 手把 UDP（winhandler.dll；現為鍵位映射）"
         return g
     }
+
+    /** 裝置是否具備 KGSL（Adreno 路徑）。無則可能黑屏。 */
+    fun hasKgslDevice(): Boolean = File("/dev/kgsl-3d0").exists()
 
     fun canLaunchGpuSession(ctx: Context): Boolean =
         PRESENTATION_READY && componentsInstalled(ctx)

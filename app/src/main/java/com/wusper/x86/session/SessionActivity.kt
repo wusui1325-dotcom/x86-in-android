@@ -1,6 +1,10 @@
 package com.wusper.x86.session
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import androidx.core.content.ContextCompat
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -119,10 +123,19 @@ class SessionActivity : ComponentActivity() {
                 var downloadConfirmAck by remember { mutableStateOf(false) }
                 var showClearConfirm by remember { mutableStateOf(false) }
                 var launchFailedBeforeStart by remember { mutableStateOf(false) }
+                var pendingKgslConfirm by remember { mutableStateOf(false) }
+                var kgslConfirmAck by remember { mutableStateOf(false) }
+                var kgslConfirmSkip by remember { mutableStateOf(false) }
 
                 fun presentFailure(title: String, detail: String, raw: String = "") {
                     errorTitle = title
-                    errorDetail = detail
+                    var d = detail
+                    if (ExitStatusMessages.shouldSuggestReinstall(detail) &&
+                        "重裝運行時" !in detail
+                    ) {
+                        d = detail + "\n" + ComponentInstaller.USER_HINT_REINSTALL_RUNTIME
+                    }
+                    errorDetail = d
                     errorRaw = raw
                     showErrorCard = true
                     status = title
@@ -146,6 +159,9 @@ class SessionActivity : ComponentActivity() {
                     launchFailedBeforeStart = false
                     downloadConfirmAck = false
                     pendingDownloadConfirm = false
+                    kgslConfirmAck = false
+                    kgslConfirmSkip = false
+                    pendingKgslConfirm = false
                     stopBridges()
                     val freed = ComponentInstaller.clearRuntime(this@SessionActivity, alsoClearCache = true)
                     val mb = "%.1f".format(freed / 1e6)
@@ -173,6 +189,7 @@ class SessionActivity : ComponentActivity() {
                         logText += "找不到工作區：$workspaceId\n"
                         return@LaunchedEffect
                     }
+                    ensurePostNotificationsPermission()
                     EngineForegroundService.start(this@SessionActivity, ws.displayName)
                     val plan0 = try {
                         LaunchPipeline.prepare(
@@ -218,6 +235,18 @@ class SessionActivity : ComponentActivity() {
                                 EngineForegroundService.stop(this@SessionActivity)
                                 return@LaunchedEffect
                             }
+                        }
+                        try {
+                            ComponentInstaller.assertEnoughSpace(this@SessionActivity)
+                        } catch (t: Throwable) {
+                            presentFailure(
+                                "儲存空間不足",
+                                t.message ?: "請腾出空間後再試。",
+                            )
+                            logText += "空間預檢失敗：${t.message}\n"
+                            EngineForegroundService.stop(this@SessionActivity)
+                            launchFailedBeforeStart = true
+                            return@LaunchedEffect
                         }
                         status = "安裝運行時"
                         installing = true
@@ -308,6 +337,32 @@ class SessionActivity : ComponentActivity() {
                             logText += "重建：${plan.mode}\n${plan.kindMessage}\n"
                         }
                     }
+                    // #10：無 KGSL／非 Adreno → 啟動前警告（可繼續）
+                    if (plan.mode == LaunchPipeline.Mode.WineProot &&
+                        plan.graphicsBackend == GraphicsBackend.GpuStack &&
+                        !plan.gpuBlocked &&
+                        !GpuStack.hasKgslDevice()
+                    ) {
+                        if (!kgslConfirmAck && !kgslConfirmSkip) {
+                            pendingKgslConfirm = true
+                            status = "裝置相容性警告"
+                            logText += "未偵測到 /dev/kgsl-3d0（非 Adreno／無 KGSL），可能無畫面。\n"
+                            while (pendingKgslConfirm && !kgslConfirmAck && !kgslConfirmSkip) {
+                                delay(200)
+                            }
+                            if (kgslConfirmSkip || (!kgslConfirmAck && !pendingKgslConfirm)) {
+                                status = "已取消"
+                                presentFailure(
+                                    "已取消啟動",
+                                    "此裝置可能無法顯示畫面（需 Adreno／KGSL）。詳見相容說明。",
+                                )
+                                EngineForegroundService.stop(this@SessionActivity)
+                                launchFailedBeforeStart = true
+                                return@LaunchedEffect
+                            }
+                        }
+                    }
+
                     // SoftLegacy 輸入橋
                     if (plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.SoftLegacy &&
@@ -523,6 +578,33 @@ class SessionActivity : ComponentActivity() {
                     )
                 }
 
+                if (pendingKgslConfirm && !kgslConfirmAck && !kgslConfirmSkip) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            pendingKgslConfirm = false
+                            kgslConfirmSkip = true
+                        },
+                        title = { Text(getString(com.wusper.x86.R.string.dialog_kgsl_title)) },
+                        text = { Text(getString(com.wusper.x86.R.string.dialog_kgsl_message)) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                kgslConfirmAck = true
+                                pendingKgslConfirm = false
+                            }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_kgsl_continue))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                kgslConfirmSkip = true
+                                pendingKgslConfirm = false
+                            }) {
+                                Text(getString(com.wusper.x86.R.string.dialog_cancel))
+                            }
+                        },
+                    )
+                }
+
                 if (showClearConfirm) {
                     AlertDialog(
                         onDismissRequest = { showClearConfirm = false },
@@ -544,7 +626,16 @@ class SessionActivity : ComponentActivity() {
                 Scaffold(
                     topBar = {
                         TopAppBar(
-                            title = { Text(ws?.displayName ?: getString(com.wusper.x86.R.string.session_title)) },
+                            title = {
+                                Column {
+                                    Text(ws?.displayName ?: getString(com.wusper.x86.R.string.session_title))
+                                    Text(
+                                        text = getString(com.wusper.x86.R.string.session_desktop_hint),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            },
                             navigationIcon = {
                                 IconButton(onClick = {
                                     stopBridges()
@@ -682,7 +773,13 @@ class SessionActivity : ComponentActivity() {
                             text = "狀態：$status",
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        )
+                        Text(
+                            text = getString(com.wusper.x86.R.string.session_desktop_hint),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 0.dp),
                         )
                         if (installing) {
                             val p = installProgress
@@ -730,7 +827,22 @@ class SessionActivity : ComponentActivity() {
         }
     }
 
+    /** API 33+：啟動前景服務前請求通知權限（#21）。拒絕不阻斷啟動。 */
+    private fun ensurePostNotificationsPermission() {
+        if (Build.VERSION.SDK_INT < 33) return
+        val granted = ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.POST_NOTIFICATIONS,
+        ) == PackageManager.PERMISSION_GRANTED
+        if (granted) return
+        runCatching {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_POST_NOTIFICATIONS)
+        }
+    }
+
     companion object {
+        private const val REQ_POST_NOTIFICATIONS = 8621
+
         const val EXTRA_WORKSPACE_ID = "workspace_id"
         const val EXTRA_FORCE_SMOKE = "force_smoke"
         const val EXTRA_FORCE_GUEST_SMOKE = "force_guest_smoke"

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.23",
-  "versionCode": 24,
-  "notes": "0.1.23: 用戶找茬 P0 — 退出碼解碼／黑屏錯誤卡／一鍵重裝運行時／禁 URI→hostArm64 fallback／下載確認＋rootfs sha256／GPU 重試鈕／煙測進開發者／工作區可刪／同名 exe 按路徑／發行命名說明"
+  "versionName": "0.1.24",
+  "versionCode": 25,
+  "notes": "0.1.24: 用戶找茬 P1 — Box64 解壓後校驗／缺口只列阻斷／無 KGSL 警告／儲存預檢／通知權限／版本＋SHA／COMPAT／備份排除 engine／1280×720 標註／回歸文案指重裝運行時"
 }

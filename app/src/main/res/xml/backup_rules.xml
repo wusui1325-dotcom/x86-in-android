@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 排除引擎樹，避免換機／重裝還原半殘 runtime（#27） -->
+<full-backup-content>
+    <exclude domain="file" path="engine" />
+</full-backup-content>

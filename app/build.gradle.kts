@@ -39,6 +39,14 @@ android {
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
+        val gitSha = runCatching {
+            ProcessBuilder("git", "rev-parse", "--short", "HEAD")
+                .directory(rootProject.projectDir)
+                .redirectErrorStream(true)
+                .start()
+                .inputStream.bufferedReader().readText().trim()
+        }.getOrDefault("unknown").ifBlank { "unknown" }
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         ndk {
             abiFilters += listOf("arm64-v8a")
         }

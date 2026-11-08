@@ -1,3 +1,26 @@
+## 0.1.42 — mid overlaps Wine stack + noexec ntdll
+
+**Symptom (0.1.41 Boss):** `WINE_LAUNCH_STAMP=0.1.41`, `HOLEFIT ok (cached) 0x800000:0x10000000`,
+DOS+mid+hi `done`, `boot_ok=1` / `system.reg` exists, but:
+```
+err:virtual:map_image_into_view … ntdll.dll … noexec filesystem?
+err:virtual:virtual_setup_exception stack overflow … stack 0x800ec0 (0x800000-0x801000-0xa00000)
+```
+→ `WINE_EXIT=1`.
+
+**Root cause:**
+1. Mid prereserve `0x800000:0x10000000` **covers Wine default TEB/stack** `[0x800000,0xa00000)`.
+2. Android/proot `filesDir` wineprefix is often **MS_NOEXEC** → `mprotect(PROT_EXEC)` on PE `.text` fails.
+
+**Fix:**
+- Hole-fit candidates start at `≥0x1000000`; drop `0x800000`; reject any mid overlapping stack;
+  clear sticky marker that overlaps / stamp≠0.1.42.
+- `ensure_prefix_exec`: remount,exec on prefix/drive_c/opt/wine; else tmpfs+bind over system32.
+- Stamp `WINE_LAUNCH_STAMP=0.1.42`.
+
+**Retest:** Cover-install **0.1.42** → stamp=0.1.42 → `HOLEFIT ok addr≠0x800000` →
+no stack overflow at `0x800ec0` → ntdll map ok / `WINE_EXIT=0` (or next unmuted err).
+
 ## 0.1.41 — wineboot/--version exit 1 after hole-fit (muted err)
 
 **Symptom (0.1.40 Boss):** `HOLEFIT ok 0x800000:0x10000000`, DOS+mid+hi `done`, then

@@ -13,8 +13,8 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.41: fingerprint; unmute wine err; capture full PE/run logs; explicit wineboot
-WINE_LAUNCH_STAMP=0.1.41
+# 0.1.42: fingerprint; mid must not overlap Wine stack 0x800000-0xa00000; prefix exec try
+WINE_LAUNCH_STAMP=0.1.42
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -263,6 +263,53 @@ log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC WINE_REAL=$WINE_R
 log "WINEPRELOADRESERVE='${WINEPRELOADRESERVE-<unset>}' BOX64_MMAP32=$BOX64_MMAP32"
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
+
+# ---- 0.1.42: try make WINEPREFIX / drive_c exec (Android/proot often MS_NOEXEC) ----
+# Wine map_image_into_view needs PROT_EXEC on PE .text (ntdll.dll). Remount may work
+# under some proot/kernels; chmod alone cannot clear MS_NOEXEC. Log outcome for dig.
+ensure_prefix_exec() {
+  local p="${WINEPREFIX:-/home/xuser/.wine}"
+  mkdir -p "$p/drive_c/windows/system32" 2>/dev/null || true
+  local ok=0
+  if mount -o remount,exec,rw "$p" 2>/dev/null; then
+    log "PREFIX_EXEC remount WINEPREFIX ok"
+    ok=1
+  fi
+  if mount -o remount,exec,rw "$p/drive_c" 2>/dev/null; then
+    log "PREFIX_EXEC remount drive_c ok"
+    ok=1
+  fi
+  if mount -o remount,exec,rw /opt/wine 2>/dev/null; then
+    log "PREFIX_EXEC remount /opt/wine ok"
+    ok=1
+  fi
+  # Best-effort: tmpfs scratch for PE system32 if remount failed (Winlator-style)
+  if [ "$ok" -eq 0 ]; then
+    local scratch=/tmp/.wine-system32-exec
+    mkdir -p "$scratch"
+    if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=256M tmpfs "$scratch" 2>/dev/null; then
+      if [ -d "$p/drive_c/windows/system32" ]; then
+        cp -a "$p/drive_c/windows/system32"/. "$scratch"/ 2>/dev/null || true
+      fi
+      mkdir -p "$p/drive_c/windows/system32"
+      if mount --bind "$scratch" "$p/drive_c/windows/system32" 2>/dev/null \
+         || mount -o bind "$scratch" "$p/drive_c/windows/system32" 2>/dev/null; then
+        log "PREFIX_EXEC tmpfs+bind system32 ok ($scratch)"
+        ok=1
+      else
+        log "WARN: PREFIX_EXEC tmpfs ok but bind system32 failed"
+      fi
+    else
+      log "WARN: PREFIX_EXEC tmpfs scratch failed (need wine remount or patched map_image)"
+    fi
+  fi
+  chmod -R u+x "$p/drive_c/windows/system32" 2>/dev/null || true
+  if [ "$ok" -eq 0 ]; then
+    log "WARN: PREFIX_EXEC no remount/tmpfs — PE PROT_EXEC may still hit noexec"
+  fi
+}
+ensure_prefix_exec
+
 # 自證：unix wine 必須存在
 if [ ! -f /opt/wine/lib/wine/x86_64-unix/wine ]; then
   log "FATAL: /opt/wine/lib/wine/x86_64-unix/wine missing"
@@ -300,11 +347,14 @@ export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
 export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
-# ---- 0.1.40 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
+# ---- 0.1.42 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
 # Evidence: WINEPRELOADRESERVE=100000-1 occupied 0x100000; addr-outer first-success
 # missed larger holes; failed-all still continued PE smoke with last bad patch → SIGABRT.
 # 0.1.40: unset WPR; size-outer (prefer largest); stop on first useful mid; FATAL if all fail;
 # never treat 0x*:0x1 as mid OK; marker stamped with SCRIPT_STAMP.
+# 0.1.42: NEVER use mid overlapping Wine default stack [0x800000,0xa00000) —
+# Boss 0.1.41: mid 0x800000:0x10000000 → stack overflow at 0x800ec0 + ntdll map fail.
+# Prefer mid addr ≥ 0x1000000; reject sticky marker that overlaps stack.
 box64_find_prereserve_mid_off() {
   python3 - "$1" <<'PY'
 import sys
@@ -448,8 +498,19 @@ box64_holefit_mid() {
     return 1
   fi
   # Size outer (largest first), addr inner — first success = prefer largest useful mid
+  # 0.1.42: addrs start at ≥0x1000000 (after Wine stack 0x800000-0xa00000); drop 0x800000
   local cand_sizes="0x10000000 0x8000000 0x4000000 0x1000000"
-  local cand_addrs="0x100000 0x800000 0x1000000 0x10000000"
+  local cand_addrs="0x1000000 0x2000000 0x4000000 0x10000000"
+  # Wine default TEB/stack reserve (see virtual_setup_exception … 0x800000-0x801000-0xa00000)
+  holefit_overlaps_stack() {
+    python3 - "$1" "$2" <<'PY'
+import sys
+a=int(sys.argv[1],0); s=int(sys.argv[2],0)
+lo, hi = 0x800000, 0xa00000
+# half-open [a,a+s) vs [lo,hi)
+sys.exit(0 if (a < hi and (a + s) > lo) else 1)
+PY
+  }
   if [ -f "$marker" ]; then
     # shellcheck disable=SC1090
     . "$marker" 2>/dev/null || true
@@ -458,31 +519,39 @@ box64_holefit_mid() {
       rm -f "$marker"
       unset HOLEFIT_ADDR HOLEFIT_SIZE SCRIPT_STAMP
     elif [ -n "${HOLEFIT_ADDR:-}" ] && [ -n "${HOLEFIT_SIZE:-}" ]; then
-      log "HOLEFIT reuse marker addr=$HOLEFIT_ADDR size=$HOLEFIT_SIZE"
-      if box64_patch_prereserve_mid "$box" "$HOLEFIT_ADDR" "$HOLEFIT_SIZE" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
-        if box64_probe_mid_done "$HOLEFIT_ADDR"; then
-          log "HOLEFIT ok (cached) WINE prereserve of $HOLEFIT_ADDR:$HOLEFIT_SIZE"
-          export HOLEFIT_ADDR HOLEFIT_SIZE
-          unset WINEPRELOADRESERVE
-          return 0
-        fi
-        log "WARN: holefit marker stale — re-probing"
+      if holefit_overlaps_stack "$HOLEFIT_ADDR" "$HOLEFIT_SIZE"; then
+        log "HOLEFIT marker overlaps Wine stack ($HOLEFIT_ADDR:$HOLEFIT_SIZE vs 0x800000-0xa00000) — clearing"
         rm -f "$marker"
+        unset HOLEFIT_ADDR HOLEFIT_SIZE SCRIPT_STAMP
+      else
+        log "HOLEFIT reuse marker addr=$HOLEFIT_ADDR size=$HOLEFIT_SIZE"
+        if box64_patch_prereserve_mid "$box" "$HOLEFIT_ADDR" "$HOLEFIT_SIZE" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
+          if box64_probe_mid_done "$HOLEFIT_ADDR"; then
+            log "HOLEFIT ok (cached) WINE prereserve of $HOLEFIT_ADDR:$HOLEFIT_SIZE"
+            export HOLEFIT_ADDR HOLEFIT_SIZE
+            unset WINEPRELOADRESERVE
+            return 0
+          fi
+          log "WARN: holefit marker stale — re-probing"
+          rm -f "$marker"
+        fi
       fi
     fi
   fi
-  log "HOLEFIT begin (no WINEPRELOADRESERVE; size-outer prefer largest; stop on first useful mid)"
+  log "HOLEFIT begin (no WINEPRELOADRESERVE; skip Wine stack 0x800000-0xa00000; size-outer; stop on first useful mid)"
   local a s n=0
   for s in $cand_sizes; do
     for a in $cand_addrs; do
       python3 - "$a" "$s" <<'PY' || continue
 import sys
 a=int(sys.argv[1],0); s=int(sys.argv[2],0)
+stack_lo, stack_hi = 0x800000, 0xa00000
 if a & 0xFFFF: sys.exit(1)
 if s & 0xFFFF: sys.exit(1)
-if a < 0x100000: sys.exit(1)
+if a < 0x1000000: sys.exit(1)  # 0.1.42: after Wine stack
 if a + s > 0x7f000000: sys.exit(1)
 if a + s <= a: sys.exit(1)
+if a < stack_hi and (a + s) > stack_lo: sys.exit(1)  # overlap stack
 sys.exit(0)
 PY
       n=$((n+1))
@@ -505,7 +574,7 @@ PY
 }
 
 if ! box64_holefit_mid; then
-  log "FATAL: hole-fit failed — install 0.1.40+ script + wine64k box64; clear files/engine/runtime if sticky"
+  log "FATAL: hole-fit failed — install 0.1.42+ script + wine64k box64; mid must avoid 0x800000-0xa00000; clear sticky marker"
   exit 134
 fi
 
@@ -543,6 +612,8 @@ SMOKE_LOG_SAVE="${BOX64_LOG-}"
 export WINEDEBUG="${WINE_PE_SMOKE_WINEDEBUG:-err+all,fix+all}"
 log "WINE_PE_SMOKE WINEDEBUG=$WINEDEBUG"
 export WINEPREFIX="$SMOKE_PREFIX"
+mkdir -p "$WINEPREFIX"
+ensure_prefix_exec
 # PE 探測開短暫 LOG 以便抓 LdrInitializeThunk／prereserve
 export BOX64_LOG="${BOX64_PE_SMOKE_LOG:-1}"
 export BOX64_SHOWSEGV="${BOX64_PE_SMOKE_SHOWSEGV:-0}"
@@ -736,8 +807,9 @@ else
   exit 1
 fi
 
-# 0.1.41: explicit wineboot on real prefix if empty — same path PE smoke hits; capture err
+# 0.1.42: explicit wineboot on real prefix if empty — same path PE smoke hits; capture err
 mkdir -p "$WINEPREFIX"
+ensure_prefix_exec
 export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,fix+all}"
 export BOX64_LOG="${BOX64_RUN_LOG:-1}"
 log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX"

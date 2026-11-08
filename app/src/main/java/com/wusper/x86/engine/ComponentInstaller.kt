@@ -26,7 +26,7 @@ object ComponentInstaller {
     private val cancelRequested = AtomicBoolean(false)
 
     /** 首次下載必須有非空 sha256 的組件 */
-    private val CRITICAL_SHA_IDS = setOf("rootfs", "box64-glibc", "wine")
+    private val CRITICAL_SHA_IDS = setOf("rootfs", "box64-glibc", "box64-x64lib", "wine")
 
     data class Progress(
         val stage: String,
@@ -231,6 +231,22 @@ object ComponentInstaller {
         File(rootfs, "opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi").exists() ||
             File(rootfs, "opt/wine/share/wine/gecko/wine-gecko-2.47.4-x86_64").isDirectory
 
+    /**
+     * Wine 樹完整：不只 bin/wine，還要有 Box64 會 dlopen 的 unix ntdll.so。
+     * 半殘安裝（只剩 wine stub）會讓 isReady 誤過 → 客體 exit=1 Cannot dlopen(ntdll.so)。
+     */
+    fun hasWineTree(rootfs: File): Boolean {
+        val wine = File(rootfs, "opt/wine/bin/wine")
+        val ntdll = File(rootfs, "opt/wine/lib/wine/x86_64-unix/ntdll.so")
+        return wine.isFile && wine.length() > 0L && ntdll.isFile && ntdll.length() > 1024L
+    }
+
+    /** Box64 模擬用 x86_64 依賴庫（至少 libgcc_s.so.1；Wine ntdll NEEDED）。 */
+    fun hasBox64X64lib(rootfs: File): Boolean {
+        val gcc = File(rootfs, "usr/lib/box64-x86_64-linux-gnu/libgcc_s.so.1")
+        return gcc.isFile && gcc.length() > 0L
+    }
+
     /** Turnip glibc ICD 依賴：Vulkan loader＋drm／xcb（來自 x11-overlay） */
     fun hasTurnipVkDeps(rootfs: File): Boolean {
         val lib = File(rootfs, "usr/lib/aarch64-linux-gnu")
@@ -320,10 +336,9 @@ object ComponentInstaller {
         val expect = expectedRuntimeId(ctx)
         if (expect.isNotBlank() && installedRuntimeId(ctx) != expect) return false
         val rootfs = File(root, "rootfs")
-        val wine = File(rootfs, "opt/wine/bin/wine")
         val prootFiles = File(EngineAssets.engineRoot(ctx), "proot")
         val prootNative = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
-        return wine.exists() && hasGlibcBox64(rootfs) &&
+        return hasWineTree(rootfs) && hasGlibcBox64(rootfs) && hasBox64X64lib(rootfs) &&
             hasValidRootfs(rootfs) &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             hasTurnipVkDeps(rootfs) &&
@@ -418,7 +433,7 @@ object ComponentInstaller {
             val runtimeId = jo.getString("runtimeId")
             val arr = jo.getJSONArray("components")
             val rootfs = File(root, "rootfs")
-            val hasWine = File(rootfs, "opt/wine/bin/wine").exists()
+            val hasWine = hasWineTree(rootfs)
             val hasBox = hasGlibcBox64(rootfs)
             // 舊 bionic box64 視為未裝，強制重抓 glibc 包
             if (!hasBox) {
@@ -441,11 +456,13 @@ object ComponentInstaller {
             val baseOk = hasWine && hasBox && rootfsOk
             // GpuStack：x11-overlay 提供 libvulkan／drm／xcb（Turnip 依賴）；不強制 Xvfb
             val hasVkDeps = hasTurnipVkDeps(rootfs)
+            val hasX64 = hasBox64X64lib(rootfs)
             val needExtras = mutableSetOf<String>()
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
             if (!hasVkDeps) needExtras += "x11-overlay"
-            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps && !needsRootfsRetar
+            if (!hasX64) needExtras += "box64-x64lib"
+            val stampOnly = baseOk && hasElectron && hasAddons && hasVkDeps && hasX64 && !needsRootfsRetar
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }
@@ -472,6 +489,7 @@ object ComponentInstaller {
                         if (id == "rootfs" && rootfsOk) continue
                         if (id == "wine" && hasWine) continue
                         if (id == "box64-glibc" && hasBox) continue
+                        if (id == "box64-x64lib" && hasX64) continue
                     }
                     jobs += c
                 }
@@ -548,7 +566,7 @@ object ComponentInstaller {
                     }
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
                     "box64-glibc" -> extractBox64(out, File(root, "rootfs/usr/local/bin"))
-                    "x11-overlay", "input-overlay", "electron-overlay", "wine-addons-overlay" ->
+                    "box64-x64lib", "x11-overlay", "input-overlay", "electron-overlay", "wine-addons-overlay" ->
                         extractTarXz(out, File(root, "rootfs"), skipDevice = true)
                     else -> extractTarXz(out, File(root, c.optString("extract", ".")))
                 }
@@ -572,6 +590,16 @@ object ComponentInstaller {
             ExecBits.force(File(rootfs, "opt/wine/bin/wine"))
             ExecBits.force(File(rootfs, "usr/bin/Xvfb"))
             ExecBits.force(File(rootfs, "usr/bin/xdotool"))
+            if (!hasWineTree(rootfs)) {
+                throw IllegalStateException(
+                    "Wine 安裝不完整（缺少 ntdll.so）。$USER_HINT_REINSTALL_RUNTIME",
+                )
+            }
+            if (!hasBox64X64lib(rootfs)) {
+                throw IllegalStateException(
+                    "Box64 依賴庫未就緒（缺少 libgcc_s）。$USER_HINT_REINSTALL_RUNTIME",
+                )
+            }
             // 確保 null ALSA
             val asound = File(rootfs, "etc/asound.conf")
             if (!asound.exists()) {
@@ -916,9 +944,25 @@ object ComponentInstaller {
             val dst = File(optDir, to)
             if (src.exists()) {
                 if (dst.exists()) dst.deleteRecursively()
-                src.renameTo(dst)
+                if (!src.renameTo(dst)) {
+                    // 跨裝置／失敗時改 copy
+                    src.copyRecursively(dst, overwrite = true)
+                    src.deleteRecursively()
+                }
             }
         }
+        val wineRoot = File(optDir, to.ifBlank { "wine" })
+        val ntdll = File(wineRoot, "lib/wine/x86_64-unix/ntdll.so")
+        val wineBin = File(wineRoot, "bin/wine")
+        if (!wineBin.isFile || !ntdll.isFile || ntdll.length() < 1024L) {
+            throw IllegalStateException(
+                "Wine 解壓不完整（ntdll.so／wine 缺失）。$USER_HINT_REINSTALL_RUNTIME",
+            )
+        }
+        android.util.Log.i(
+            "ComponentInstaller",
+            "wine ok bin=${wineBin.length()}B ntdll=${ntdll.length()}B → ${wineRoot.absolutePath}",
+        )
     }
 
     /**

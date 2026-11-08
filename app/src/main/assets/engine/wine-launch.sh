@@ -154,6 +154,29 @@ if [ ! -x "$WINEBIN" ] && [ ! -f "$WINEBIN" ]; then
   exit 127
 fi
 
+# Wine amd64 unix libs（ntdll.so）+ Box64 模擬用 x86_64 依賴（libgcc_s 等）
+# 缺 x64lib 時 Box64 wrapped dlopen(ntdll.so) 會失敗：Cannot dlopen("...ntdll.so"/…, 2)
+NTDLL=/opt/wine/lib/wine/x86_64-unix/ntdll.so
+X64LIB_GCC=/usr/lib/box64-x86_64-linux-gnu/libgcc_s.so.1
+if [ ! -f "$NTDLL" ]; then
+  echo "FATAL: wine ntdll.so missing ($NTDLL). Reinstall runtime." >> /mnt/data/gpu-stack.log
+  ls -la /opt/wine/lib/wine/x86_64-unix 2>>/mnt/data/gpu-stack.log || true
+  exit 127
+fi
+if [ ! -f "$X64LIB_GCC" ]; then
+  echo "FATAL: box64 x64lib missing ($X64LIB_GCC). Reinstall runtime." >> /mnt/data/gpu-stack.log
+  ls -la /usr/lib/box64-x86_64-linux-gnu 2>>/mnt/data/gpu-stack.log || true
+  exit 127
+fi
+
+# BOX64_LD_LIBRARY_PATH：搜尋「被模擬的」x86_64 .so（與宿主 aarch64 LD_LIBRARY_PATH 分開）
+export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
+export WINELOADER="${WINELOADER:-$WINEBIN}"
+echo "NTDLL=ok $(ls -la "$NTDLL" 2>&1)" >> /mnt/data/gpu-stack.log
+echo "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)" >> /mnt/data/gpu-stack.log
+echo "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH" >> /mnt/data/gpu-stack.log
+
 "$BOX64" "$WINEBIN" explorer /desktop=x86,${W}x${H} "$@"
 RC=$?
 

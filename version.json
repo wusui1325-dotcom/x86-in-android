@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.25",
-  "versionCode": 26,
-  "notes": "0.1.25: 修安裝 ELOOP（Too many symbolic links）— tar 解壓改 lexical 路徑、禁止 canonical 把 bin→usr/bin 建成自指環；rootfs 重解前安全清除 usrmerge；重裝／dirSize 不跟隨 symlink"
+  "versionName": "0.1.26",
+  "versionCode": 27,
+  "notes": "0.1.26: Wine ntdll.so 無法 dlopen — 補 Box64 x64lib（libgcc_s 等）至 /usr/lib/box64-x86_64-linux-gnu，設定 BOX64_LD_LIBRARY_PATH／WINEDLLPATH；isReady／解壓校驗要求 ntdll.so；runtimeId wine-gpustack-v0.1.26-box64-x64lib"
 }

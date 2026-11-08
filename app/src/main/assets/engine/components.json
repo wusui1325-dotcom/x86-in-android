@@ -1,6 +1,6 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.22-box64-glibc",
-  "approxDownloadBytes": 450000000,
+  "runtimeId": "wine-gpustack-v0.1.26-box64-x64lib",
+  "approxDownloadBytes": 455000000,
   "components": [
     {
       "id": "rootfs",
@@ -29,6 +29,14 @@
         "box64"
       ],
       "notes": "glibc aarch64 Box64 0.4.4 (Winlator-derived; INTERP=/lib/ld-linux-aarch64.so.1). NOT bionic/linker64."
+    },
+    {
+      "id": "box64-x64lib",
+      "filename": "box64-x64lib-0.4.4.tar.xz",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/box64-x64lib-0.4.4.tar.xz",
+      "sha256": "982052d6c786a89ae596372278ef93ff547165adaaa0ef25bc7c757c72a3ad10",
+      "extract": "rootfs",
+      "notes": "Box64 emulated x86_64 libs (libgcc_s etc.) at /usr/lib/box64-x86_64-linux-gnu — required for Wine ntdll.so dlopen under Box64"
     },
     {
       "id": "x11-overlay",
@@ -60,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack default; x11/input overlays optional SoftLegacy only"
+  "notes": "GpuStack default; box64 x64lib required for Wine ntdll.so under Box64"
 }

@@ -101,7 +101,7 @@ object ExitStatusMessages {
             )
         1 -> (
             "客體行程以退出碼 1 結束。請查看下方日誌。" +
-                "若日誌出現權限被拒、找不到動態庫、或「沒有 sh」一類字樣，" +
+                "若出現 could not load ntdll.so／Cannot dlopen、權限被拒、或缺動態庫，" +
                 "請優先點「重裝運行時」（不要只改系統儲存權限）。"
             )
         else -> (
@@ -117,7 +117,7 @@ object ExitStatusMessages {
             "permission", "eacces", "權限",
             "libtalloc", "cannot link", "linker",
             "ld-linux", "enoent", "/usr/bin/sh", "not found",
-            "box64", "動態連結",
+            "box64", "動態連結", "ntdll", "cannot dlopen", "x64lib", "libgcc",
         ).any { it in s }
     }
 

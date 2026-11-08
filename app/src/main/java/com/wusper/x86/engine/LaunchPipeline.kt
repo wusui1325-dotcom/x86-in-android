@@ -271,6 +271,18 @@ object LaunchPipeline {
                     ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
             )
         }
+        if (!ComponentInstaller.hasBox64X64lib(rootfsDir)) {
+            throw IllegalStateException(
+                "運行時缺少 Box64 的 x86_64 依賴庫（libgcc_s；Wine 無法載入 ntdll.so）。" +
+                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
+            )
+        }
+        if (!ComponentInstaller.hasWineTree(rootfsDir)) {
+            throw IllegalStateException(
+                "運行時 Wine 不完整（缺少 ntdll.so）。" +
+                    ComponentInstaller.USER_HINT_REINSTALL_RUNTIME,
+            )
+        }
         ComponentInstaller.ensureUsrmergeShell(rootfsDir)
         if (!ComponentInstaller.hasValidRootfs(rootfsDir)) {
             val shell = ComponentInstaller.resolveShellElf(rootfsDir)?.guestPath ?: "(none)"
@@ -356,6 +368,10 @@ object LaunchPipeline {
             "WINE_DESKTOP_W=1280",
             "WINE_DESKTOP_H=720",
             "BOX64_PATH=/opt/wine/bin",
+            // Box64 搜尋 x86_64 模擬庫（與 aarch64 LD_LIBRARY_PATH 分離）；含 Wine unix＋x64lib
+            "BOX64_LD_LIBRARY_PATH=/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu",
+            "WINEDLLPATH=/opt/wine/lib/wine",
+            "WINELOADER=/opt/wine/bin/wine",
             "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",
             "LANG=C.UTF-8",
             "LD_PRELOAD=", // 清掉可能的 termux-exec

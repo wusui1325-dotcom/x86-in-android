@@ -78,3 +78,15 @@ The412Banner Nightlies `Box64-*-Bionic/Native.wcp` 皆為 bionic（`/system/bin/
 - `bin`／`lib`／`sbin` 只刪連結自身（`deleteSelfNoFollow`）
 - 解 rootfs 前 `deleteRootfsSafely`（先拆 usrmerge）
 - 拒絕自指 symlink；ELOOP 時清 rootfs 並提示重裝運行時
+
+## Wine ntdll.so／Box64 x64lib（0.1.26）
+
+Kron4ek amd64 Wine 的 `bin/wine` stub 會 `dlopen(.../lib/wine/x86_64-unix/ntdll.so)`。
+Box64 以**模擬**方式載入該 x86_64 `.so`，並解析其 `NEEDED`（含 **`libgcc_s.so.1`**）。
+`libgcc_s` **不是** Box64 wrapped 庫，必須提供 x86_64 實體於
+`/usr/lib/box64-x86_64-linux-gnu/`（組件 `box64-x64lib`），並設定
+`BOX64_LD_LIBRARY_PATH`（與宿主 aarch64 `LD_LIBRARY_PATH` 分開）。
+
+缺 x64lib 時錯誤形如：`wine: could not load ntdll.so` + Box64 `Cannot dlopen("…ntdll.so"/…, 2)`
+（此處 `2` 是 `RTLD_NOW` flag，不是 errno）。
+

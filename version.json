@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.28",
-  "versionCode": 29,
-  "notes": "0.1.28: SIGILL 仍在（AVX=0 無效）— 改 BOX64_DYNAREC_NOHOSTEXT=1（dynarec 只用 ASIMD），客體 AVX/SSE42/AES/SHA/PCLMUL 全關；SAFEFLAGS=2 CALLRET=0；wine-launch stdout 診斷＋BOX64_SELFTEST；session 合併 gpu-stack.log；runtimeId wine-gpustack-v0.1.28-box64-nohostext"
+  "versionName": "0.1.29",
+  "versionCode": 30,
+  "notes": "0.1.29: SIGILL R1 — Wine/PE 預設 BOX64_DYNAREC=0（interpreter）+ SSE42/AVX/AES 全關 + NOHOSTEXT；ExitStatus 不再怪 AVX、不以重裝運行時為主；runtimeId wine-gpustack-v0.1.29-box64-interp"
 }

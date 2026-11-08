@@ -111,3 +111,9 @@ ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（12
 - 客體 ISA 廣告全關：`AVX=0 SSE42=0 AES=0 SHAEXT=0 PCLMULQDQ=0`
 - `SAFEFLAGS=2 CALLRET=0 BIGBLOCK=0 NATIVEFLAGS=0`
 - `wine-launch.sh` 把診斷打到 **stdout**（session 可見）並做 `BOX64_SELFTEST`
+
+## Box64 interpreter 預設（0.1.29）
+
+找茬 R1：即便 `NOHOSTEXT=1`／AVX=0，dynarec 仍可能宿主 SIGILL。Wine／PE 預設改
+`BOX64_DYNAREC=0`（interpreter）先過冒煙；通過後再切回 `dynarecSafe`。
+「重裝運行時」對 SIGILL **通常無效**；看日誌 `BOX64_SELFTEST`／`BOX64_FLAGS`／`WINE_START`。

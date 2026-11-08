@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.28-box64-nohostext",
+  "runtimeId": "wine-gpustack-v0.1.29-box64-interp",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack default; box64 x64lib; BOX64_DYNAREC_NOHOSTEXT=1 + guest ISA ads off (avoid host SIGILL)"
+  "notes": "GpuStack default; box64 x64lib; Wine default BOX64_DYNAREC=0 (interpreter) + NOHOSTEXT + ISA ads off"
 }

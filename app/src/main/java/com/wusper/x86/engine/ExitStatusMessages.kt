@@ -106,14 +106,14 @@ object ExitStatusMessages {
                 "請優先點「重裝運行時」（不要只改系統儲存權限）。"
             )
         132 -> (
-            "客體退出碼 132＝SIGILL（Illegal instruction）。0.1.28+ 已強制 " +
-                "BOX64_DYNAREC_NOHOSTEXT=1（dynarec 只用 ASIMD）並關閉 AVX／SSE42／AES。" +
-                "請看日誌是否有 BOX64_SELFTEST／BOX64_FLAGS；若 SELFTEST 即 132，需換 Box64 組件。" +
-                "更新 App 後重開即可（腳本會自動覆寫）；仍失敗再「重裝運行時」。"
+            "客體退出碼 132＝SIGILL（Illegal instruction）：多半是 Box64 dynarec 產生了本機 CPU 無法執行的指令，" +
+                "或 x86_64 二進位未經過 Box64。0.1.29+ 預設 BOX64_DYNAREC=0（interpreter）並關閉 SSE42／AVX 等廣告。" +
+                "請更新 App 後直接重開，並查看日誌中的 BOX64_SELFTEST／BOX64_FLAGS／WINE_START。" +
+                "「重裝運行時」通常無助於此症；若 SELFTEST 本身就是 132，才需要換 Box64 組件。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +
-                "若含 linker／libtalloc／permission／ENOENT／Illegal instruction，請點「重裝運行時」後重試。"
+                "若含 linker／libtalloc／permission／ENOENT，請點「重裝運行時」後重試。SIGILL／Illegal instruction 請先看 BOX64_FLAGS（通常不必重裝運行時）。"
             )
     }
 
@@ -125,7 +125,6 @@ object ExitStatusMessages {
             "libtalloc", "cannot link", "linker",
             "ld-linux", "enoent", "/usr/bin/sh", "not found",
             "box64", "動態連結", "ntdll", "cannot dlopen", "x64lib", "libgcc",
-            "illegal instruction", "sigill",
         ).any { it in s }
     }
 

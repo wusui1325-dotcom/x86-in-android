@@ -244,3 +244,8 @@ com.wusper.x86（暫名）
 
 - Boss：要能跑真實 x86 應用（例 Codex），非 hello。
 - 已接：選 exe→工作區→Wine／PRoot 鏈；組件首次下載；GUI／X11 與 Codex 本體仍待真機驗證。
+
+### 進度（2026-11-09 ~00:25 HKT）
+
+- 圖形：Xvfb -fbdir（XWD）→ SurfaceFrameBridge → Session Surface（最短路徑）。
+- X11 overlay 發布於 Release `runtime-v1`。

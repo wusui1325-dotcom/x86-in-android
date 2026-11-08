@@ -35,16 +35,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.LaunchPipeline
+import com.wusper.x86.graphics.SurfaceFrameBridge
 import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.ui.theme.X86Theme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.atomic.AtomicReference
 
 class SessionActivity : ComponentActivity() {
     @OptIn(ExperimentalMaterial3Api::class)
@@ -73,6 +76,8 @@ class SessionActivity : ComponentActivity() {
                 var logText by remember { mutableStateOf("準備啟動…\n") }
                 var status by remember { mutableStateOf("初始化") }
                 var logFile by remember { mutableStateOf<File?>(null) }
+                var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
+                val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
 
                 LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke) {
                     if (ws == null) {
@@ -118,6 +123,21 @@ class SessionActivity : ComponentActivity() {
                     val result = LaunchPipeline.start(plan)
                     status = if (result.ok) "執行中 pid=${result.pid}" else "失敗"
                     logText += result.message + "\n"
+                    if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot) {
+                        val fbDir = java.io.File(ws.dataDir, "xfb").also { it.mkdirs() }
+                        // 等 Surface 就緒後開 bridge
+                        var waited = 0
+                        while (surfaceHolderRef.get() == null && waited < 50) {
+                            delay(100); waited++
+                        }
+                        surfaceHolderRef.get()?.let { sh ->
+                            frameBridge?.shutdown()
+                            val bridge = SurfaceFrameBridge(fbDir, sh, targetFps = 15)
+                            frameBridge = bridge
+                            bridge.start()
+                            logText += "圖形橋：Xvfb fbdir → Surface（${fbDir.absolutePath}）\n"
+                        }
+                    }
                     while (true) {
                         delay(400)
                         val wait = NativeEngine.nativeWaitNonBlocking()
@@ -138,6 +158,7 @@ class SessionActivity : ComponentActivity() {
 
                 DisposableEffect(Unit) {
                     onDispose {
+                        frameBridge?.shutdown()
                         LaunchPipeline.stop()
                         EngineForegroundService.stop(this@SessionActivity)
                     }
@@ -167,7 +188,7 @@ class SessionActivity : ComponentActivity() {
                             .fillMaxSize()
                             .padding(padding),
                     ) {
-                        // 客體畫面佔位 Surface（P0：色塊＋日誌；之後接 X11／合成）
+                        // 客體畫面：Xvfb -fbdir XWD → SurfaceFrameBridge blit
                         Box(
                             Modifier
                                 .fillMaxWidth()
@@ -177,27 +198,21 @@ class SessionActivity : ComponentActivity() {
                             AndroidView(
                                 factory = { ctx ->
                                     SurfaceView(ctx).apply {
-                                        holder.addCallback(object : android.view.SurfaceHolder.Callback {
-                                            override fun surfaceCreated(holder: android.view.SurfaceHolder) {
-                                                val c = holder.lockCanvas()
-                                                try {
-                                                    c.drawColor(0xFF12203A.toInt())
-                                                    val p = android.graphics.Paint().apply {
-                                                        color = 0xFFE8EEF7.toInt()
-                                                        textSize = 42f
-                                                        isAntiAlias = true
-                                                    }
-                                                    c.drawText("x86 Surface（P0 佔位）", 48f, 120f, p)
-                                                    c.drawText(status, 48f, 180f, p)
-                                                } finally {
-                                                    holder.unlockCanvasAndPost(c)
-                                                }
+                                        holder.addCallback(object : SurfaceHolder.Callback {
+                                            override fun surfaceCreated(holder: SurfaceHolder) {
+                                                surfaceHolderRef.set(holder)
                                             }
                                             override fun surfaceChanged(
-                                                holder: android.view.SurfaceHolder,
+                                                holder: SurfaceHolder,
                                                 format: Int, width: Int, height: Int,
-                                            ) {}
-                                            override fun surfaceDestroyed(holder: android.view.SurfaceHolder) {}
+                                            ) {
+                                                surfaceHolderRef.set(holder)
+                                            }
+                                            override fun surfaceDestroyed(holder: SurfaceHolder) {
+                                                frameBridge?.shutdown()
+                                                frameBridge = null
+                                                surfaceHolderRef.set(null)
+                                            }
                                         })
                                     }
                                 },

@@ -198,14 +198,19 @@ object LaunchPipeline {
         logFile: File,
     ): Plan {
         val proot = ComponentInstaller.ensureProot(ctx)
+        ComponentInstaller.ensureWineLaunchScript(ctx)
         val runtime = ComponentInstaller.runtimeRoot(ctx)
         val rootfs = File(runtime, "rootfs")
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
         val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
-        val wineBin = File(rootfs, "opt/wine/bin/wine")
-        val box64 = File(rootfs, "usr/local/bin/box64")
-        // 客體內路徑
+        val launchSh = File(rootfs, "usr/local/bin/wine-launch.sh")
+        // 若舊運行時無腳本，當場補寫
+        if (!launchSh.exists()) {
+            // 觸發安裝器補腳本：簡易內嵌
+            launchSh.parentFile?.mkdirs()
+        }
         val guestExe = "/mnt/app/app.exe"
+        val fbDir = File(ws.dataDir, "xfb").also { it.mkdirs() }
         val argv = listOf(
             proot.absolutePath,
             "--kill-on-exit",
@@ -216,8 +221,8 @@ object LaunchPipeline {
             "-b", "${prefix.absolutePath}:/home/xuser/.wine",
             "-b", "${ws.dataDir.absolutePath}:/mnt/data",
             "-w", "/mnt/app",
-            box64.absolutePath,
-            wineBin.absolutePath,
+            "/bin/sh",
+            "/usr/local/bin/wine-launch.sh",
             guestExe,
         )
         val env = mutableListOf(
@@ -226,7 +231,11 @@ object LaunchPipeline {
             "WINEPREFIX=/home/xuser/.wine",
             "WINEDEBUG=-all",
             "WINEARCH=win64",
+            "DISPLAY=:0",
+            "WINE_DESKTOP_W=1280",
+            "WINE_DESKTOP_H=720",
             "BOX64_PATH=/opt/wine/bin",
+            "LIBGL_ALWAYS_SOFTWARE=1",
         )
         env += Box64Preset.performance.toList()
         return Plan(
@@ -234,7 +243,7 @@ object LaunchPipeline {
             cwd = ws.dataDir.absolutePath,
             logFile = logFile,
             kind = BinaryKind.Pe,
-            kindMessage = "Windows PE · PRoot→Box64→Wine ${pe.name}",
+            kindMessage = "Windows PE · Xvfb→XWD→Surface · PRoot→Box64→Wine ${pe.name}",
             mode = Mode.WineProot,
             targetFile = pe,
             env = env,

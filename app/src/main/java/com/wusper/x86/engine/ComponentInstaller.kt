@@ -37,13 +37,26 @@ object ComponentInstaller {
         if (!ver.exists()) return false
         val wine = File(root, "rootfs/opt/wine/bin/wine")
         val box = File(root, "rootfs/usr/local/bin/box64")
+        val xvfb = File(root, "rootfs/usr/bin/Xvfb")
         val proot = File(EngineAssets.engineRoot(ctx), "proot")
-        return wine.exists() && box.exists() && (proot.exists() || File(root, "bin/proot").exists())
+        return wine.exists() && box.exists() && xvfb.exists() &&
+            (proot.exists() || File(root, "bin/proot").exists())
     }
 
     fun ensureProot(ctx: Context): File {
         val dest = File(EngineAssets.engineRoot(ctx), "proot")
         return copyAsset(ctx, "engine/proot", dest, executable = true)
+    }
+
+    fun ensureWineLaunchScript(ctx: Context) {
+        val rootfs = File(runtimeRoot(ctx), "rootfs")
+        val dest = File(rootfs, "usr/local/bin/wine-launch.sh")
+        dest.parentFile?.mkdirs()
+        ctx.assets.open("engine/wine-launch.sh").use { input ->
+            dest.outputStream().use { output -> input.copyTo(output) }
+        }
+        dest.setExecutable(true, false)
+        File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) it.setExecutable(true, false) }
     }
 
     /**
@@ -56,6 +69,7 @@ object ComponentInstaller {
         try {
             ensureProot(ctx)
             if (isReady(ctx)) {
+                ensureWineLaunchScript(ctx)
                 onProgress(Progress("ready", message = "運行時已就緒"))
                 return Result.success(runtimeRoot(ctx))
             }
@@ -65,9 +79,15 @@ object ComponentInstaller {
             val jo = JSONObject(manifest)
             val runtimeId = jo.getString("runtimeId")
             val arr = jo.getJSONArray("components")
+            val rootfs = File(root, "rootfs")
+            val hasWine = File(rootfs, "opt/wine/bin/wine").exists()
+            val hasBox = File(rootfs, "usr/local/bin/box64").exists()
+            val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
+            val onlyX11 = hasWine && hasBox && !hasXvfb
             for (i in 0 until arr.length()) {
                 val c = arr.getJSONObject(i)
                 val id = c.getString("id")
+                if (onlyX11 && id != "x11-overlay") continue
                 val filename = c.getString("filename")
                 val url = c.getString("url")
                 val expectSha = c.optString("sha256", "")
@@ -89,11 +109,11 @@ object ComponentInstaller {
                     "rootfs" -> extractRootfs(out, File(root, "rootfs"), c.optString("stripPrefix", ""))
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
                     "box64-glibc" -> extractBox64(out, File(root, "rootfs/usr/local/bin"))
+                    "x11-overlay" -> extractTarXz(out, File(root, "rootfs"), skipDevice = true)
                     else -> extractTarXz(out, File(root, c.optString("extract", ".")))
                 }
             }
             // resolv + dirs
-            val rootfs = File(root, "rootfs")
             File(rootfs, "dev").mkdirs()
             File(rootfs, "proc").mkdirs()
             File(rootfs, "sys").mkdirs()
@@ -110,6 +130,8 @@ object ComponentInstaller {
             // executable bits
             File(rootfs, "usr/local/bin/box64").setExecutable(true, false)
             File(rootfs, "opt/wine/bin/wine").setExecutable(true, false)
+            File(rootfs, "usr/bin/Xvfb").setExecutable(true, false)
+            writeWineLaunchScript(rootfs)
             onProgress(Progress("ready", message = "運行時安裝完成"))
             return Result.success(root)
         } catch (t: Throwable) {
@@ -254,4 +276,36 @@ object ComponentInstaller {
         if (executable) dest.setExecutable(true, false)
         return dest
     }
+
+    private fun writeWineLaunchScript(rootfs: File) {
+        val f = File(rootfs, "usr/local/bin/wine-launch.sh")
+        f.parentFile?.mkdirs()
+        val d = "${'$'}"
+        val script = """
+            |#!/bin/sh
+            |set -e
+            |export DISPLAY=:0
+            |export WINEDLLOVERRIDES="mscoree,mshtml="
+            |W="${d}{WINE_DESKTOP_W:-1280}"
+            |H="${d}{WINE_DESKTOP_H:-720}"
+            |mkdir -p /mnt/data/xfb /tmp/.X11-unix
+            |rm -f /mnt/data/xfb/* 2>/dev/null || true
+            |Xvfb :0 -screen 0 ${d}{W}x${d}{H}x24 -ac -nolisten tcp -fbdir /mnt/data/xfb >/mnt/data/xvfb.log 2>&1 &
+            |XPID=${d}!
+            |i=0
+            |while [ ${d}i -lt 80 ]; do
+            |  if [ -e /mnt/data/xfb/Xvfb_screen0 ] || [ -S /tmp/.X11-unix/X0 ]; then break; fi
+            |  i=${d}((i+1)); sleep 0.1
+            |done
+            |/usr/local/bin/box64 /opt/wine/bin/wine explorer /desktop=x86,${d}{W}x${d}{H} "${d}@"
+            |RC=${d}?
+            |kill ${d}XPID 2>/dev/null || true
+            |wait ${d}XPID 2>/dev/null || true
+            |exit ${d}RC
+            """.trimMargin()
+        f.writeText(script)
+        f.setExecutable(true, false)
+    }
+
+
 }

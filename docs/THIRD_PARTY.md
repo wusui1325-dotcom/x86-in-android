@@ -29,3 +29,9 @@
 
 - The412Banner/Nightlies `Box64-0.4.3.wcp`（源自 ptitSeb/box64，MIT）
 - 用途：rootfs 內翻譯 x86_64 Wine／客體
+
+## X11／Xvfb overlay
+
+- 來源：Ubuntu noble arm64 套件（xvfb、xserver-xorg-core 及依賴）
+- 打包：`x11-overlay-arm64.tar.xz`（Release runtime-v1）
+- 用途：客體 DISPLAY=:0；`-fbdir` XWD 供 Android Surface 讀取

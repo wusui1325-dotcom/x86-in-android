@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.24",
-  "versionCode": 25,
-  "notes": "0.1.24: 用戶找茬 P1 — Box64 解壓後校驗／缺口只列阻斷／無 KGSL 警告／儲存預檢／通知權限／版本＋SHA／COMPAT／備份排除 engine／1280×720 標註／回歸文案指重裝運行時"
+  "versionName": "0.1.25",
+  "versionCode": 26,
+  "notes": "0.1.25: 修安裝 ELOOP（Too many symbolic links）— tar 解壓改 lexical 路徑、禁止 canonical 把 bin→usr/bin 建成自指環；rootfs 重解前安全清除 usrmerge；重裝／dirSize 不跟隨 symlink"
 }

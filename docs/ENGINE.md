@@ -66,3 +66,15 @@ The412Banner Nightlies `Box64-*-Bionic/Native.wcp` 皆為 bionic（`/system/bin/
 
 改用 `runtime-v1/Box64-0.4.4-glibc.wcp`（Winlator 0.4.4 衍生，patchelf INTERP）；
 `isGlibcBox64` 校驗；`runtimeId` bump 強制重裝。
+
+## 解壓 symlink／ELOOP（0.1.25）
+
+真機「安裝失敗：Too many symbolic links encountered」：
+舊 `extractTarXz` 用 `File.canonicalFile` 做輸出路徑。若 rootfs 已有 usrmerge（`bin`→`usr/bin`），
+再解壓 entry `bin`→`usr/bin` 時會把輸出解析成 **`usr/bin` 本身**，刪目錄後建成自指環，後續 I/O 全 ELOOP。
+
+修復：
+- 解壓改 **lexical** `normalize`（不跟隨 symlink）
+- `bin`／`lib`／`sbin` 只刪連結自身（`deleteSelfNoFollow`）
+- 解 rootfs 前 `deleteRootfsSafely`（先拆 usrmerge）
+- 拒絕自指 symlink；ELOOP 時清 rootfs 並提示重裝運行時

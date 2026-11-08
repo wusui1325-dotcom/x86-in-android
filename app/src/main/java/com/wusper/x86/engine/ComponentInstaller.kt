@@ -57,6 +57,8 @@ object ComponentInstaller {
         var freed = 0L
         val runtime = File(ctx.filesDir, "engine/runtime")
         if (runtime.exists()) {
+            // 先拆 usrmerge，避免 dirSize／deleteRecursively 跟隨 symlink
+            deleteRootfsSafely(File(runtime, "rootfs"))
             freed += dirSize(runtime)
             runtime.deleteRecursively()
         }
@@ -74,6 +76,85 @@ object ComponentInstaller {
             gpu.deleteRecursively()
         }
         return freed
+    }
+
+
+    /**
+     * 刪 rootfs 前先拆掉 usrmerge 頂層 symlink，避免 deleteRecursively／canonical
+     * 跟著 bin→usr/bin 把真實目錄當連結目標清掉或踩到 ELOOP。
+     */
+    fun deleteRootfsSafely(rootfs: File) {
+        if (!rootfs.exists()) return
+        // 先拆頂層 usrmerge／自指環，再 deleteRecursively
+        for (name in listOf("bin", "lib", "sbin", "lib64", "lib32", "usr/lib64")) {
+            val f = File(rootfs, name)
+            runCatching {
+                if (Files.isSymbolicLink(f.toPath())) {
+                    Files.deleteIfExists(f.toPath())
+                }
+            }
+        }
+        // 修已形成的 usr/bin→usr/bin 之類自指
+        for (name in listOf("usr/bin", "usr/lib", "usr/sbin")) {
+            val f = File(rootfs, name)
+            runCatching {
+                if (Files.isSymbolicLink(f.toPath())) {
+                    val tgt = Files.readSymbolicLink(f.toPath()).toString()
+                    val parent = f.parentFile?.toPath() ?: return@runCatching
+                    if (parent.resolve(tgt).normalize() == f.toPath().toAbsolutePath().normalize()) {
+                        Files.deleteIfExists(f.toPath())
+                    }
+                }
+            }
+        }
+        if (!rootfs.deleteRecursively()) {
+            // 殘留時逐層再試
+            rootfs.walkBottomUp().forEach { f ->
+                runCatching {
+                    if (Files.isSymbolicLink(f.toPath())) Files.deleteIfExists(f.toPath())
+                    else f.delete()
+                }
+            }
+            rootfs.deleteRecursively()
+        }
+    }
+
+    /**
+     * 不解引用 symlink 的路徑拼接＋normalize。用於 tar 解壓輸出路徑。
+     * 舊版用 File.canonicalFile 會在已有 bin→usr/bin 時把 entry「bin」解析成 usr/bin，
+     * 再 createSymbolicLink(usr/bin, "usr/bin") → 自指環 → IOException ELOOP。
+     */
+    private fun lexicalResolveUnder(dest: File, relative: String): File? {
+        if (relative.isBlank() || relative.startsWith("/")) return null
+        val destPath = dest.toPath().toAbsolutePath().normalize()
+        val out = destPath.resolve(relative).normalize()
+        if (!out.startsWith(destPath)) return null
+        return out.toFile()
+    }
+
+    private fun isSymlinkLoopMessage(t: Throwable): Boolean {
+        var c: Throwable? = t
+        while (c != null) {
+            val m = c.message?.lowercase() ?: ""
+            if (m.contains("too many symbolic links") || m.contains("too many levels of symbolic links") ||
+                m.contains("eloop")
+            ) {
+                return true
+            }
+            c = c.cause
+        }
+        return false
+    }
+
+    /** 刪除路徑自身（symlink 只刪連結，不跟隨） */
+    private fun deleteSelfNoFollow(f: File) {
+        val p = f.toPath()
+        if (Files.isSymbolicLink(p)) {
+            Files.deleteIfExists(p)
+            return
+        }
+        if (!f.exists()) return
+        if (f.isDirectory) f.deleteRecursively() else f.delete()
     }
 
     fun approxDownloadBytes(ctx: Context): Long =
@@ -120,6 +201,8 @@ object ComponentInstaller {
     }
 
     private fun dirSize(f: File): Long {
+        // 不跟隨 symlink（usrmerge bin→usr/bin、X11→. 否則會循環或 ELOOP）
+        if (Files.isSymbolicLink(f.toPath())) return 0L
         if (!f.exists()) return 0L
         if (f.isFile) return f.length()
         return f.listFiles()?.sumOf { dirSize(it) } ?: 0L
@@ -455,11 +538,11 @@ object ComponentInstaller {
                 when (id) {
                     "rootfs" -> {
                         val rf = File(root, "rootfs")
-                        val shellsMissing =
-                            !File(rf, "usr/bin/dash").isFile && !File(rf, "usr/bin/bash").isFile
-                        if (rf.exists() && shellsMissing) {
-                            onProgress(Progress("extract", message = "rootfs 缺 shell 實體，清除後重解…"))
-                            rf.deleteRecursively()
+                        if (rf.exists()) {
+                            onProgress(Progress("extract", message = "清除舊 rootfs 後重解…"))
+                            // 必須整棵清掉：若殘留 bin→usr/bin，再解壓 entry「bin」時
+                            // 舊 canonicalFile 會把輸出解析到 usr/bin 並建成自指環（ELOOP）。
+                            deleteRootfsSafely(rf)
                         }
                         extractRootfs(out, rf, c.optString("stripPrefix", ""))
                     }
@@ -525,9 +608,19 @@ object ComponentInstaller {
             )
             onProgress(Progress("ready", message = "運行時安裝完成（shell=${shellPathInRootfs(rootfs)}）"))
             return Result.success(root)
-        } catch (t: Throwable) {
-            return Result.failure(t)
-        } finally {
+                } catch (t: Throwable) {
+            if (isSymlinkLoopMessage(t)) {
+                // 半殘 usrmerge 自指環：清掉讓用戶重裝即可
+                runCatching { deleteRootfsSafely(File(runtimeRoot(ctx), "rootfs")) }
+                return Result.failure(
+                    IllegalStateException(
+                        "安裝失敗：運行時目錄出現符號連結循環（常為升級／重解殘留）。" +
+                            USER_HINT_REINSTALL_RUNTIME,
+                        t,
+                    ),
+                )
+            }
+            return Result.failure(t) } finally {
             busy.set(false)
         }
     }
@@ -671,13 +764,32 @@ object ComponentInstaller {
      */
     fun ensureUsrmergeShell(rootfs: File) {
         if (!rootfs.isDirectory) return
+        // 若先前誤把 usr/bin 建成自指 symlink，先拆掉以免 isDirectory／canonical ELOOP
+        for (name in listOf("usr/bin", "usr/lib", "usr/sbin")) {
+            val f = File(rootfs, name)
+            runCatching {
+                if (Files.isSymbolicLink(f.toPath())) {
+                    val tgt = Files.readSymbolicLink(f.toPath()).toString()
+                    val parent = f.parentFile?.toPath() ?: return@runCatching
+                    if (parent.resolve(tgt).normalize() == f.toPath().toAbsolutePath().normalize() ||
+                        tgt == name.substringAfterLast('/') ||
+                        tgt == name
+                    ) {
+                        Files.deleteIfExists(f.toPath())
+                    }
+                }
+            }
+        }
         val usrBin = File(rootfs, "usr/bin")
         val usrLib = File(rootfs, "usr/lib")
-        if (usrBin.isDirectory) {
+        // isDirectory 跟隨 symlink；若仍 ELOOP 則當缺失
+        val usrBinOk = runCatching { usrBin.isDirectory }.getOrDefault(false)
+        val usrLibOk = runCatching { usrLib.isDirectory }.getOrDefault(false)
+        if (usrBinOk) {
             ensureRelativeSymlink(File(rootfs, "bin"), "usr/bin")
             ensureRelativeSymlink(File(rootfs, "sbin"), "usr/sbin")
         }
-        if (usrLib.isDirectory) {
+        if (usrLibOk) {
             ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
         }
 
@@ -739,8 +851,11 @@ object ComponentInstaller {
         ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
         val libLd = File(rootfs, "lib/ld-linux-aarch64.so.1")
         if (resolveRegularFile(libLd) == null) {
-            // lib 可能仍是真目錄（symlink 失敗）
-            File(rootfs, "lib").mkdirs()
+            // lib 可能仍是真目錄（symlink 失敗）；若已是 symlink 則勿 mkdirs 跟進去
+            val libDir = File(rootfs, "lib")
+            if (!Files.isSymbolicLink(libDir.toPath())) {
+                libDir.mkdirs()
+            }
             ensureSymlinkOrCopy(libLd, "aarch64-linux-gnu/ld-linux-aarch64.so.1", real)
             if (resolveRegularFile(libLd) == null) {
                 // 最後手段：複製實體到 /lib/ld-linux-aarch64.so.1
@@ -758,15 +873,7 @@ object ComponentInstaller {
         val linked = ensureRelativeSymlink(link, targetRel)
         if (!linked || resolveRegularFile(link) == null) {
             link.parentFile?.mkdirs()
-            runCatching {
-                if (Files.isSymbolicLink(link.toPath()) || link.exists()) {
-                    if (link.isDirectory && !Files.isSymbolicLink(link.toPath())) {
-                        link.deleteRecursively()
-                    } else {
-                        link.delete()
-                    }
-                }
-            }
+            runCatching { deleteSelfNoFollow(link) }
             copyFrom.copyTo(link, overwrite = true)
             ExecBits.force(link)
         }
@@ -775,13 +882,20 @@ object ComponentInstaller {
     /** @return true if symlink exists with desired target */
     private fun ensureRelativeSymlink(link: File, targetRel: String): Boolean {
         try {
+            // 禁止自指：lib → lib、usr/bin → usr/bin
+            val parent = link.parentFile?.toPath() ?: return false
+            val resolved = parent.resolve(targetRel).normalize()
+            if (resolved == link.toPath().toAbsolutePath().normalize()) {
+                android.util.Log.w("ComponentInstaller", "refuse self-symlink ${link.name} → $targetRel")
+                return false
+            }
             if (Files.isSymbolicLink(link.toPath())) {
                 val cur = runCatching { Files.readSymbolicLink(link.toPath()).toString() }.getOrDefault("")
                 if (cur == targetRel || cur.endsWith(targetRel)) return true
-                link.delete()
+                Files.deleteIfExists(link.toPath())
             } else if (link.exists()) {
-                // 錯誤地被建成空目錄／檔 → 清掉再連
-                if (link.isDirectory) link.deleteRecursively() else link.delete()
+                // 錯誤地被建成空目錄／檔 → 清掉再連（不跟隨）
+                deleteSelfNoFollow(link)
             }
             link.parentFile?.mkdirs()
             Files.createSymbolicLink(link.toPath(), Paths.get(targetRel))
@@ -912,14 +1026,21 @@ object ComponentInstaller {
                                 entry = tis.nextEntry
                                 continue
                             }
-                            // 路徑穿越防護
-                            val out = File(dest, name).canonicalFile
-                            if (!out.path.startsWith(dest.canonicalFile.path)) {
+                            // 路徑穿越防護：必須用「不解引用」的 lexical 路徑。
+                            // File.canonicalFile 會跟隨已存在的 bin→usr/bin，把 entry「bin」
+                            // 解析成 usr/bin，再建成 usr/bin→usr/bin 自指環（ELOOP）。
+                            val out = lexicalResolveUnder(dest, name)
+                            if (out == null) {
                                 entry = tis.nextEntry
                                 continue
                             }
                             when {
-                                entry.isDirectory -> out.mkdirs()
+                                entry.isDirectory -> {
+                                    // 若同名已是 symlink（usrmerge），不要 mkdir 跟進去改目標
+                                    if (!Files.isSymbolicLink(out.toPath())) {
+                                        out.mkdirs()
+                                    }
+                                }
                                 entry.isSymbolicLink -> {
                                     out.parentFile?.mkdirs()
                                     val target = entry.linkName ?: ""
@@ -927,13 +1048,22 @@ object ComponentInstaller {
                                         name == "usr/bin/sh" || name.endsWith("/ld-linux-aarch64.so.1")
                                     fun linkOrLog() {
                                         try {
-                                            if (out.exists() || Files.isSymbolicLink(out.toPath())) {
-                                                if (out.isDirectory && !Files.isSymbolicLink(out.toPath())) {
-                                                    out.deleteRecursively()
-                                                } else {
-                                                    out.delete()
+                                            // 拒絕自指環：例如誤把輸出解析到 usr/bin 後再建 → usr/bin
+                                            val parent = out.parentFile?.toPath() ?: dest.toPath()
+                                            val resolvedTarget = parent.resolve(target).normalize()
+                                            if (resolvedTarget == out.toPath().toAbsolutePath().normalize()) {
+                                                android.util.Log.w(
+                                                    "ComponentInstaller",
+                                                    "skip self-referential symlink $name → $target",
+                                                )
+                                                if (critical) {
+                                                    throw IllegalStateException(
+                                                        "符號連結自指：$name → $target",
+                                                    )
                                                 }
+                                                return
                                             }
+                                            deleteSelfNoFollow(out)
                                             Files.createSymbolicLink(out.toPath(), Paths.get(target))
                                         } catch (t: Throwable) {
                                             android.util.Log.w(
@@ -946,9 +1076,10 @@ object ComponentInstaller {
                                     if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
                                         linkOrLog()
                                     } else if (target.isNotBlank() && !target.startsWith("/")) {
-                                        // 允許相對含 .. 但解析後仍在 dest 內
+                                        // 允許相對含 .. 但 normalize 後仍在 dest 內（不跟隨）
+                                        val destPath = dest.toPath().toAbsolutePath().normalize()
                                         val resolved = out.parentFile!!.toPath().resolve(target).normalize()
-                                        if (resolved.startsWith(dest.canonicalFile.toPath())) {
+                                        if (resolved.startsWith(destPath)) {
                                             linkOrLog()
                                         }
                                     } else if (critical && target.isNotBlank()) {

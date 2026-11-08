@@ -9,6 +9,8 @@ import com.winlator.xenvironment.components.SysVSharedMemoryComponent;
 import com.winlator.xenvironment.components.XServerComponent;
 import com.winlator.xserver.ScreenInfo;
 import com.winlator.xserver.XServer;
+import com.winlator.xserver.Window;
+import com.winlator.renderer.GPUImage;
 import com.winlator.widget.XServerView;
 import com.wusper.x86.graphics.DesktopLayout;
 
@@ -50,6 +52,10 @@ public final class InProcessX {
         return xServer != null;
     }
 
+    public synchronized void start() {
+        start(null);
+    }
+
     public synchronized void start(PresentXFramePump.FrameSink sink) {
         if (started) return;
         imageFsRoot.mkdirs();
@@ -72,12 +78,25 @@ public final class InProcessX {
         xServerComponent = new XServerComponent(xServer, xCfg);
         xServerComponent.start();
 
+        // sink==null → pump 直呼 nativePresentAhb／Bgra（DRI3／零拷貝路徑）
         framePump = new PresentXFramePump(xServer, sink);
         xServerView.setOnFrameRequest(framePump::requestPulse);
+
+        // 對齊 PresentExtension.selectInput：root content 掛 GPUImage（AHB＋GPU_SAMPLED）
+        try {
+            Window root = xServer.windowManager.rootWindow;
+            if (root != null && root.getContent() != null) {
+                GPUImage.createOrObtain(xServer, root.getContent(), true, true);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "GPUImage promote failed: " + t.getMessage());
+        }
+
         framePump.start();
 
         started = true;
-        Log.i(TAG, "started X socket=" + xCfg.path + " shm=" + shmCfg.path);
+        Log.i(TAG, "started X socket=" + xCfg.path + " shm=" + shmCfg.path
+                + " dri3_ahb=1");
     }
 
     public synchronized void stop() {

@@ -13,7 +13,7 @@
         ↓
 [GPU 棧組件] Mesa Turnip ICD + DXVK（＋之後 VKD3D）
         ↓
-[顯示・下一步] 進程內 X／DRI3 Present → AHardwareBuffer → 同一 Session Surface
+[顯示・已接] 進程內 X／DRI3 AHB（GPU_SAMPLED）→ EGL／BGRA 單趟 → Session Surface
 [輸入・已接] Session 觸控／鍵鼠 → InProcessXInput → XServer.inject*（GpuStack；非 xdotool）
 ```
 
@@ -39,7 +39,7 @@
 
 | | GpuStack（預設） | SoftLegacy（`forceSoftLegacy=true`） |
 |--|------------------|-------------------------------------|
-| 顯示 | Present→Surface（待做） | Xvfb `-fbdir` XWD→blit ~15 FPS |
+| 顯示 | DRI3 AHB→EGL／BGRA 單趟→Surface | Xvfb `-fbdir` XWD→blit ~15 FPS |
 | GL/VK | Turnip＋DXVK | `LIBGL_ALWAYS_SOFTWARE=1` llvmpipe |
 | 輸入 | **InProcessX.inject***（觸控／鍵／滾輪） | xdotool cmd 佇列 |
 
@@ -87,9 +87,17 @@
 - `surfaceChanged` 更新 letterbox `blitRect`（Present 與 SoftLegacy 皆可）
 - `GpuStack.statusMessage` 標 `Input✓（inject*）`
 
+## 更新 0.1.11 — DRI3／AHB GPU_SAMPLED Present
+
+- `GPUImage` AHB usage：`GPU_SAMPLED_IMAGE|GPU_COLOR_OUTPUT`（＋可選 CPU）
+- `PresentEngine`：`presentAhb`（EGLImage→Surface）／`presentBgra`（單趟 swizzle，砍 Java BGRA→RGBA＋雙拷）
+- `PresentXFramePump`：優先 AHB→EGL，其次 BGRA native；Session 不再走 RGBA sink
+- Root Drawable 啟動時 promote `GPUImage`（對齊 Present selectInput）
+
 ### 還缺
 
-1. DRI3／Vortek 零拷貝（現 Drawable→RGBA→AHB CPU present）
+1. 完整 Vortek IPC Vulkan（客體 ICD→socket→獨立 bionic 渲染進程）
 2. 多指／右鍵／相對滑鼠／遊戲手把（WinHandler 級）
 3. GLX／gladiorenderer（OpenGL 客體）
 4. Turnip ICD thunk 實機驗證；Pulse／ALSA→AAudio
+5. AHB 已 CPU-lock 時 EGL 穩定性（失敗則 BGRA 單趟保底）

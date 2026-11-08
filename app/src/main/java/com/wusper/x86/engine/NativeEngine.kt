@@ -46,8 +46,16 @@ object NativeEngine {
     external fun nativePresentDestroy()
     @JvmStatic
     external fun nativePresentRgba(rgbaDirect: ByteBuffer, width: Int, height: Int, stride: Int): Int
+    /** Drawable／MIT-SHM BGRA → 單趟進 Surface（無 Java swizzle） */
+    @JvmStatic
+    external fun nativePresentBgra(bgraDirect: ByteBuffer, width: Int, height: Int, stride: Int): Int
+    /** Winlator GPUImage／DRI3 AHB → EGL GPU_SAMPLED Present */
+    @JvmStatic
+    external fun nativePresentAhb(ahbPtr: Long, width: Int, height: Int): Int
     @JvmStatic
     external fun nativePresentStub(frameIndex: Int): Int
     @JvmStatic
     external fun nativePresentReady(): Boolean
+    @JvmStatic
+    external fun nativePresentEglReady(): Boolean
 }

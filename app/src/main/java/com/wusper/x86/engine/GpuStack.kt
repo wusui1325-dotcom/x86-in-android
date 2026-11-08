@@ -23,6 +23,8 @@ object GpuStack {
      */
     const val PRESENTATION_READY: Boolean = true
     const val INPROCESS_X_READY: Boolean = true
+    /** AHB GPU_SAMPLED＋EGL／BGRA 單趟；完整 Vortek IPC 另檔 */
+    const val DRI3_ZEROCOPY_READY: Boolean = true
 
     const val TURNIP_VERSION = "26.2.6"
     const val DXVK_VERSION = "2.7.1"
@@ -68,7 +70,10 @@ object GpuStack {
         if (!PRESENTATION_READY) {
             g += "缺 Present→AHardwareBuffer→Session Surface"
         }
-        g += "缺 DRI3／Vortek 零拷貝（現為 Drawable→RGBA→AHB CPU present）"
+        if (!DRI3_ZEROCOPY_READY) {
+            g += "缺 DRI3／AHB GPU Present"
+        }
+        g += "缺完整 Vortek IPC Vulkan（客體 ICD→socket→bionic；現為同進程 DRI3／AHB）"
         g += "缺 Pulse／ALSA→AAudio 真輸出"
         g += "缺 GLX／gladiorenderer（OpenGL 客體暫 BadImplementation）"
         return g
@@ -84,6 +89,7 @@ object GpuStack {
         parts += if (PRESENTATION_READY) "Present✓" else "Present✗"
         parts += if (INPROCESS_X_READY) "X✓（Winlator）" else "X✗"
         parts += "Input✓（inject*）"
+        parts += if (DRI3_ZEROCOPY_READY) "DRI3✓" else "DRI3✗"
         return parts.joinToString(" · ")
     }
 

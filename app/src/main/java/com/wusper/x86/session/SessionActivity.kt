@@ -173,9 +173,8 @@ class SessionActivity : ComponentActivity() {
                         logText += "啟動 Winlator Java X → Present…\n"
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
-                        x.start { rgba, w, h, stride ->
-                            NativeEngine.nativePresentRgba(rgba, w, h, stride)
-                        }
+                        // null sink：PresentXFramePump → AHB／BGRA native（非 CPU RGBA 回呼）
+                        x.start()
                         inProcessX = x
                         val xs = x.xServer
                         if (xs != null) {

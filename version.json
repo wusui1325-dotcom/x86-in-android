@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.10",
-  "versionCode": 11,
-  "notes": "0.1.10: Session 觸控／鍵鼠→InProcessX.inject*（取代 GpuStack xdotool）；SoftLegacy 仍 xdotool"
+  "versionName": "0.1.11",
+  "versionCode": 12,
+  "notes": "0.1.11: DRI3／AHB GPU_SAMPLED Present（EGL／BGRA 單趟；砍 Java BGRA→RGBA）"
 }

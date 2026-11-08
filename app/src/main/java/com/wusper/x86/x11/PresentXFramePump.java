@@ -1,5 +1,7 @@
 package com.wusper.x86.x11;
 
+import com.winlator.renderer.GPUImage;
+import com.winlator.renderer.Texture;
 import com.winlator.xserver.Drawable;
 import com.winlator.xserver.Window;
 import com.winlator.xserver.XLock;
@@ -11,7 +13,12 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 從進程內 X 的 root／頂層 mapped window Drawable 取像素 → Present（AHB）。
+ * 進程內 X Drawable → Present。
+ * <p>
+ * 優先序（DRI3／零拷貝對齊）：
+ * 1. {@link GPUImage} AHB → {@code nativePresentAhb}（EGL GPU_SAMPLED，無 CPU BGRA→RGBA）
+ * 2. Drawable BGRA DirectBuffer → {@code nativePresentBgra}（單趟 native swizzle）
+ * 3. stub
  */
 public final class PresentXFramePump extends Thread {
     public interface FrameSink {
@@ -23,6 +30,8 @@ public final class PresentXFramePump extends Thread {
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final Object pulseLock = new Object();
     private boolean pulse;
+    private int ahbHits;
+    private int bgraHits;
 
     public PresentXFramePump(XServer xServer, FrameSink sink) {
         super("x86-x-present-pump");
@@ -48,20 +57,17 @@ public final class PresentXFramePump extends Thread {
     public void run() {
         int w = DesktopLayout.WIDTH;
         int h = DesktopLayout.HEIGHT;
-        // ensure present engine sized
         NativeEngine.nativePresentCreate(w, h);
         int frames = 0;
         while (running.get()) {
             try {
-                boolean doFrame;
                 synchronized (pulseLock) {
                     if (!pulse) {
                         pulseLock.wait(33);
                     }
-                    doFrame = true;
                     pulse = false;
                 }
-                if (!doFrame || !running.get()) continue;
+                if (!running.get()) continue;
                 presentOnce(frames++);
             } catch (InterruptedException e) {
                 break;
@@ -72,56 +78,81 @@ public final class PresentXFramePump extends Thread {
     }
 
     private void presentOnce(int frameIndex) {
-        ByteBuffer data = null;
+        Drawable drawable = null;
         int width = DesktopLayout.WIDTH;
         int height = DesktopLayout.HEIGHT;
+        long ahbPtr = 0;
+        ByteBuffer data = null;
+        int strideBytes = width * 4;
+
         try (XLock lock = xServer.lock(XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.DRAWABLE_MANAGER)) {
             Window root = xServer.windowManager.rootWindow;
-            Drawable drawable = null;
-            // prefer frontmost mapped child with content
             if (root != null) {
                 for (int i = root.getChildren().size() - 1; i >= 0; i--) {
                     Window child = root.getChildren().get(i);
                     if (child != null && child.attributes.isMapped() && child.getContent() != null) {
                         drawable = child.getContent();
-                        width = drawable.width;
-                        height = drawable.height;
                         break;
                     }
                 }
                 if (drawable == null) {
                     drawable = root.getContent();
-                    if (drawable != null) {
-                        width = drawable.width;
-                        height = drawable.height;
-                    }
                 }
             }
             if (drawable != null) {
+                width = drawable.width;
+                height = drawable.height;
+                Texture tex = drawable.getTexture();
+                if (tex instanceof GPUImage) {
+                    GPUImage gpu = (GPUImage) tex;
+                    ahbPtr = gpu.getHardwareBufferPtr();
+                    if (gpu.getStride() > 0) {
+                        strideBytes = gpu.getStride() * 4;
+                    }
+                }
                 data = drawable.getData();
             }
         }
+
+        if (ahbPtr != 0) {
+            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
+            if (rc == 0) {
+                ahbHits++;
+                return;
+            }
+            // fall through to BGRA if AHB present failed (e.g. still CPU-locked)
+        }
+
         if (data != null) {
             ByteBuffer dup = data.duplicate();
             dup.rewind();
-            // Drawable is typically BGRA little-endian; Present expects RGBA.
-            ByteBuffer rgba = ByteBuffer.allocateDirect(width * height * 4);
-            byte[] tmp = new byte[4];
-            for (int i = 0; i < width * height; i++) {
-                dup.get(tmp); // B,G,R,A
-                rgba.put(tmp[2]);
-                rgba.put(tmp[1]);
-                rgba.put(tmp[0]);
-                rgba.put(tmp[3]);
-            }
-            rgba.flip();
+            // Legacy FrameSink still gets RGBA for tests；產品路徑走 nativePresentBgra
             if (sink != null) {
+                ByteBuffer rgba = ByteBuffer.allocateDirect(width * height * 4);
+                byte[] tmp = new byte[4];
+                int px = width * height;
+                for (int i = 0; i < px; i++) {
+                    dup.get(tmp);
+                    rgba.put(tmp[2]);
+                    rgba.put(tmp[1]);
+                    rgba.put(tmp[0]);
+                    rgba.put(tmp[3]);
+                }
+                rgba.flip();
                 sink.onXFrame(rgba, width, height, width * 4);
             } else {
-                NativeEngine.nativePresentRgba(rgba, width, height, width * 4);
+                NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
+                bgraHits++;
             }
-        } else {
-            NativeEngine.nativePresentStub(frameIndex);
+            return;
         }
+
+        NativeEngine.nativePresentStub(frameIndex);
+    }
+
+    /** 診斷：AHB／BGRA 命中次數（log 用） */
+    public String pathStats() {
+        return "ahb=" + ahbHits + " bgra=" + bgraHits
+                + " egl=" + NativeEngine.nativePresentEglReady();
     }
 }

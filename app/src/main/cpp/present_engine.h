@@ -2,13 +2,18 @@
 #include <jni.h>
 #include <android/native_window.h>
 #include <android/hardware_buffer.h>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES2/gl2.h>
 #include <cstdint>
 #include <mutex>
 
 /**
- * GpuStack Present v0（對齊 Termux-X11／Winlator 思路的最短自研版）：
- * 正規緩衝 = AHardwareBuffer；輸出 = ANativeWindow（Session Surface）。
- * 幀來源：RGBA 記憶體／present.shm／（過渡）XWD feeder。
+ * GpuStack Present（DRI3／Vortek 對齊最短版）：
+ * - 正規緩衝 = AHardwareBuffer（含 GPU_SAMPLED）
+ * - 優先：外部 AHB（Winlator GPUImage／DRI3）→ EGLImage → Surface（無 CPU BGRA→RGBA）
+ * - 其次：BGRA DirectByteBuffer → 單趟 swizzle 進 ANativeWindow
+ * - 保底：RGBA／stub
  */
 class PresentEngine {
 public:
@@ -19,21 +24,28 @@ public:
     void detachSurface();
     void destroy();
 
-    /** 將 RGBA8888 寫入 AHB 並 post 到 Surface。size >= stride*height */
     int presentRgba(const uint8_t* rgba, int width, int height, int strideBytes);
-
-    /** 產生可測 stub 幀（色條＋序號）並 present */
+    /** BGRA8888（Drawable／GPUImage virtualData）→ 單趟進 Surface */
+    int presentBgra(const uint8_t* bgra, int width, int height, int strideBytes);
+    /** 外部 AHB（不釋放呼叫端；本函式 acquire／release）→ EGL 或 CPU 讀出 */
+    int presentAhb(AHardwareBuffer* external, int width, int height);
     int presentStub(int frameIndex);
 
     int width() const { return width_; }
     int height() const { return height_; }
-    bool ready() const { return ahb_ != nullptr; }
+    bool ready() const { return ahb_ != nullptr || window_ != nullptr; }
     bool hasWindow() const { return window_ != nullptr; }
+    bool eglReady() const { return egl_ok_; }
 
 private:
     PresentEngine() = default;
     int ensureAhb(int width, int height);
     int postAhbToWindow();
+    int ensureEgl();
+    void destroyEgl();
+    int presentAhbGpu(AHardwareBuffer* ahb, int width, int height);
+    int presentAhbCpu(AHardwareBuffer* ahb, int width, int height);
+    int blitBgraToWindow(const uint8_t* bgra, int width, int height, int strideBytes);
 
     std::mutex mu_;
     AHardwareBuffer* ahb_ = nullptr;
@@ -41,6 +53,16 @@ private:
     int width_ = 0;
     int height_ = 0;
     int stride_ = 0;
+
+    EGLDisplay egl_dpy_ = EGL_NO_DISPLAY;
+    EGLContext egl_ctx_ = EGL_NO_CONTEXT;
+    EGLSurface egl_surf_ = EGL_NO_SURFACE;
+    EGLConfig egl_cfg_ = nullptr;
+    GLuint prog_ = 0;
+    GLuint vbo_ = 0;
+    GLuint tex_ = 0;
+    bool egl_ok_ = false;
+    bool egl_tried_ = false;
 };
 
 extern "C" {
@@ -54,8 +76,14 @@ JNIEXPORT void JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentDest
         JNIEnv*, jclass);
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentRgba(
         JNIEnv*, jclass, jobject rgbaDirect, jint width, jint height, jint stride);
+JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentBgra(
+        JNIEnv*, jclass, jobject bgraDirect, jint width, jint height, jint stride);
+JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentAhb(
+        JNIEnv*, jclass, jlong ahbPtr, jint width, jint height);
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentStub(
         JNIEnv*, jclass, jint frameIndex);
 JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentReady(
+        JNIEnv*, jclass);
+JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentEglReady(
         JNIEnv*, jclass);
 }

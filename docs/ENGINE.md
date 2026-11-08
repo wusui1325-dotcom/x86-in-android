@@ -15,7 +15,7 @@
 | X 協定 | **進程內** `com.winlator.xserver`（vendored LGPL-2.1 from winlator-app）＋`libwinlator.so` |
 | Socket | `files/engine/imagefs/tmp/.X11-unix/X0` bind 進 PRoot `/tmp/.X11-unix` |
 | SysV SHM | 同 imagefs `tmp/.sysvshm`＋`ANDROID_SYSVSHM_SERVER` |
-| Present | `PresentXFramePump`：Drawable BGRA→RGBA→`nativePresentRgba`→AHB→Surface |
+| Present | `PresentXFramePump`：GPUImage AHB→EGL／BGRA 單趟→Surface（砍 Java swizzle） |
 | Xvfb | **GpuStack 不再使用**；僅 SoftLegacy |
 
 ## 手動驗收

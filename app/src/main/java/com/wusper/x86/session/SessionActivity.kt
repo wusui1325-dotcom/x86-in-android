@@ -114,6 +114,7 @@ class SessionActivity : ComponentActivity() {
                 val logScroll = rememberScrollState()
                 val scope = rememberCoroutineScope()
                 var logHighlightEpoch by remember { mutableIntStateOf(0) }
+                var logExpanded by remember { mutableStateOf(false) }
                 fun annotatedLog(src: String) = buildAnnotatedString {
                     if (src.isEmpty()) { append(""); return@buildAnnotatedString }
                     val lower = src.lowercase()
@@ -799,6 +800,14 @@ class SessionActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxSize(),
                             )
+                            if (status.startsWith("執行中") && !showErrorCard) {
+                                Text(
+                                    text = getString(com.wusper.x86.R.string.session_waiting_surface),
+                                    color = Color(0x99FFFFFF),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.align(Alignment.Center),
+                                )
+                            }
                             if (showErrorCard) {
                                 Card(
                                     modifier = Modifier
@@ -900,6 +909,9 @@ class SessionActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        // 執行中預設收合日誌，把版面留給 Surface；錯誤／安裝時自動展開
+                        val running = status.startsWith("執行中")
+                        val showLogPanel = logExpanded || showErrorCard || installing || !running
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -907,29 +919,53 @@ class SessionActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             OutlinedButton(
+                                onClick = { logExpanded = !logExpanded },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(
+                                    getString(
+                                        if (showLogPanel) com.wusper.x86.R.string.btn_toggle_log_hide
+                                        else com.wusper.x86.R.string.btn_toggle_log_show,
+                                    ),
+                                )
+                            }
+                            OutlinedButton(
                                 onClick = { copyFullLog() },
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Text(getString(com.wusper.x86.R.string.btn_copy_log))
                             }
                             OutlinedButton(
-                                onClick = { jumpToKeyLog() },
+                                onClick = {
+                                    logExpanded = true
+                                    jumpToKeyLog()
+                                },
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Text(getString(com.wusper.x86.R.string.btn_jump_key))
                             }
                         }
-                        SelectionContainer {
+                        if (running && !showLogPanel) {
                             Text(
-                                text = annotatedLog(logText + if (logHighlightEpoch >= 0) "" else ""),
-                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                text = getString(com.wusper.x86.R.string.session_waiting_surface),
+                                style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(0.7f)
-                                    .padding(horizontal = 16.dp, vertical = 4.dp)
-                                    .verticalScroll(logScroll),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                             )
+                        }
+                        if (showLogPanel) {
+                            SelectionContainer {
+                                Text(
+                                    text = annotatedLog(logText + if (logHighlightEpoch >= 0) "" else ""),
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .weight(if (running && !showErrorCard) 0.35f else 0.7f)
+                                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                                        .verticalScroll(logScroll),
+                                )
+                            }
                         }
                     }
                 }
@@ -956,9 +992,14 @@ class SessionActivity : ComponentActivity() {
         private val KEY_LOG_PATTERNS = listOf(
             "FATAL:",
             "WINE_VERSION_SMOKE",
+            "WINE_PE_SMOKE",
+            "WINE_PRERESERVE",
             "TIMEOUT",
             "still running",
             "prereserve",
+            "LdrInitializeThunk",
+            "KiUserExceptionDispatcher",
+            "Emit Signal 11",
             "c0000018",
             "shared user data",
             "granularity_mask",
@@ -966,12 +1007,14 @@ class SessionActivity : ComponentActivity() {
             "Illegal instruction",
             "SIGILL",
             "SIGABRT",
+            "SIGSEGV",
             "BOX64_SELFTEST",
             "BOX64_FLAGS",
             "BOX64_X64LIB_STAMP",
             "BOX64_WINE64K_STAMP",
             "NTDLL=",
             "WINE_EXIT=",
+            "WINE_START",
             "WINELOADER=",
             "WINEPRELOADRESERVE",
             "could not load ntdll",

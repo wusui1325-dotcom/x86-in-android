@@ -230,10 +230,10 @@ else
   log "WARN: x64lib stamp missing (want bookworm libgcc). Reinstall runtime recommended."
 fi
 
-# 0.1.34: Box64 must have wine64k stamp (DOS prereserve size 0x10000, Wine11 granularity)
+# 0.1.37: Box64 wine64k-align stamp (DOS 0x10000:0x10000 + low 0x100000:0x30000000)
 BOX64_WINE64K_STAMP=/usr/local/bin/.box64-wine64k-stamp
-if [ ! -f "$BOX64_WINE64K_STAMP" ]; then
-  log "FATAL: box64 wine64k stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
+if [ ! -f "$BOX64_WINE64K_STAMP" ] || ! grep -q 'wine64k-align-0x100000' "$BOX64_WINE64K_STAMP" 2>/dev/null; then
+  log "FATAL: box64 wine64k-align-0x100000 stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
   exit 127
 fi
 log "BOX64_WINE64K_STAMP=$(cat "$BOX64_WINE64K_STAMP" 2>/dev/null)"
@@ -244,8 +244,11 @@ export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 export WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine
 export WINE_REAL=/opt/wine/lib/wine/x86_64-unix/wine
 export WINELOADERNOEXEC=1
-# Wine11 + Box64：留空讓 Box64 用內建（已 patch 成 64k 對齊）；勿塞會破壞對齊的 reserve
-export WINEPRELOADRESERVE="${WINEPRELOADRESERVE:-}"
+# Wine11 + Box64：unset 讓 Box64 用內建表（0.1.37：DOS 0x10000:0x10000 + low 0x100000:0x30000000 + hi）
+# 空字串 WINEPRELOADRESERVE="" 會走 get_prereserve 特例；勿 export 空值
+if [ -z "${WINEPRELOADRESERVE+x}" ] || [ -z "${WINEPRELOADRESERVE}" ]; then
+  unset WINEPRELOADRESERVE || true
+fi
 # Winlator 同款：關閉 MMAP32，讓 39-bit VA 下 prereserve／mmap 行為較穩
 export BOX64_MMAP32=0
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
@@ -254,7 +257,7 @@ log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
 log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC WINE_REAL=$WINE_REAL"
-log "WINEPRELOADRESERVE='$WINEPRELOADRESERVE' BOX64_MMAP32=$BOX64_MMAP32"
+log "WINEPRELOADRESERVE='${WINEPRELOADRESERVE-<unset>}' BOX64_MMAP32=$BOX64_MMAP32"
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
 # 自證：unix wine 必須存在
@@ -287,54 +290,103 @@ export BOX64_DYNAREC_ALIGNED_ATOMICS="${BOX64_DYNAREC_ALIGNED_ATOMICS:-1}"
 export BOX64_CPUTYPE="${BOX64_CPUTYPE:-0}"
 export BOX64_NORCFILES=1
 export BOX64_X11GLX=1
-export BOX64_LOG="${BOX64_LOG:-1}"
-export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-1}"
-export BOX64_SHOWBT="${BOX64_SHOWBT:-1}"
-export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-1}"
-export BOX64_NOBANNER=0
+export BOX64_LOG="${BOX64_LOG:-0}"
+export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-0}"
+export BOX64_SHOWBT="${BOX64_SHOWBT:-0}"
+export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
+export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
-# 冒煙：wine --version（隔離 ntdll／libgcc／WINELOADER）
-# 0.1.36: 即時 tee + timeout（防 DYNAREC=0 活掛）；獨立 WINEPREFIX 避免卡住真實 prefix
-SMOKE_TIMEOUT="${WINE_VERSION_SMOKE_TIMEOUT:-90}"
+# 冒煙 0.1.37：
+# 1) wine.inf 版號（不觸發 wineboot；Wine11 unix stub 無 --version 短路）
+# 2) 短 PE 探測（可選）：wine --version／wineboot；對齊 prereserve；偵測 LdrInitializeThunk SIGSEGV 迴圈
+SMOKE_TIMEOUT="${WINE_VERSION_SMOKE_TIMEOUT:-45}"
 SMOKE_PREFIX="/tmp/wine-smoke-$$"
 mkdir -p "$SMOKE_PREFIX"
 : > /mnt/data/wine-version.out
-log "WINE_VERSION_SMOKE begin cmd=$BOX64 /opt/wine/lib/wine/x86_64-unix/wine --version"
-log "WINE_VERSION_SMOKE timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (live tee)"
+
+WINE_INF_VER=""
+if [ -f /opt/wine/share/wine/wine.inf ]; then
+  WINE_INF_VER=$(grep -m1 -E '^;; Version: Wine ' /opt/wine/share/wine/wine.inf 2>/dev/null | sed 's/^;; Version: //' | tr -d '\r')
+fi
+if [ -z "$WINE_INF_VER" ]; then
+  WINE_INF_VER=$(strings /opt/wine/lib/wine/x86_64-windows/ntdll.dll 2>/dev/null | grep -m1 -E '^Wine [0-9]|^wine-[0-9]' || true)
+fi
+log "WINE_VERSION_SMOKE wine-inf='${WINE_INF_VER:-missing}'"
+
+SMOKE_OK=0
+if echo "$WINE_INF_VER" | grep -qE 'Wine [0-9]|wine-[0-9]'; then
+  SMOKE_OK=1
+  log "WINE_VERSION_SMOKE ok (from wine.inf / ntdll strings: $WINE_INF_VER)"
+else
+  log "WARN: wine.inf version probe failed — will require PE --version output"
+fi
+
+# PE 短探測：驗證 prereserve + 能否走過 loader（空 prefix 仍可能 wineboot）
+log "WINE_PE_SMOKE begin timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (expect prereserve 0x100000)"
 SMOKE_WINEDEBUG_SAVE="${WINEDEBUG-}"
 SMOKE_PREFIX_SAVE="${WINEPREFIX-}"
+SMOKE_LOG_SAVE="${BOX64_LOG-}"
 export WINEDEBUG="${WINEDEBUG:--all}"
 export WINEPREFIX="$SMOKE_PREFIX"
+# PE 探測開短暫 LOG 以便抓 LdrInitializeThunk／prereserve
+export BOX64_LOG="${BOX64_PE_SMOKE_LOG:-1}"
+export BOX64_SHOWSEGV="${BOX64_PE_SMOKE_SHOWSEGV:-0}"
 set +e
-# 背景跑 + 輪詢輸出／heartbeat；到時 KILL（plain sh 無 PIPESTATUS／可靠 timeout）
 "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >>/mnt/data/wine-version.out 2>&1 &
 SMOKE_PID=$!
 SMOKE_BYTES=0
 SMOKE_ELAPSED=0
 WV=""
+PE_FATAL=""
 while kill -0 "$SMOKE_PID" 2>/dev/null; do
   SZ=$(wc -c < /mnt/data/wine-version.out 2>/dev/null | tr -d ' \n' || echo 0)
   SZ=${SZ:-0}
   if [ "$SZ" -gt "$SMOKE_BYTES" ] 2>/dev/null; then
-    # 把新增位元組即時打到 session／gpu-stack
     dd if=/mnt/data/wine-version.out bs=1 skip="$SMOKE_BYTES" count=$((SZ-SMOKE_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log
     SMOKE_BYTES=$SZ
   fi
+  # 早退：已印出版本字串
+  if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then
+    # 再等最多 3s 讓行程自己結束
+    for _ in 1 2 3; do
+      kill -0 "$SMOKE_PID" 2>/dev/null || break
+      sleep 1
+      SMOKE_ELAPSED=$((SMOKE_ELAPSED+1))
+    done
+    if kill -0 "$SMOKE_PID" 2>/dev/null; then
+      kill -TERM "$SMOKE_PID" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$SMOKE_PID" 2>/dev/null || true
+    fi
+    WV=0
+    break
+  fi
+  # 早退：LdrInitializeThunk / KiUserExceptionDispatcher 迴圈
+  SEGVC=$(grep -c 'Emit Signal 11' /mnt/data/wine-version.out 2>/dev/null || echo 0)
+  SEGVC=$(echo "$SEGVC" | tr -d ' \n')
+  if [ "${SEGVC:-0}" -ge 3 ] 2>/dev/null; then
+    PE_FATAL="LdrInitializeThunk/KiUserExceptionDispatcher SIGSEGV loop (Emit Signal 11 x${SEGVC})"
+    log "WINE_PE_SMOKE FATAL: $PE_FATAL"
+    kill -KILL "$SMOKE_PID" 2>/dev/null || true
+    "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+    pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
+    WV=139
+    break
+  fi
   SMOKE_ELAPSED=$((SMOKE_ELAPSED+1))
   if [ "$SMOKE_ELAPSED" -ge "$SMOKE_TIMEOUT" ]; then
-    log "WINE_VERSION_SMOKE TIMEOUT after ${SMOKE_TIMEOUT}s — killing smoke pid=$SMOKE_PID (likely hang under Box64/Wine)"
+    log "WINE_PE_SMOKE TIMEOUT after ${SMOKE_TIMEOUT}s — killing pid=$SMOKE_PID"
     kill -TERM "$SMOKE_PID" 2>/dev/null || true
     sleep 1
     kill -KILL "$SMOKE_PID" 2>/dev/null || true
-    # 清掉 smoke 用的 wineserver（同 WINEPREFIX）
     "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
     pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
     WV=124
     break
   fi
   if [ $((SMOKE_ELAPSED % 10)) -eq 0 ]; then
-    log "WINE_VERSION_SMOKE still running t=${SMOKE_ELAPSED}s out_bytes=${SMOKE_BYTES} pid=$SMOKE_PID"
+    log "WINE_PE_SMOKE still running t=${SMOKE_ELAPSED}s out_bytes=${SMOKE_BYTES} pid=$SMOKE_PID"
   fi
   sleep 1
 done
@@ -342,55 +394,85 @@ if [ -z "$WV" ]; then
   wait "$SMOKE_PID"
   WV=$?
 fi
-# 衝刷殘餘輸出
 SZ=$(wc -c < /mnt/data/wine-version.out 2>/dev/null | tr -d ' \n' || echo 0)
 SZ=${SZ:-0}
 if [ "$SZ" -gt "$SMOKE_BYTES" ] 2>/dev/null; then
   dd if=/mnt/data/wine-version.out bs=1 skip="$SMOKE_BYTES" 2>/dev/null | tee -a /mnt/data/gpu-stack.log
 fi
-# 先在 smoke prefix 上殺 wineserver，再還原真實 WINEPREFIX
 "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
 wait "$SMOKE_PID" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 if [ -n "$SMOKE_WINEDEBUG_SAVE" ]; then export WINEDEBUG="$SMOKE_WINEDEBUG_SAVE"; else export WINEDEBUG="-all"; fi
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
+if [ -n "$SMOKE_LOG_SAVE" ]; then export BOX64_LOG="$SMOKE_LOG_SAVE"; else export BOX64_LOG=0; fi
+export BOX64_SHOWSEGV=0
+export BOX64_SHOWBT=0
 set -e
-log "WINE_VERSION_SMOKE exit=$WV"
-log "--- WINE_VERSION_SMOKE output begin ---"
-head -80 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
-log "--- WINE_VERSION_SMOKE output end ---"
-# 若印出 wine-x.y 字樣，視為冒煙通過（有些環境收尾非 0）
-SMOKE_OK=0
-if [ "$WV" = "0" ]; then SMOKE_OK=1; fi
-if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then SMOKE_OK=1; fi
+
+log "WINE_PE_SMOKE exit=$WV"
+log "--- WINE_PE_SMOKE output begin (head) ---"
+head -60 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+log "--- WINE_PE_SMOKE output end ---"
+
+# prereserve 期待：三行（DOS + low 0x100000 + hi）
+if grep -q 'WINE prereserve of 0x100000:0x30000000 done' /mnt/data/wine-version.out 2>/dev/null; then
+  log "WINE_PRERESERVE low=0x100000 OK"
+else
+  log "WARN: missing WINE prereserve of 0x100000:0x30000000 done — check stamp wine64k-align-0x100000 / reinstall box64"
+  if grep -q 'prereserve of 0x110000' /mnt/data/wine-version.out 2>/dev/null; then
+    log "HINT: still using old 0x110000 table — cover-install 0.1.37+ and reinstall runtime box64"
+  fi
+  if grep -q 'prereserve of .* is not free' /mnt/data/wine-version.out 2>/dev/null; then
+    log "HINT: low prereserve not free under 39-bit VA — ASLR collision"
+  fi
+fi
+if grep -q 'WINE prereserve of 0x10000:0x10000 done' /mnt/data/wine-version.out 2>/dev/null; then
+  log "WINE_PRERESERVE dos=0x10000:0x10000 OK"
+fi
+
+PE_OK=0
+if [ "$WV" = "0" ]; then PE_OK=1; fi
+if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then PE_OK=1; SMOKE_OK=1; fi
+
+if [ -n "$PE_FATAL" ] || [ "$WV" = "139" ]; then
+  log "FATAL: Wine PE loader SIGSEGV under Box64 ($PE_FATAL)."
+  log "HINT: need Box64 wine64k-align-0x100000 (low reserve 0x100000 not 0x110000). Reinstall runtime."
+  log "HINT: crash site LdrInitializeThunk → KiUserExceptionDispatcher loop = bad prereserve / Wine11 granularity."
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 139
+fi
 if [ "$WV" = "132" ]; then
-  log "FATAL: wine --version SIGILL (exit 132). Emulated ntdll／libgcc／loader／dynarec."
+  log "FATAL: wine PE smoke SIGILL (exit 132). Emulated ntdll／libgcc／loader／dynarec."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 132
 fi
+if [ "$WV" = "134" ]; then
+  log "FATAL: wine PE smoke SIGABRT (exit 134). Often granularity_mask — need wine64k-align stamp."
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 134
+fi
+
+# 閘門：必須有版號（inf 或 PE）；PE hang／SIGSEGV 已在上面 FATAL
 if [ "$WV" = "124" ]; then
-  log "FATAL: wine --version smoke HANG (timeout ${SMOKE_TIMEOUT}s, exit 124). Box64/Wine did not finish."
-  log "HINT: expect WINE prereserve of 0x10000:0x10000; if missing, reinstall Box64-wine64k. If DYNAREC=0, upgrade to 0.1.36+ (dynarecSafe)."
-  log "HINT: partial out_bytes=$(wc -c < /mnt/data/wine-version.out 2>/dev/null || echo 0)"
+  log "FATAL: WINE_PE_SMOKE HANG (timeout ${SMOKE_TIMEOUT}s, exit 124)."
+  log "HINT: expect prereserve 0x10000:0x10000 AND 0x100000:0x30000000 AND 0x7f000000:0x3000000"
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 124
 fi
 if [ "$SMOKE_OK" = "1" ]; then
-  log "WINE_VERSION_SMOKE ok (exit=$WV, version line present or exit 0)"
+  if [ "$PE_OK" = "1" ]; then
+    log "WINE_VERSION_SMOKE ok (inf=$WINE_INF_VER pe_exit=$WV)"
+  else
+    # 非 0／無 version 行，但非 hang／SEGV：警告後仍嘗試真實啟動（prefix 可能已半初始化）
+    log "WARN: WINE_PE_SMOKE exit=$WV (no version line) — continuing with wine.inf; watch WINE_START"
+    log "WINE_VERSION_SMOKE ok (inf-only=$WINE_INF_VER pe_exit=$WV)"
+  fi
 else
-  log "FATAL: wine --version smoke failed (exit=$WV, no version string)."
-  if grep -q 'c0000018\|shared user data' /mnt/data/wine-version.out 2>/dev/null; then
-    log "HINT: c0000018 shared user data — need wine ELF with wine_main_preload_info (use x86_64-unix/wine)."
-  fi
-  if grep -q 'granularity_mask\|set_mem_area_state' /mnt/data/wine-version.out 2>/dev/null; then
-    log "HINT: Wine11 set_mem_area_state granularity assert — need Box64 wine64k (prereserve 0x10000:0x10000). Reinstall runtime."
-  fi
-  if [ "$WV" = "134" ]; then
-    log "HINT: exit 134=SIGABRT (often Wine ntdll assert). Check BOX64_WINE64K_STAMP / prereserve sizes."
-  fi
-  log "HINT: WINELOADER=$WINELOADER WINE_REAL=$WINE_REAL DYNAREC=$BOX64_DYNAREC; not Android storage permission."
+  log "FATAL: wine version unknown (no wine.inf) and PE smoke failed (exit=$WV)."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 1

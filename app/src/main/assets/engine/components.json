@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.35-box64-wine64k-xz",
+  "runtimeId": "wine-gpustack-v0.1.37-box64-wine64k-align1m",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -23,12 +23,12 @@
       "id": "box64-glibc",
       "filename": "Box64-0.4.4-glibc-wine64k.wcp",
       "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/Box64-0.4.4-glibc-wine64k.wcp",
-      "sha256": "2e77cd8c273181bb8bb608d0896833e9d5c5bacfc4f90f00ac8853dd95951877",
+      "sha256": "a045e048c61ddc49312a01eb57d638b1037c0d38c60dcae168c0987e3a62b0ff",
       "extract": "rootfs/usr/local/bin",
       "pickFiles": [
         "box64"
       ],
-      "notes": "glibc Box64 0.4.4 wine64k (DOS 0x10000:0x10000) as xz tar.wcp + stamp; 0.1.35 fixed missing xz layer"
+      "notes": "glibc Box64 0.4.4 wine64k: DOS 0x10000:0x10000 + low 0x100000:0x30000000 (Wine11-aligned) + hi 0x7f000000; stamp wine64k-align-0x100000"
     },
     {
       "id": "box64-x64lib",
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.35: wine64k.wcp must be xz-compressed ustar (0.1.34 uploaded raw tar → XZFormatException); sha256 updated"
+  "notes": "0.1.37: wine64k low-reserve 0x110000→0x100000 (Wine11 addr granularity); smoke via wine.inf; quiet BOX64_LOG"
 }

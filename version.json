@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.36",
-  "versionCode": 37,
-  "notes": "0.1.36: wine --version hang under DYNAREC=0 — switch to dynarecSafe (DYNAREC=1); smoke 90s timeout + live tee + disposable WINEPREFIX; exit 124 on hang"
+  "versionName": "0.1.37",
+  "versionCode": 38,
+  "notes": "0.1.37: wineboot LdrInitializeThunk SIGSEGV — Box64 low prereserve 0x110000→0x100000 (Wine11 align); smoke via wine.inf + WINE_PE_SMOKE (SEGV loop→139); quiet BOX64_LOG; Session collapse log while running"
 }

@@ -449,7 +449,7 @@ object ComponentInstaller {
             }
             // 舊 glibc box64（無 wine64k stamp）刪 stamp 旁的舊二進位標記，強制走 needExtras 重抽
             if (hasBoxElf && !hasBox) {
-                android.util.Log.w("ComponentInstaller", "box64 missing wine64k stamp → will reinstall Box64-0.4.4-glibc-wine64k")
+                android.util.Log.w("ComponentInstaller", "box64 missing wine64k-align-0x100000 stamp → will reinstall Box64-0.4.4-glibc-wine64k")
             }
             val hasElectron = hasElectronOverlay(rootfs)
             val hasAddons = hasWineAddons(rootfs)
@@ -1007,10 +1007,12 @@ object ComponentInstaller {
     fun hasGlibcBox64Elf(rootfs: File): Boolean =
         isGlibcBox64(File(rootfs, "usr/local/bin/box64"))
 
-    /** glibc Box64 + Wine11 64k-aligned prereserve stamp（0.1.34+）。缺 stamp＝舊 0x8000 → granularity assert。 */
+    /** glibc Box64 + Wine11-aligned prereserve stamp（0.1.37+：low 0x100000）。舊 stamp 無 align-0x100000 → 強制重抽。 */
     fun hasGlibcBox64(rootfs: File): Boolean {
         val stamp = File(rootfs, "usr/local/bin/.box64-wine64k-stamp")
-        return hasGlibcBox64Elf(rootfs) && stamp.isFile && stamp.length() > 0L
+        if (!hasGlibcBox64Elf(rootfs) || !stamp.isFile) return false
+        val body = runCatching { stamp.readText() }.getOrDefault("")
+        return body.contains("wine64k-align-0x100000")
     }
 
     private fun extractBox64(archive: File, binDir: File) {
@@ -1052,7 +1054,7 @@ object ComponentInstaller {
         if (stampSrc != null) {
             stampSrc.copyTo(stampDest, overwrite = true)
         } else {
-            stampDest.writeText("wine64k-granularity-0x10000-2026-11-09\n")
+            stampDest.writeText("wine64k-align-0x100000-2026-11-09\n")
         }
         tmp.deleteRecursively()
         android.util.Log.i(

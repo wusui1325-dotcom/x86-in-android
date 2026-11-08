@@ -87,7 +87,8 @@ object ExitStatusMessages {
         126 -> "客體命令無法執行"
         1 -> "客體以錯誤結束"
         132 -> "客體非法指令（SIGILL）"
-        124 -> "冒煙逾時（wine --version 活掛）"
+        124 -> "冒煙逾時（Wine PE 活掛）"
+        139 -> "Wine PE SIGSEGV（LdrInitializeThunk）"
         134 -> "客體中止（SIGABRT／Wine assert）"
         else -> "客體異常結束"
     }
@@ -112,13 +113,17 @@ object ExitStatusMessages {
                 "SELFTEST=132 → 換 Box64；SMOKE=132 → Wine／x64lib；僅 explorer 炸 → GPU／PE。"
             )
         124 -> (
-            "客體退出碼 124＝WINE_VERSION_SMOKE 逾時。0.1.35 在 DYNAREC=0（interpreter）下 wine --version 會活掛（pid 仍在、無 exit）。" +
-                "0.1.36+ 改 dynarecSafe（DYNAREC=1）並加 90s timeout＋即時 tee；請蓋裝後直接重開（腳本覆寫，通常不必重裝運行時）。"
+            "客體退出碼 124＝WINE_PE_SMOKE 逾時。0.1.37+ 版號改讀 wine.inf；PE 探測仍逾時＝loader／wineboot 卡住。" +
+                "請確認 BOX64_WINE64K_STAMP 含 wine64k-align-0x100000，日誌有 prereserve 0x100000:0x30000000。"
+            )
+        139 -> (
+            "客體退出碼 139＝Wine PE SIGSEGV。0.1.36 常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
+                "Box64 低位預留 0x110000 非 Wine11 64KiB 對齊或 mmap 失敗被丟棄。0.1.37+ 改 0x100000:0x30000000；" +
+                "請蓋裝後讓運行時重抽 box64（stamp wine64k-align-0x100000）。"
             )
         134 -> (
-            "客體退出碼 134＝SIGABRT。0.1.33 常見 Wine11 set_mem_area_state granularity_mask assert：" +
-                "Box64 舊 DOS prereserve 0x10000:0x8000 非 64KB 對齊。0.1.34+ 換 Box64-wine64k（0x10000:0x10000）；" +
-                "請更新 App 後讓運行時自動重抽 box64（看 BOX64_WINE64K_STAMP）。不是存取權限問題。"
+            "客體退出碼 134＝SIGABRT。常見 Wine11 set_mem_area_state granularity_mask assert。" +
+                "0.1.37+ 需 Box64 wine64k-align（DOS 0x10000:0x10000 + low 0x100000）；看 BOX64_WINE64K_STAMP。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

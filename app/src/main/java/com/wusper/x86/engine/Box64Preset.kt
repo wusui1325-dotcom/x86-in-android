@@ -1,13 +1,12 @@
 package com.wusper.x86.engine
 
 /**
- * Wine／PE 預設走 **dynarecSafe（DYNAREC=1 + NOHOSTEXT）**。
- * 0.1.29–35 曾用 interpreter 擋 SIGILL；0.1.36 起 wine64k 過後 interpreter 會活掛 wine --version，
- * 改回 dynarec（bookworm x64lib + NOHOSTEXT）。
+ * Wine／PE 預設走 **dynarecSafe（DYNAREC=1 + NOHOSTEXT）**；日誌預設安靜（BOX64_LOG=0）。
+ * 0.1.37：配合 wine64k-align-0x100000；除錯時再開 BOX64_LOG=1。
  */
 object Box64Preset {
     /**
-     * Wine／PE 預設（0.1.36+）：DYNAREC=1 + NOHOSTEXT + ISA 廣告關 + Winlator COMPAT 向收斂。
+     * Wine／PE 預設（0.1.37+）：DYNAREC=1 + NOHOSTEXT + 安靜 log + Winlator COMPAT。
      */
     val performance: Array<String> = arrayOf(
         "BOX64_DYNAREC=1",
@@ -31,11 +30,11 @@ object Box64Preset {
         "BOX64_MMAP32=0",
         "BOX64_NORCFILES=1",
         "BOX64_X11GLX=1",
-        "BOX64_LOG=1",
-        "BOX64_SHOWSEGV=1",
-        "BOX64_SHOWBT=1",
-        "BOX64_ROLLING_LOG=1",
-        "BOX64_NOBANNER=0",
+        "BOX64_LOG=0",
+        "BOX64_SHOWSEGV=0",
+        "BOX64_SHOWBT=0",
+        "BOX64_ROLLING_LOG=0",
+        "BOX64_NOBANNER=1",
     )
 
     val stability: Array<String> = performance
@@ -62,10 +61,10 @@ object Box64Preset {
         "BOX64_MMAP32=0",
         "BOX64_NORCFILES=1",
         "BOX64_X11GLX=1",
-        "BOX64_LOG=1",
-        "BOX64_SHOWSEGV=1",
-        "BOX64_SHOWBT=1",
-        "BOX64_ROLLING_LOG=1",
-        "BOX64_NOBANNER=0",
+        "BOX64_LOG=0",
+        "BOX64_SHOWSEGV=0",
+        "BOX64_SHOWBT=0",
+        "BOX64_ROLLING_LOG=0",
+        "BOX64_NOBANNER=1",
     )
 }

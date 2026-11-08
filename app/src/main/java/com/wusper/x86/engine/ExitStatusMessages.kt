@@ -101,15 +101,14 @@ object ExitStatusMessages {
                 "請點「重裝運行時」。"
             )
         1 -> (
-            "客體行程以退出碼 1 結束。請查看下方日誌。" +
-                "若出現 could not load ntdll.so／Cannot dlopen、權限被拒、或缺動態庫，" +
-                "請優先點「重裝運行時」（不要只改系統儲存權限）。"
+            "客體行程以退出碼 1 結束（不是 Android「存取所有檔案」權限問題）。" +
+                "請先看日誌 WINE_VERSION_SMOKE：若 wine --version 失敗，多半是 WINELOADER／ntdll／x64lib。" +
+                "0.1.31+ 已把 WINELOADER 指回 x86_64 ELF 並補 wine-preloader symlink；更新 App 後直接重開即可（通常不必重裝運行時）。" +
+                "若日誌含 could not load ntdll.so／Cannot dlopen／x64lib stamp 缺失，再點「重裝運行時」。"
             )
         132 -> (
-            "客體退出碼 132＝SIGILL（Illegal instruction）。0.1.30+：interpreter（DYNAREC=0）仍炸時，多半是模擬中的 ntdll／libgcc 或 wine 子行程未回 Box64，" +
-                "不是 AVX／dynarec 發射。請更新 App 後「重裝運行時」（換 bookworm libgcc x64lib），並看日誌 " +
-                "BOX64_SELFTEST／WINE_VERSION_SMOKE／BOX64_X64LIB_STAMP／BOX64_FLAGS。" +
-                "若 WINE_VERSION_SMOKE 已是 132，問題在 Wine／x64lib；若只有 explorer 炸，再查 GPU／PE。"
+            "客體退出碼 132＝SIGILL。0.1.30+ 已換 bookworm libgcc；若仍 132，看 BOX64_SELFTEST／WINE_VERSION_SMOKE。" +
+                "SELFTEST=132 → 換 Box64；SMOKE=132 → Wine／x64lib；僅 explorer 炸 → GPU／PE。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

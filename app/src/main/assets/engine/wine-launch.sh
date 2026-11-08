@@ -154,11 +154,18 @@ log "BOX64=$BOX64 $(ls -la "$BOX64" 2>&1)"
 chmod +x "$BOX64" 2>/dev/null || true
 export BOX64
 
-# 0.1.30：aarch64 wine／wineserver 包裝（PRoot 下 raw execve 仍回 Box64）
+# 0.1.31：aarch64 wine／wineserver 包裝僅放 PATH（給 execvp 用）
+# WINELOADER 必須是 x86_64 ELF（/opt/wine/bin/wine），不可指 shell 包裝
+# （指包裝時 Wine 會找 /usr/local/bin/wine-preloader → could not exec the wine loader → exit 1）
 WINE_REAL=/opt/wine/bin/wine
 WINESERVER_REAL=/opt/wine/bin/wineserver
-mkdir -p /usr/local/bin
-if [ ! -x /usr/local/bin/wine ] || ! grep -q 'BOX64' /usr/local/bin/wine 2>/dev/null; then
+mkdir -p /usr/local/bin /opt/wine/bin
+# wine-preloader 實體在 x86_64-unix；補 symlink 讓 %s-preloader 找得到
+if [ -f /opt/wine/lib/wine/x86_64-unix/wine-preloader ] && [ ! -e /opt/wine/bin/wine-preloader ]; then
+  ln -sf ../lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>/dev/null || \
+    ln -sf /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>/dev/null || true
+fi
+if [ ! -x /usr/local/bin/wine ] || ! grep -q 'WINE_REAL' /usr/local/bin/wine 2>/dev/null; then
   cat > /usr/local/bin/wine << 'WRAP'
 #!/bin/sh
 BOX64="${BOX64:-/usr/local/bin/box64}"
@@ -167,7 +174,7 @@ exec "$BOX64" "$REAL" "$@"
 WRAP
   chmod +x /usr/local/bin/wine
 fi
-if [ ! -x /usr/local/bin/wineserver ] || ! grep -q 'BOX64' /usr/local/bin/wineserver 2>/dev/null; then
+if [ ! -x /usr/local/bin/wineserver ] || ! grep -q 'WINESERVER_REAL' /usr/local/bin/wineserver 2>/dev/null; then
   cat > /usr/local/bin/wineserver << 'WRAP'
 #!/bin/sh
 BOX64="${BOX64:-/usr/local/bin/box64}"
@@ -177,7 +184,6 @@ WRAP
   chmod +x /usr/local/bin/wineserver
 fi
 export WINE_REAL WINESERVER_REAL
-# PATH：包裝優先於 /opt/wine/bin
 export PATH="/usr/local/bin:/usr/local/sbin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/wine/bin"
 
 # 自檢：box64 -v（勿無參，會印 Missing operand）
@@ -224,17 +230,19 @@ fi
 
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
-# WINELOADER → aarch64 包裝，子行程 exec 仍進 Box64
-export WINELOADER="${WINELOADER:-/usr/local/bin/wine}"
-# 跳過 wine-preloader 再 exec（Box64 亦會偵測並略過 preloader）
+# 關鍵：WINELOADER＝真實 x86_64 ELF（非 /usr/local/bin/wine 包裝）
+export WINELOADER="$WINE_REAL"
 export WINELOADERNOEXEC=1
+# prefix：--version 理論上不需要，但先確保目錄在，免偶發 init 失敗
+export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
+mkdir -p "$WINEPREFIX"
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
-log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC"
+log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC PRELOADER=$(ls -la /opt/wine/bin/wine-preloader 2>&1)"
+log "WINEPREFIX=$WINEPREFIX"
 
 # 強制安全預設（覆蓋 Kotlin env）
-# 0.1.30：DYNAREC=0（interpreter）已證非 dynarec 發射；保留 NOHOSTEXT 給日後切回
 export BOX64_DYNAREC_NOHOSTEXT=1
 export BOX64_DYNAREC_NATIVEFLAGS=0
 export BOX64_AVX=0
@@ -262,23 +270,42 @@ export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-1}"
 export BOX64_NOBANNER=0
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS"
 
-# 冒煙：wine --version（無 X／無 explorer／無 PE）— 隔離 ntdll／libgcc／包裝鏈
-log "WINE_VERSION_SMOKE begin"
+# 冒煙：wine --version（隔離 ntdll／libgcc／WINELOADER）
+# 暫時打開 err 日誌，完整落入 session（stdout）與檔案
+log "WINE_VERSION_SMOKE begin cmd=$BOX64 $WINE_REAL --version"
+SMOKE_WINEDEBUG_SAVE="${WINEDEBUG-}"
+export WINEDEBUG="+err,+fix"
 set +e
 "$BOX64" "$WINE_REAL" --version >/mnt/data/wine-version.out 2>&1
 WV=$?
 set -e
+if [ -n "$SMOKE_WINEDEBUG_SAVE" ]; then export WINEDEBUG="$SMOKE_WINEDEBUG_SAVE"; else export WINEDEBUG="-all"; fi
 log "WINE_VERSION_SMOKE exit=$WV"
-head -40 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+log "--- WINE_VERSION_SMOKE output begin ---"
+# 整份輸出進 session／gpu-stack（上限 80 行，避免爆）
+head -80 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+log "--- WINE_VERSION_SMOKE output end ---"
+# 若印出 wine-x.y 字樣，視為冒煙通過（有些環境收尾非 0）
+SMOKE_OK=0
+if [ "$WV" = "0" ]; then SMOKE_OK=1; fi
+if grep -qE 'wine-[0-9]|Wine [0-9]' /mnt/data/wine-version.out 2>/dev/null; then SMOKE_OK=1; fi
 if [ "$WV" = "132" ]; then
-  log "FATAL: wine --version SIGILL (exit 132). Likely emulated ntdll／libgcc／loader — not dynarec, not GPU."
-  log "HINT: reinstall runtime for bookworm x64lib; check BOX64_X64LIB_STAMP / WINE_VERSION_SMOKE log above."
+  log "FATAL: wine --version SIGILL (exit 132). Emulated ntdll／libgcc／loader."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 132
 fi
-if [ "$WV" != "0" ]; then
-  log "WARN: wine --version failed (exit=$WV); continuing to explorer anyway"
+if [ "$SMOKE_OK" = "1" ]; then
+  log "WINE_VERSION_SMOKE ok (exit=$WV, version line present or exit 0)"
+else
+  log "FATAL: wine --version smoke failed (exit=$WV, no version string)."
+  log "HINT: check WINELOADER=$WINELOADER is ELF; PRELOADER symlink; not Android storage permission."
+  log "HINT: full smoke log above; also try SoftLegacy whoami if explorer later fails."
+  # 不直接 exit——仍試 explorer，但標 FATAL 方便對照；若要硬停可改 exit 1
+  # 0.1.31：硬停，避免黑屏誤以為在跑遊戲
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 1
 fi
 
 log "WINE_START $WINE_REAL explorer /desktop=x86,${W}x${H} $*"

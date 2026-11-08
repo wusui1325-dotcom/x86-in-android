@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.30-x64lib-bookworm",
+  "runtimeId": "wine-gpustack-v0.1.31-wineloader-elf",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack; bookworm libgcc x64lib; aarch64 wine/wineserver wrappers; wine --version smoke; DYNAREC=0+NOHOSTEXT"
+  "notes": "GpuStack; bookworm x64lib; WINELOADER=ELF + preloader symlink; wine --version smoke hard-gate"
 }

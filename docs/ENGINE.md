@@ -134,3 +134,18 @@ ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（12
 
 請**更新 APK 後重裝運行時**（換 x64lib）；日誌必看 `BOX64_X64LIB_STAMP`、
 `WINE_VERSION_SMOKE`。
+
+## wine --version exit 1／WINELOADER ELF（0.1.31）
+
+0.1.30 把 `WINELOADER` 設成 aarch64 **shell 包裝**（`/usr/local/bin/wine`）。Wine 會依
+`WINELOADER` 拼 `%s-preloader` → `/usr/local/bin/wine-preloader`（不存在）→
+`could not exec the wine loader` → **exit 1**。SIGILL 已過，但冒煙／explorer 仍失敗。
+**與 Android「存取所有檔案」無關。**
+
+修復：
+- `WINELOADER=/opt/wine/bin/wine`（x86_64 ELF）
+- PATH 上保留包裝給 `execvp("wine"|"wineserver")`
+- `/opt/wine/bin/wine-preloader` → `x86_64-unix/wine-preloader` symlink
+- `WINE_VERSION_SMOKE` 完整輸出進 session；有 `wine-x.y` 字樣即過；否則硬停 exit 1
+
+更新 APK 後**直接重開**即可（腳本由 ensureWineLaunchScript 覆寫；x64lib 未變通常不必重裝運行時）。

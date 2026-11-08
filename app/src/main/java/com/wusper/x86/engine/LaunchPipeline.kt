@@ -371,7 +371,8 @@ object LaunchPipeline {
             // Box64 搜尋 x86_64 模擬庫（與 aarch64 LD_LIBRARY_PATH 分離）；含 Wine unix＋x64lib
             "BOX64_LD_LIBRARY_PATH=/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu",
             "WINEDLLPATH=/opt/wine/lib/wine",
-            "WINELOADER=/usr/local/bin/wine",
+            // WINELOADER 必須是 x86_64 ELF；PATH 上的 /usr/local/bin/wine 包裝僅給 execvp
+            "WINELOADER=/opt/wine/bin/wine",
             "WINELOADERNOEXEC=1",
             "WINE_REAL=/opt/wine/bin/wine",
             "WINESERVER_REAL=/opt/wine/bin/wineserver",

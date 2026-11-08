@@ -1,6 +1,6 @@
 {
-  "runtimeId": "wine-proot-v1.2-input",
-  "approxDownloadBytes": 221000000,
+  "runtimeId": "wine-proot-v1.3-electron",
+  "approxDownloadBytes": 450000000,
   "components": [
     {
       "id": "rootfs",
@@ -41,6 +41,20 @@
       "filename": "input-overlay-arm64.tar.xz",
       "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/input-overlay-arm64.tar.xz",
       "sha256": "1f30bbd557de65891219df4e4681ad63e7cd42c2373a75697769a460a3f6b6db",
+      "extract": "rootfs"
+    },
+    {
+      "id": "electron-overlay",
+      "filename": "electron-overlay-arm64.tar.xz",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/electron-overlay-arm64.tar.xz",
+      "sha256": "1bf1b43f0b752bf62bae2e4c569ab27b667a875ae3c860351b221521b5dad3a5",
+      "extract": "rootfs"
+    },
+    {
+      "id": "wine-addons-overlay",
+      "filename": "wine-addons-overlay.tar.xz",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/runtime-v1/wine-addons-overlay.tar.xz",
+      "sha256": "88b3f74e7e6173620b0a3be5adbbe7e59c6bcd484a597f9876fc78fe9cea2b64",
       "extract": "rootfs"
     }
   ]

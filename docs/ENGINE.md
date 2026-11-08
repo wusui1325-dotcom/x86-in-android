@@ -26,17 +26,39 @@ Guest x11-input-agent.sh
 - 至少：**button1 click／drag／move**；外接滑鼠 hover／滾輪；常見鍵盤鍵。
 - 組件：`input-overlay-arm64.tar.xz`（xdotool 等，Release `runtime-v1`）。
 
+## Electron／常見 Win GUI 庫（runtime overlay）
+
+啟動時若 `runtimeId` 落後或缺 stamp，`ComponentInstaller` 會自動從 GitHub Release **`runtime-v1`** 補下載（不進 APK）：
+
+| overlay | 內容（摘要） | 約大小 |
+|---------|--------------|--------|
+| `electron-overlay-arm64.tar.xz` | NSS／GTK3／libxcb*／ALSA＋Pulse 客戶端、null `asound.conf` 等 aarch64 宿主庫 | ~62 MB |
+| `wine-addons-overlay.tar.xz` | wine-mono **10.1.0** MSI、wine-gecko **2.47.4**（x86_64＋x86）→ `/opt/wine/share/wine/` | ~161 MB |
+
+`runtimeId`：`wine-proot-v1.3-electron`。
+
+## 圖形：軟渲 vs DXVK
+
+- **預設軟渲**：`LIBGL_ALWAYS_SOFTWARE=1`、`GALLIUM_DRIVER=llvmpipe`（可改 `softpipe`）。畫面仍走 Xvfb XWD → Surface（~15 FPS）。
+- **未捆 DXVK**：Android／PRoot 內無穩定 Vulkan ICD＋DXVK 二進位鏈；需要時可自行把 `dxvk` 的 x86_64 `dll` 丟進 wineprefix `drive_c/windows/system32` 並設 `WINEDLLOVERRIDES=d3d11,dxgi=n`，且宿主需可用 Vulkan（目前未保證）。
+- Electron／Chromium 在 Wine 下多半走 OpenGL／ANGLE；缺 GPU 時依軟渲，效能遠低於原生。
+
+## 音訊
+
+無 Pulse 伺服器：預設 `winepulse.drv=d`＋`/etc/asound.conf` null PCM，避免卡在音訊初始化。真實喇叭輸出尚未接 Android AudioTrack。
+
 ## 限制
 
 1. 輸入經檔案佇列＋xdotool，有數十 ms 級延遲；快速拖曳可能掉點。
 2. 多點觸控只取主指標；無完整手勢。
 3. IME／中文輸入法未接（ASCII／硬體鍵為主）。
-4. 圖形仍軟渲 XWD；無 DXVK／觸控精密校准 UI。
-5. Codex 級 Electron 仍可能缺庫／GPU；但窗口應可點。
+4. 圖形仍軟渲 XWD；DXVK 未預裝（見上）。
+5. Electron／Codex：常見缺庫已用 overlay 補；仍可能缺個別 `.so`、或因軟渲／Box64 過慢而「看似卡住」。
+6. wine-mono 首次 wineboot 會從 MSI 展開，可能多花一次時間。
 
 ## 手動驗收
 
-1. 安裝 0.1.5+，首次補下載 input-overlay（若舊運行時缺 xdotool）。  
-2. 跑 GUI `.exe`／whoami 桌面 → Surface 有畫面。  
-3. 手指點／拖：游標／按鈕應有反應；硬體鍵盤可打字。  
-4. `/data/.../x11input.log` 可見 cmd 記錄。  
+1. 安裝 0.1.6+，舊運行時會再下 electron／wine-addons overlay。  
+2. 跑 GUI／Electron `.exe` → Surface 有畫面；`libnss3`／GTK 相關 dlopen 不應再缺。  
+3. 手指點／拖與硬體鍵仍可用。  
+4. 日誌：`xvfb.log`／`x11input.log`；mono 路徑：`rootfs/opt/wine/share/wine/mono/`。  

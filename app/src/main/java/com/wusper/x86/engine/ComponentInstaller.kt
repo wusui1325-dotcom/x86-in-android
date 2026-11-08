@@ -31,16 +31,39 @@ object ComponentInstaller {
     fun runtimeRoot(ctx: Context): File =
         File(ctx.filesDir, "engine/runtime").also { it.mkdirs() }
 
+    fun expectedRuntimeId(ctx: Context): String =
+        runCatching {
+            JSONObject(ctx.assets.open("engine/components.json").bufferedReader().readText())
+                .getString("runtimeId")
+        }.getOrDefault("")
+
+    fun installedRuntimeId(ctx: Context): String =
+        runCatching {
+            JSONObject(File(runtimeRoot(ctx), "VERSION.json").readText()).getString("runtimeId")
+        }.getOrDefault("")
+
+    fun hasElectronOverlay(rootfs: File): Boolean =
+        File(rootfs, "etc/x86-electron-overlay.stamp").exists() ||
+            File(rootfs, "usr/lib/aarch64-linux-gnu/libnss3.so").exists()
+
+    fun hasWineAddons(rootfs: File): Boolean =
+        File(rootfs, "opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi").exists() ||
+            File(rootfs, "opt/wine/share/wine/gecko/wine-gecko-2.47.4-x86_64").isDirectory
+
     fun isReady(ctx: Context): Boolean {
         val root = runtimeRoot(ctx)
         val ver = File(root, "VERSION.json")
         if (!ver.exists()) return false
-        val wine = File(root, "rootfs/opt/wine/bin/wine")
-        val box = File(root, "rootfs/usr/local/bin/box64")
-        val xvfb = File(root, "rootfs/usr/bin/Xvfb")
-        val xdotool = File(root, "rootfs/usr/bin/xdotool")
+        val expect = expectedRuntimeId(ctx)
+        if (expect.isNotBlank() && installedRuntimeId(ctx) != expect) return false
+        val rootfs = File(root, "rootfs")
+        val wine = File(rootfs, "opt/wine/bin/wine")
+        val box = File(rootfs, "usr/local/bin/box64")
+        val xvfb = File(rootfs, "usr/bin/Xvfb")
+        val xdotool = File(rootfs, "usr/bin/xdotool")
         val proot = File(EngineAssets.engineRoot(ctx), "proot")
         return wine.exists() && box.exists() && xvfb.exists() && xdotool.exists() &&
+            hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             (proot.exists() || File(root, "bin/proot").exists())
     }
 
@@ -104,11 +127,27 @@ object ComponentInstaller {
             val hasBox = File(rootfs, "usr/local/bin/box64").exists()
             val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
             val hasXdotool = File(rootfs, "usr/bin/xdotool").exists()
-            val onlyExtras = hasWine && hasBox && (!hasXvfb || !hasXdotool)
+            val hasElectron = hasElectronOverlay(rootfs)
+            val hasAddons = hasWineAddons(rootfs)
+            val baseOk = hasWine && hasBox
+            // 舊運行時只補缺的 overlay，避免重下整包 rootfs／Wine
+            val needExtras = mutableSetOf<String>()
+            if (!hasXvfb) needExtras += "x11-overlay"
+            if (!hasXdotool) needExtras += "input-overlay"
+            if (!hasElectron) needExtras += "electron-overlay"
+            if (!hasAddons) needExtras += "wine-addons-overlay"
+            val onlyExtras = baseOk && needExtras.isNotEmpty()
+            val stampOnly = baseOk && hasXvfb && hasXdotool && hasElectron && hasAddons
+            if (stampOnly) {
+                onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
+            }
             for (i in 0 until arr.length()) {
+                if (stampOnly) break
                 val c = arr.getJSONObject(i)
                 val id = c.getString("id")
-                if (onlyExtras && id !in setOf("x11-overlay", "input-overlay")) continue
+                // 已有基底：略過 rootfs／wine／box64；只抓缺的 overlay
+                if (baseOk && id in setOf("rootfs", "wine", "box64-glibc")) continue
+                if (baseOk && needExtras.isNotEmpty() && id !in needExtras) continue
                 val filename = c.getString("filename")
                 val url = c.getString("url")
                 val expectSha = c.optString("sha256", "")
@@ -120,6 +159,7 @@ object ComponentInstaller {
                 if (expectSha.isNotBlank()) {
                     val got = sha256(out)
                     if (!got.equals(expectSha, ignoreCase = true)) {
+                        out.delete()
                         return Result.failure(
                             IllegalStateException("SHA256 不符：$id expect=$expectSha got=$got"),
                         )
@@ -130,8 +170,8 @@ object ComponentInstaller {
                     "rootfs" -> extractRootfs(out, File(root, "rootfs"), c.optString("stripPrefix", ""))
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
                     "box64-glibc" -> extractBox64(out, File(root, "rootfs/usr/local/bin"))
-                    "x11-overlay" -> extractTarXz(out, File(root, "rootfs"), skipDevice = true)
-                    "input-overlay" -> extractTarXz(out, File(root, "rootfs"), skipDevice = true)
+                    "x11-overlay", "input-overlay", "electron-overlay", "wine-addons-overlay" ->
+                        extractTarXz(out, File(root, "rootfs"), skipDevice = true)
                     else -> extractTarXz(out, File(root, c.optString("extract", ".")))
                 }
             }
@@ -154,8 +194,13 @@ object ComponentInstaller {
             File(rootfs, "opt/wine/bin/wine").setExecutable(true, false)
             File(rootfs, "usr/bin/Xvfb").setExecutable(true, false)
             File(rootfs, "usr/bin/xdotool").setExecutable(true, false)
-            writeWineLaunchScript(rootfs)
-            ensureInputAgent(ctx)
+            // 確保 null ALSA
+            val asound = File(rootfs, "etc/asound.conf")
+            if (!asound.exists()) {
+                asound.parentFile?.mkdirs()
+                asound.writeText("pcm.!default { type null }\nctl.!default { type null }\n")
+            }
+            ensureWineLaunchScript(ctx)
             onProgress(Progress("ready", message = "運行時安裝完成"))
             return Result.success(root)
         } catch (t: Throwable) {
@@ -301,6 +346,7 @@ object ComponentInstaller {
         return dest
     }
 
+    /** 僅在無 Context assets 時備援；正常路徑走 ensureWineLaunchScript。 */
     private fun writeWineLaunchScript(rootfs: File) {
         val f = File(rootfs, "usr/local/bin/wine-launch.sh")
         f.parentFile?.mkdirs()
@@ -309,11 +355,20 @@ object ComponentInstaller {
             |#!/bin/sh
             |set -e
             |export DISPLAY=:0
-            |export WINEDLLOVERRIDES="mscoree,mshtml="
+            |export LIBGL_ALWAYS_SOFTWARE="${d}{LIBGL_ALWAYS_SOFTWARE:-1}"
+            |export GALLIUM_DRIVER="${d}{GALLIUM_DRIVER:-llvmpipe}"
+            |export WINEDLLOVERRIDES="${d}{WINEDLLOVERRIDES:-winepulse.drv=d}"
+            |if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
+            |   [ ! -d /opt/wine/share/wine/mono/wine-mono-10.1.0 ]; then
+            |  export WINEDLLOVERRIDES="mscoree,mshtml=;${d}WINEDLLOVERRIDES"
+            |fi
             |W="${d}{WINE_DESKTOP_W:-1280}"
             |H="${d}{WINE_DESKTOP_H:-720}"
-            |mkdir -p /mnt/data/xfb /tmp/.X11-unix
+            |mkdir -p /mnt/data/xfb /tmp/.X11-unix /mnt/data
             |rm -f /mnt/data/xfb/* 2>/dev/null || true
+            |if [ ! -f /etc/asound.conf ]; then
+            |  printf 'pcm.!default { type null }\nctl.!default { type null }\n' > /etc/asound.conf
+            |fi
             |Xvfb :0 -screen 0 ${d}{W}x${d}{H}x24 -ac -nolisten tcp -fbdir /mnt/data/xfb >/mnt/data/xvfb.log 2>&1 &
             |XPID=${d}!
             |i=0
@@ -321,8 +376,19 @@ object ComponentInstaller {
             |  if [ -e /mnt/data/xfb/Xvfb_screen0 ] || [ -S /tmp/.X11-unix/X0 ]; then break; fi
             |  i=${d}((i+1)); sleep 0.1
             |done
+            |if [ -x /usr/bin/xdotool ] || command -v xdotool >/dev/null 2>&1; then
+            |  if [ -x /usr/local/bin/x11-input-agent.sh ]; then
+            |    /usr/local/bin/x11-input-agent.sh >/mnt/data/x11input-agent.out 2>&1 &
+            |  elif [ -f /mnt/data/x11-input-agent.sh ]; then
+            |    sh /mnt/data/x11-input-agent.sh >/mnt/data/x11input-agent.out 2>&1 &
+            |  fi
+            |  IPID=${d}!
+            |else
+            |  IPID=
+            |fi
             |/usr/local/bin/box64 /opt/wine/bin/wine explorer /desktop=x86,${d}{W}x${d}{H} "${d}@"
             |RC=${d}?
+            |[ -n "${d}IPID" ] && kill ${d}IPID 2>/dev/null || true
             |kill ${d}XPID 2>/dev/null || true
             |wait ${d}XPID 2>/dev/null || true
             |exit ${d}RC
@@ -330,6 +396,4 @@ object ComponentInstaller {
         f.writeText(script)
         f.setExecutable(true, false)
     }
-
-
 }

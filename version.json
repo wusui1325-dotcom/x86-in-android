@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.5",
-  "versionCode": 6,
-  "notes": "0.1.5: 觸控／鍵鼠→X11（xdotool cmd 佇列）；1280×720 座標對齊；input-overlay"
+  "versionName": "0.1.6",
+  "versionCode": 7,
+  "notes": "0.1.6: Electron／GUI 庫 overlay＋wine-mono/gecko；啟動自動補齊；軟渲／DXVK 文件化"
 }

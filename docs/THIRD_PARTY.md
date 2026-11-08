@@ -41,3 +41,16 @@
 - Ubuntu noble arm64：`xdotool`、`libxdo3`、`libxtst6` 等
 - 授權：隨套件（xdotool 多為 BSD／MIT 系；以 deb 為準）
 - 用途：客體注入 X11 指標／鍵盤事件
+
+## Electron／GUI 庫 overlay
+
+- 來源：Ubuntu noble arm64 debs（NSS、GTK3、libxcb*、ALSA、Pulse 客戶端等；已排除 systemd／大型 llvm+mesa-dri）
+- 打包：`electron-overlay-arm64.tar.xz`（Release runtime-v1）
+- 用途：Box64 包裝宿主 aarch64 `.so`，供 Electron／常見 Win GUI 在 rootfs 內 dlopen
+
+## wine-mono／wine-gecko（wine-addons-overlay）
+
+- wine-mono 10.1.0：https://dl.winehq.org/wine/wine-mono/（Wine HQ）
+- wine-gecko 2.47.4 x86_64＋x86：https://dl.winehq.org/wine/wine-gecko/
+- 打包：`wine-addons-overlay.tar.xz` → `/opt/wine/share/wine/{mono,gecko}/`
+- 用途：.NET／內嵌 HTML 等；首次 wineboot 可能展開 MSI

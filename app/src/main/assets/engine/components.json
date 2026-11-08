@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.31-wineloader-elf",
+  "runtimeId": "wine-gpustack-v0.1.32-unix-wine-preload",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack; bookworm x64lib; WINELOADER=ELF + preloader symlink; wine --version smoke hard-gate"
+  "notes": "GpuStack; bookworm x64lib; WINELOADER=x86_64-unix/wine (preload_info); Session log UX"
 }

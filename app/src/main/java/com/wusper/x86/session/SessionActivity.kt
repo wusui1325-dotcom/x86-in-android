@@ -1,6 +1,17 @@
 package com.wusper.x86.session
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -100,6 +111,78 @@ class SessionActivity : ComponentActivity() {
         setContent {
             X86Theme {
                 var logText by remember { mutableStateOf("準備啟動…\n") }
+                val logScroll = rememberScrollState()
+                val scope = rememberCoroutineScope()
+                var logHighlightEpoch by remember { mutableIntStateOf(0) }
+                fun annotatedLog(src: String) = buildAnnotatedString {
+                    if (src.isEmpty()) { append(""); return@buildAnnotatedString }
+                    val lower = src.lowercase()
+                    val marks = BooleanArray(src.length)
+                    for (pat in KEY_LOG_PATTERNS) {
+                        val p = pat.lowercase()
+                        var i = 0
+                        while (true) {
+                            val j = lower.indexOf(p, i)
+                            if (j < 0) break
+                            for (k in j until (j + pat.length).coerceAtMost(src.length)) marks[k] = true
+                            i = j + 1
+                        }
+                    }
+                    // expand marks to full lines
+                    val lineMarks = BooleanArray(src.length)
+                    var lineStart = 0
+                    for (i in src.indices) {
+                        if (src[i] == '\n' || i == src.lastIndex) {
+                            val end = if (src[i] == '\n') i else i + 1
+                            var hit = false
+                            for (k in lineStart until end) if (marks[k]) { hit = true; break }
+                            if (hit) for (k in lineStart until end) lineMarks[k] = true
+                            lineStart = i + 1
+                        }
+                    }
+                    var i = 0
+                    while (i < src.length) {
+                        if (!lineMarks[i]) {
+                            val start = i
+                            while (i < src.length && !lineMarks[i]) i++
+                            append(src.substring(start, i))
+                        } else {
+                            val start = i
+                            while (i < src.length && lineMarks[i]) i++
+                            withStyle(
+                                SpanStyle(
+                                    background = Color(0x66FFEB3B),
+                                    color = Color(0xFF1A1A1A),
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            ) { append(src.substring(start, i)) }
+                        }
+                    }
+                }
+                fun copyFullLog() {
+                    val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    cm.setPrimaryClip(ClipData.newPlainText("x86-session-log", logText))
+                    Toast.makeText(this@SessionActivity, getString(com.wusper.x86.R.string.toast_log_copied), Toast.LENGTH_SHORT).show()
+                }
+                fun jumpToKeyLog() {
+                    val lines = logText.split('\n')
+                    var idx = -1
+                    for ((i, line) in lines.withIndex()) {
+                        val low = line.lowercase()
+                        if (KEY_LOG_PATTERNS.any { it.lowercase() in low }) { idx = i; break }
+                    }
+                    if (idx < 0) {
+                        Toast.makeText(this@SessionActivity, getString(com.wusper.x86.R.string.toast_key_not_found), Toast.LENGTH_SHORT).show()
+                        return
+                    }
+                    logHighlightEpoch++
+                    // approx 14sp monospace ≈ 42px per line
+                    val y = (idx * 42).coerceAtLeast(0)
+                    scope.launch {
+                        logScroll.animateScrollTo(y.coerceAtMost(logScroll.maxValue))
+                    }
+                    Toast.makeText(this@SessionActivity, getString(com.wusper.x86.R.string.toast_jumped_key), Toast.LENGTH_SHORT).show()
+                }
                 var status by remember { mutableStateOf("初始化") }
                 var installProgress by remember { mutableStateOf<ComponentInstaller.Progress?>(null) }
                 var installing by remember { mutableStateOf(false) }
@@ -817,16 +900,37 @@ class SessionActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        Text(
-                            text = logText,
-                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .weight(0.7f)
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                                .verticalScroll(rememberScrollState()),
-                        )
+                                .padding(horizontal = 16.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(
+                                onClick = { copyFullLog() },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(getString(com.wusper.x86.R.string.btn_copy_log))
+                            }
+                            OutlinedButton(
+                                onClick = { jumpToKeyLog() },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(getString(com.wusper.x86.R.string.btn_jump_key))
+                            }
+                        }
+                        SelectionContainer {
+                            Text(
+                                text = annotatedLog(logText + if (logHighlightEpoch >= 0) "" else ""),
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(0.7f)
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .verticalScroll(logScroll),
+                            )
+                        }
                     }
                 }
             }
@@ -848,6 +952,24 @@ class SessionActivity : ComponentActivity() {
 
     companion object {
         private const val REQ_POST_NOTIFICATIONS = 8621
+        /** Session log 關鍵行（跳轉／高亮） */
+        private val KEY_LOG_PATTERNS = listOf(
+            "FATAL:",
+            "WINE_VERSION_SMOKE",
+            "c0000018",
+            "shared user data",
+            "Illegal instruction",
+            "SIGILL",
+            "BOX64_SELFTEST",
+            "BOX64_FLAGS",
+            "BOX64_X64LIB_STAMP",
+            "NTDLL=",
+            "WINE_EXIT=",
+            "WINELOADER=",
+            "could not load ntdll",
+            "Cannot dlopen",
+            "Missing operand",
+        )
 
         const val EXTRA_WORKSPACE_ID = "workspace_id"
         const val EXTRA_FORCE_SMOKE = "force_smoke"

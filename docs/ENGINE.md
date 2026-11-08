@@ -149,3 +149,20 @@ ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（12
 - `WINE_VERSION_SMOKE` 完整輸出進 session；有 `wine-x.y` 字樣即過；否則硬停 exit 1
 
 更新 APK 後**直接重開**即可（腳本由 ensureWineLaunchScript 覆寫；x64lib 未變通常不必重裝運行時）。
+
+## c0000018 shared user data／unix wine（0.1.32）
+
+`err:virtual:virtual_alloc_first_thread_data wine: failed to map the shared user data: c0000018`
+（STATUS_CONFLICTING_ADDRESSES）：Box64 對 Wine 會 `mmap` 預留 `0x7f000000–0x82000000`（含
+`0x7ffe0000` KUSER_SHARED_DATA），並把清單寫入主 ELF 的 **`wine_main_preload_info`**。
+Kron4ek **`bin/wine` stub 沒有此符號**；只有 **`lib/wine/x86_64-unix/wine`**（與
+`wine-preloader`）有。結果預留成功但 Wine 不知情 → 映射衝突。
+
+修復：`WINE_REAL`／`WINELOADER`＝`/opt/wine/lib/wine/x86_64-unix/wine`。
+更新 APK 後**直接重開**（不必重裝運行時）。
+
+## Session log UX（0.1.32）
+
+- **複製 log**：一鍵複製完整 session＋gpu-stack 合併日誌到剪貼簿
+- **跳轉關鍵**：捲動到首個關鍵行並高亮（FATAL／WINE_VERSION_SMOKE／c0000018／
+  BOX64_FLAGS／SELFTEST／Illegal instruction／NTDLL／stamp…）

@@ -24,6 +24,7 @@
 | could not load ntdll.so／Cannot dlopen | 缺 Wine unix `ntdll.so`，或缺 Box64 x64lib（`libgcc_s.so.1`） | 「重裝運行時」（0.1.26+ 會拉 x64lib） |
 | Illegal instruction／exit 132／SIGILL | interpreter 下仍炸＝ntdll／libgcc／wine 子行程 | 升到 **0.1.30+** 並**重裝運行時**（bookworm x64lib）；看 `WINE_VERSION_SMOKE`／`BOX64_X64LIB_STAMP` |
 | wine --version／exit 1／-1001 | `WINELOADER` 指到 shell 包裝或缺 preloader | 升到 **0.1.31+** 直接重開；看 `WINE_VERSION_SMOKE` 全文；**不是**「存取所有檔案」 |
+| c0000018／shared user data | `bin/wine` 無 `wine_main_preload_info`，Box64 預留位址衝突 | 升到 **0.1.32+** 直接重開（改用 `x86_64-unix/wine`） |
 | `/usr/bin/sh` not found | 常為缺 `ld-linux`（PT_INTERP），非真缺 sh | 「重裝運行時」 |
 
 ## 回報

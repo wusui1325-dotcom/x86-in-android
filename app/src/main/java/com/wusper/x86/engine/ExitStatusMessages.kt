@@ -101,10 +101,9 @@ object ExitStatusMessages {
                 "請點「重裝運行時」。"
             )
         1 -> (
-            "客體行程以退出碼 1 結束（不是 Android「存取所有檔案」權限問題）。" +
-                "請先看日誌 WINE_VERSION_SMOKE：若 wine --version 失敗，多半是 WINELOADER／ntdll／x64lib。" +
-                "0.1.31+ 已把 WINELOADER 指回 x86_64 ELF 並補 wine-preloader symlink；更新 App 後直接重開即可（通常不必重裝運行時）。" +
-                "若日誌含 could not load ntdll.so／Cannot dlopen／x64lib stamp 缺失，再點「重裝運行時」。"
+            "客體行程以退出碼 1 結束（不是 Android「存取所有檔案」權限）。" +
+                "若日誌有 c0000018／shared user data：0.1.32+ 改用 x86_64-unix/wine（含 wine_main_preload_info）避免位址衝突；請更新 App 後直接重開。" +
+                "否則先看 WINE_VERSION_SMOKE；ntdll／x64lib stamp 缺失才需重裝運行時。"
             )
         132 -> (
             "客體退出碼 132＝SIGILL。0.1.30+ 已換 bookworm libgcc；若仍 132，看 BOX64_SELFTEST／WINE_VERSION_SMOKE。" +

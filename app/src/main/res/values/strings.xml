@@ -23,6 +23,11 @@
 
     <string name="btn_clear_runtime">重裝運行時</string>
     <string name="btn_retry">重試</string>
+    <string name="btn_copy_log">複製 log</string>
+    <string name="btn_jump_key">跳轉關鍵</string>
+    <string name="toast_log_copied">已複製完整 log</string>
+    <string name="toast_key_not_found">未找到關鍵參數行</string>
+    <string name="toast_jumped_key">已跳轉並高亮關鍵行</string>
     <string name="btn_delete_workspace">刪除工作區</string>
     <string name="btn_developer_options">開發者選項</string>
     <string name="btn_about">關於</string>

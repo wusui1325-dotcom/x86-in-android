@@ -169,7 +169,7 @@ if [ ! -x /usr/local/bin/wine ] || ! grep -q 'WINE_REAL' /usr/local/bin/wine 2>/
   cat > /usr/local/bin/wine << 'WRAP'
 #!/bin/sh
 BOX64="${BOX64:-/usr/local/bin/box64}"
-REAL="${WINE_REAL:-/opt/wine/bin/wine}"
+REAL="${WINE_REAL:-/opt/wine/lib/wine/x86_64-unix/wine}"
 exec "$BOX64" "$REAL" "$@"
 WRAP
   chmod +x /usr/local/bin/wine
@@ -239,7 +239,7 @@ mkdir -p "$WINEPREFIX"
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
-log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC PRELOADER=$(ls -la /opt/wine/bin/wine-preloader 2>&1)"
+log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC WINE_REAL=$WINE_REAL PRELOADER=$(ls -la "$WINE_UNIX/wine-preloader" /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
 
 # 強制安全預設（覆蓋 Kotlin env）
@@ -299,10 +299,10 @@ if [ "$SMOKE_OK" = "1" ]; then
   log "WINE_VERSION_SMOKE ok (exit=$WV, version line present or exit 0)"
 else
   log "FATAL: wine --version smoke failed (exit=$WV, no version string)."
-  log "HINT: check WINELOADER=$WINELOADER is ELF; PRELOADER symlink; not Android storage permission."
-  log "HINT: full smoke log above; also try SoftLegacy whoami if explorer later fails."
-  # 不直接 exit——仍試 explorer，但標 FATAL 方便對照；若要硬停可改 exit 1
-  # 0.1.31：硬停，避免黑屏誤以為在跑遊戲
+  if grep -q 'c0000018\|shared user data' /mnt/data/wine-version.out 2>/dev/null; then
+    log "HINT: c0000018 shared user data — need wine ELF with wine_main_preload_info (use x86_64-unix/wine)."
+  fi
+  log "HINT: WINELOADER=$WINELOADER WINE_REAL=$WINE_REAL; not Android storage permission."
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 1

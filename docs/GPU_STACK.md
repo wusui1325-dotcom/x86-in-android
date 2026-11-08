@@ -153,10 +153,22 @@
 - 可選手把：Android gamepad → WASD／方向鍵／A=Enter／B=Esc…（非完整 dinput）
 - 預設 `Style.TOUCHPAD`；可切 `TOUCHSCREEN` 絕對點按
 
-### 還缺
+### 還缺（0.1.15 時）
 
 1. VirGL／Zink 客體包（可選備援）
 2. Vortek／adrenotools（Mali／非 KGSL）
 3. Turnip＋DXVK＋Gladio＋AAudio＋輸入 **實機冒煙**
 4. 完整 dinput 手把 UDP（客體 winhandler.dll）
 5. 完整 Pulse 通路（可選）
+
+## 更新 0.1.16 — proot 可執行＋首次下載 UX
+
+- `execv(proot) EACCES`：`jniLibs/libproot.so`→`nativeLibraryDir`；`ExecBits`（Os.chmod）強制 wine／box64／腳本
+- 首次下載：並行、斷點續傳、進度條、可取消（修空 progress 回呼）
+
+### 還缺
+
+1. VirGL／Zink（可選）
+2. Vortek／adrenotools（Mali）
+3. 真機冒煙複驗（本修後）
+4. 完整 dinput UDP；完整 Pulse（可選）

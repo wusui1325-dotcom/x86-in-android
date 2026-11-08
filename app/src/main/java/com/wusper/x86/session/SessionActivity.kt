@@ -22,6 +22,13 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import kotlinx.coroutines.asCoroutineDispatcher
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.Row
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Button
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.DisposableEffect
@@ -84,6 +91,8 @@ class SessionActivity : ComponentActivity() {
             X86Theme {
                 var logText by remember { mutableStateOf("準備啟動…\n") }
                 var status by remember { mutableStateOf("初始化") }
+                var installProgress by remember { mutableStateOf<ComponentInstaller.Progress?>(null) }
+                var installing by remember { mutableStateOf(false) }
                 var logFile by remember { mutableStateOf<File?>(null) }
                 var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
                 var presentBridge by remember { mutableStateOf<PresentSurfaceBridge?>(null) }
@@ -116,13 +125,36 @@ class SessionActivity : ComponentActivity() {
                     logText += "模式：${plan.mode}／圖形：${plan.graphicsBackend}\n"
                     if (plan.needsRuntimeInstall || (plan.mode == LaunchPipeline.Mode.WineProot && !ComponentInstaller.isReady(this@SessionActivity))) {
                         status = "安裝運行時"
-                        logText += "首次 PE：下載 Wine／glibc rootfs／Box64…\n"
+                        installing = true
+                        installProgress = ComponentInstaller.Progress("download", message = "準備下載…")
+                        logText += "首次 PE：下載 Wine／glibc rootfs／Box64（可取消／斷點續傳）…\n"
                         val install = withContext(Dispatchers.IO) {
-                            ComponentInstaller.install(this@SessionActivity) { }
+                            ComponentInstaller.install(this@SessionActivity) { p ->
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    installProgress = p
+                                    status = when (p.stage) {
+                                        "download" -> {
+                                            val pct = if (p.total > 0) " ${p.current * 100 / p.total}%" else ""
+                                            val mb = if (p.total > 0)
+                                                " ${"%.1f".format(p.current / 1e6)}/${"%.1f".format(p.total / 1e6)}MB"
+                                            else ""
+                                            val n = if (p.componentCount > 0)
+                                                " (${p.componentIndex}/${p.componentCount})"
+                                            else ""
+                                            "下載 ${p.componentId.ifBlank { "組件" }}$n$pct$mb"
+                                        }
+                                        "extract" -> "解壓 ${p.componentId.ifBlank { "組件" }}…"
+                                        else -> p.message.ifBlank { p.stage }
+                                    }
+                                }
+                            }
                         }
+                        installing = false
+                        installProgress = null
                         if (install.isFailure) {
-                            status = "安裝失敗"
-                            logText += "安裝失敗：${install.exceptionOrNull()?.message}\n"
+                            val err = install.exceptionOrNull()
+                            status = if (err is ComponentInstaller.CancelledException) "已取消" else "安裝失敗"
+                            logText += "安裝失敗：${err?.message}\n"
                             EngineForegroundService.stop(this@SessionActivity)
                             return@LaunchedEffect
                         }
@@ -140,7 +172,9 @@ class SessionActivity : ComponentActivity() {
                         logText += "下載 Turnip＋DXVK（GpuStack 組件）…\n"
                         val gpu = withContext(Dispatchers.IO) {
                             GpuStack.installComponents(this@SessionActivity) { msg ->
-                                // IO 執行緒；最終以 statusMessage 為準
+                                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                    status = msg
+                                }
                             }
                         }
                         if (gpu.isFailure) {
@@ -387,6 +421,36 @@ class SessionActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                         )
+                        if (installing) {
+                            val p = installProgress
+                            val frac = if (p != null && p.total > 0L) {
+                                (p.current.toFloat() / p.total.toFloat()).coerceIn(0f, 1f)
+                            } else 0f
+                            LinearProgressIndicator(
+                                progress = { frac },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp),
+                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(
+                                    text = p?.message?.ifBlank { status } ?: status,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier.weight(1f),
+                                )
+                                Button(onClick = {
+                                    ComponentInstaller.requestCancel()
+                                    logText += "正在取消安裝…\n"
+                                }) {
+                                    Text("取消下載")
+                                }
+                            }
+                        }
                         Text(
                             text = logText,
                             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),

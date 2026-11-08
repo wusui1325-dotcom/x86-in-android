@@ -5,7 +5,8 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * 把 assets/testdata 與引擎二進位解到 files/engine/。
+ * 把 assets／jniLibs 引擎二進位落到可執行路徑。
+ * proot 優先用 nativeLibraryDir/libproot.so（Android 可執行區；避開 filesDir EACCES）。
  */
 object EngineAssets {
     private const val ENGINE_DIR = "engine"
@@ -58,10 +59,45 @@ object EngineAssets {
         if (ensured != null && ensured.exists() && ensured.canExecute()) return ensured
         val candidates = listOf(
             File(engineRoot(ctx), "box64"),
-            File(ctx.applicationInfo.nativeLibraryDir, "box64"),
             File(ctx.applicationInfo.nativeLibraryDir, "libbox64.so"),
+            File(ctx.applicationInfo.nativeLibraryDir, "box64"),
         )
-        return candidates.firstOrNull { it.exists() && it.canExecute() }
+        return candidates.firstOrNull { it.exists() }.also { it?.let { f -> ExecBits.force(f) } }
+            ?.takeIf { it.canExecute() || it.exists() }
+    }
+
+    /**
+     * 宿主 proot：1) jniLibs libproot.so  2) assets→files/engine/proot＋Os.chmod
+     */
+    fun ensureProot(ctx: Context): File {
+        val native = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
+        if (native.isFile && native.length() > 10_000L) {
+            ExecBits.force(native)
+            if (native.canExecute() || native.exists()) {
+                // 同步一份到 files（腳本／除錯）；執行優先回傳 native 路徑
+                val mirror = File(engineRoot(ctx), "proot")
+                if (!mirror.exists() || mirror.length() != native.length()) {
+                    runCatching {
+                        native.copyTo(mirror, overwrite = true)
+                        ExecBits.force(mirror)
+                    }
+                } else {
+                    ExecBits.force(mirror)
+                }
+                return native
+            }
+        }
+        val dest = File(engineRoot(ctx), "proot")
+        copyAsset(ctx, "engine/proot", dest, executable = true)
+        ExecBits.force(dest, 0b111_000_000) // 0700
+        if (!dest.canExecute()) {
+            // 最後手段：再拷到 codeCacheDir（部分機型可執行）
+            val alt = File(ctx.codeCacheDir, "proot").also { it.parentFile?.mkdirs() }
+            dest.copyTo(alt, overwrite = true)
+            ExecBits.force(alt, 0b111_000_000)
+            if (alt.canExecute()) return alt
+        }
+        return dest
     }
 
     private fun copyAsset(ctx: Context, assetPath: String, dest: File, executable: Boolean): File {
@@ -77,8 +113,7 @@ object EngineAssets {
             }
         }
         if (executable) {
-            dest.setReadable(true, false)
-            dest.setExecutable(true, false)
+            ExecBits.force(dest)
         }
         return dest
     }

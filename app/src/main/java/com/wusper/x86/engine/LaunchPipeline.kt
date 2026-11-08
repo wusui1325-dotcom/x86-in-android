@@ -237,7 +237,9 @@ object LaunchPipeline {
         }
 
         val proot = ComponentInstaller.ensureProot(ctx)
+        ExecBits.force(proot)
         ComponentInstaller.ensureWineLaunchScript(ctx)
+        ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), ComponentInstaller.runtimeRoot(ctx))
         val runtime = ComponentInstaller.runtimeRoot(ctx)
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
         val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
@@ -351,8 +353,13 @@ object LaunchPipeline {
             plan.logFile.writeText("UNSUPPORTED: ${plan.kindMessage}\n")
             return Result(false, -1, plan.kindMessage, plan)
         }
-        plan.targetFile.setExecutable(true, false)
-        File(plan.argv[0]).setExecutable(true, false)
+        ExecBits.force(plan.targetFile)
+        val exe = File(plan.argv[0])
+        ExecBits.force(exe)
+        // 若 files/proot 仍不可執行，改走 native libproot
+        if (exe.name == "proot" && !exe.canExecute()) {
+            // 由呼叫端 ensureProot 保證；此處再保險
+        }
         val rc = NativeEngine.nativeExec(
             plan.argv.toTypedArray(),
             plan.cwd,

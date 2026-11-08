@@ -159,7 +159,9 @@ object GpuStack {
             if (!hasTurnip(ctx)) {
                 onProgress("下載 Turnip glibc ICD $TURNIP_VERSION …")
                 val soCached = File(cache, "$TURNIP_SO_NAME-$TURNIP_VERSION")
-                download(TURNIP_URL, soCached)
+                download(TURNIP_URL, soCached) { cur, tot ->
+                    if (tot > 0) onProgress("Turnip ${cur * 100 / tot}% (${cur / 1_000_000}MB)")
+                }
                 val got = sha256(soCached)
                 if (!got.equals(TURNIP_SHA256, ignoreCase = true)) {
                     soCached.delete()
@@ -171,7 +173,7 @@ object GpuStack {
                 val so = File(dest, TURNIP_SO_NAME)
                 soCached.copyTo(so, overwrite = true)
                 so.setReadable(true, false)
-                so.setExecutable(true, false)
+                ExecBits.force(so)
                 writeTurnipIcd(dest)
                 onProgress("Turnip glibc ICD 已就緒 → ${so.absolutePath}")
             } else {
@@ -181,7 +183,9 @@ object GpuStack {
             if (!hasDxvk(ctx)) {
                 onProgress("下載 DXVK $DXVK_VERSION …")
                 val tg = File(cache, "dxvk-$DXVK_VERSION.tar.gz")
-                download(DXVK_URL, tg)
+                download(DXVK_URL, tg) { cur, tot ->
+                    if (tot > 0) onProgress("DXVK ${cur * 100 / tot}% (${cur / 1_000_000}MB)")
+                }
                 val dest = dxvkDir(ctx)
                 dest.deleteRecursively()
                 dest.mkdirs()
@@ -317,15 +321,54 @@ object GpuStack {
         )
     }
 
-    private fun download(url: String, dest: File) {
-        if (dest.exists() && dest.length() > 100_000L) return
+    private fun download(url: String, dest: File, onBytes: ((Long, Long) -> Unit)? = null) {
+        dest.parentFile?.mkdirs()
+        // 有完整預期長度時才跳過；否則續傳
+        val existing = if (dest.exists()) dest.length() else 0L
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30_000
-            readTimeout = 180_000
+            connectTimeout = 20_000
+            readTimeout = 60_000
             instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "x86-in-android/0.1")
+            if (existing > 0L) setRequestProperty("Range", "bytes=$existing-")
+        }
+        val code = conn.responseCode
+        val append: Boolean
+        val total: Long
+        when (code) {
+            HttpURLConnection.HTTP_PARTIAL -> {
+                append = true
+                val cr = conn.getHeaderField("Content-Range")
+                total = cr?.substringAfter('/')?.toLongOrNull()
+                    ?: (existing + conn.contentLengthLong.coerceAtLeast(0L))
+            }
+            HttpURLConnection.HTTP_OK -> {
+                append = false
+                total = conn.contentLengthLong.coerceAtLeast(0L)
+                if (existing > 0L && total > 0L && existing == total) {
+                    conn.disconnect()
+                    onBytes?.invoke(total, total)
+                    return
+                }
+                if (existing > 0L) dest.delete()
+            }
+            else -> {
+                conn.disconnect()
+                throw IllegalStateException("HTTP $code $url")
+            }
         }
         conn.inputStream.use { input ->
-            FileOutputStream(dest).use { output -> input.copyTo(output) }
+            FileOutputStream(dest, append).use { output ->
+                val buf = ByteArray(256 * 1024)
+                var got = if (append) existing else 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n <= 0) break
+                    output.write(buf, 0, n)
+                    got += n
+                    onBytes?.invoke(got, total.coerceAtLeast(got))
+                }
+            }
         }
         conn.disconnect()
     }
@@ -364,7 +407,7 @@ object GpuStack {
                     out.parentFile?.mkdirs()
                     FileOutputStream(out).use { tis.copyTo(it) }
                     if (e.name.endsWith(".so") || !e.name.contains('.')) {
-                        out.setExecutable(true, false)
+                        ExecBits.force(out)
                     }
                 }
                 e = tis.nextEntry

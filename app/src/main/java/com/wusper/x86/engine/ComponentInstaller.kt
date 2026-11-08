@@ -21,13 +21,25 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object ComponentInstaller {
     private val busy = AtomicBoolean(false)
+    private val cancelRequested = AtomicBoolean(false)
 
     data class Progress(
         val stage: String,
         val current: Long = 0,
         val total: Long = 0,
         val message: String = "",
+        val componentId: String = "",
+        val componentIndex: Int = 0,
+        val componentCount: Int = 0,
     )
+
+    fun requestCancel() {
+        cancelRequested.set(true)
+    }
+
+    fun isBusy(): Boolean = busy.get()
+
+    class CancelledException : Exception("安裝已取消")
 
     fun runtimeRoot(ctx: Context): File =
         File(ctx.filesDir, "engine/runtime").also { it.mkdirs() }
@@ -73,11 +85,12 @@ object ComponentInstaller {
         val rootfs = File(root, "rootfs")
         val wine = File(rootfs, "opt/wine/bin/wine")
         val box = File(rootfs, "usr/local/bin/box64")
-        val proot = File(EngineAssets.engineRoot(ctx), "proot")
+        val prootFiles = File(EngineAssets.engineRoot(ctx), "proot")
+        val prootNative = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
         return wine.exists() && box.exists() &&
             hasElectronOverlay(rootfs) && hasWineAddons(rootfs) &&
             hasTurnipVkDeps(rootfs) &&
-            (proot.exists() || File(root, "bin/proot").exists())
+            (prootNative.exists() || prootFiles.exists() || File(root, "bin/proot").exists())
     }
 
     fun isSoftLegacyReady(ctx: Context): Boolean {
@@ -104,8 +117,11 @@ object ComponentInstaller {
     }
 
     fun ensureProot(ctx: Context): File {
-        val dest = File(EngineAssets.engineRoot(ctx), "proot")
-        return copyAsset(ctx, "engine/proot", dest, executable = true)
+        val proot = EngineAssets.ensureProot(ctx)
+        ExecBits.force(proot)
+        // files 鏡像也 chmod（LaunchPipeline 舊路徑）
+        ExecBits.force(File(EngineAssets.engineRoot(ctx), "proot"))
+        return proot
     }
 
     fun ensureWineLaunchScript(ctx: Context) {
@@ -115,9 +131,9 @@ object ComponentInstaller {
         ctx.assets.open("engine/wine-launch.sh").use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }
-        dest.setExecutable(true, false)
-        File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) it.setExecutable(true, false) }
-        File(rootfs, "usr/bin/xdotool").let { if (it.exists()) it.setExecutable(true, false) }
+        ExecBits.force(dest)
+        File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) ExecBits.force(it) }
+        File(rootfs, "usr/bin/xdotool").let { if (it.exists()) ExecBits.force(it) }
         ensureInputAgent(ctx)
     }
 
@@ -128,14 +144,14 @@ object ComponentInstaller {
         ctx.assets.open("engine/x11-input-agent.sh").use { input ->
             dest.outputStream().use { output -> input.copyTo(output) }
         }
-        dest.setExecutable(true, false)
+        ExecBits.force(dest)
         // 同步一份到 data bind，啟動腳本可 fallback
     }
 
     fun ensureInputAgent(rootfs: File) {
         // install() 無 Context assets 時：若已有檔則 chmod
         val dest = File(rootfs, "usr/local/bin/x11-input-agent.sh")
-        if (dest.exists()) dest.setExecutable(true, false)
+        if (dest.exists()) ExecBits.force(dest)
     }
 
     /**
@@ -146,8 +162,10 @@ object ComponentInstaller {
             return Result.failure(IllegalStateException("組件安裝進行中"))
         }
         try {
+            cancelRequested.set(false)
             ensureProot(ctx)
             if (isReady(ctx)) {
+                ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), runtimeRoot(ctx))
                 ensureWineLaunchScript(ctx)
                 onProgress(Progress("ready", message = "運行時已就緒"))
                 return Result.success(runtimeRoot(ctx))
@@ -175,31 +193,71 @@ object ComponentInstaller {
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }
-            for (i in 0 until arr.length()) {
-                if (stampOnly) break
-                val c = arr.getJSONObject(i)
-                val id = c.getString("id")
-                // 已有基底：略過 rootfs／wine／box64；只抓缺的 overlay
-                if (baseOk && id in setOf("rootfs", "wine", "box64-glibc")) continue
-                if (baseOk && needExtras.isNotEmpty() && id !in needExtras) continue
-                val filename = c.getString("filename")
-                val url = c.getString("url")
-                val expectSha = c.optString("sha256", "")
-                val out = File(cache, filename)
-                onProgress(Progress("download", message = "下載 $id …"))
-                download(url, out) { cur, tot ->
-                    onProgress(Progress("download", cur, tot, "下載 $id"))
+            // 收集待處理組件
+            val jobs = mutableListOf<JSONObject>()
+            if (!stampOnly) {
+                for (i in 0 until arr.length()) {
+                    val c = arr.getJSONObject(i)
+                    val id = c.getString("id")
+                    if (baseOk && id in setOf("rootfs", "wine", "box64-glibc")) continue
+                    if (baseOk && needExtras.isNotEmpty() && id !in needExtras) continue
+                    jobs += c
                 }
-                if (expectSha.isNotBlank()) {
-                    val got = sha256(out)
-                    if (!got.equals(expectSha, ignoreCase = true)) {
-                        out.delete()
-                        return Result.failure(
-                            IllegalStateException("SHA256 不符：$id expect=$expectSha got=$got"),
-                        )
+            }
+            val jobCount = jobs.size
+            // 並行下載（解壓仍循序，避免搶磁碟）
+            val downloaded = java.util.concurrent.ConcurrentHashMap<String, File>()
+            if (jobs.isNotEmpty()) {
+                onProgress(Progress("download", message = "並行下載 ${jobCount} 個組件…", componentCount = jobCount))
+                val pool = java.util.concurrent.Executors.newFixedThreadPool(minOf(4, jobCount.coerceAtLeast(1)))
+                try {
+                    val futs = jobs.mapIndexed { idx, c ->
+                        pool.submit<File> {
+                            checkCancelled()
+                            val id = c.getString("id")
+                            val filename = c.getString("filename")
+                            val url = c.getString("url")
+                            val expectSha = c.optString("sha256", "")
+                            val out = File(cache, filename)
+                            downloadResumable(url, out, expectSha) { cur, tot ->
+                                onProgress(
+                                    Progress(
+                                        "download", cur, tot, "下載 $id",
+                                        componentId = id,
+                                        componentIndex = idx + 1,
+                                        componentCount = jobCount,
+                                    ),
+                                )
+                            }
+                            if (expectSha.isNotBlank()) {
+                                val got = sha256(out)
+                                if (!got.equals(expectSha, ignoreCase = true)) {
+                                    out.delete()
+                                    throw IllegalStateException("SHA256 不符：$id expect=$expectSha got=$got")
+                                }
+                            }
+                            downloaded[id] = out
+                            out
+                        }
                     }
+                    futs.forEach { it.get() }
+                } finally {
+                    pool.shutdownNow()
                 }
-                onProgress(Progress("extract", message = "解壓 $id …"))
+            }
+            // 循序解壓（相依順序照 jobs）
+            for ((idx, c) in jobs.withIndex()) {
+                checkCancelled()
+                val id = c.getString("id")
+                val out = downloaded[id] ?: File(cache, c.getString("filename"))
+                onProgress(
+                    Progress(
+                        "extract", message = "解壓 $id …",
+                        componentId = id,
+                        componentIndex = idx + 1,
+                        componentCount = jobCount,
+                    ),
+                )
                 when (id) {
                     "rootfs" -> extractRootfs(out, File(root, "rootfs"), c.optString("stripPrefix", ""))
                     "wine" -> extractWine(out, File(root, "rootfs/opt"), c)
@@ -224,10 +282,10 @@ object ComponentInstaller {
                     .toString(2),
             )
             // executable bits
-            File(rootfs, "usr/local/bin/box64").setExecutable(true, false)
-            File(rootfs, "opt/wine/bin/wine").setExecutable(true, false)
-            File(rootfs, "usr/bin/Xvfb").setExecutable(true, false)
-            File(rootfs, "usr/bin/xdotool").setExecutable(true, false)
+            ExecBits.force(File(rootfs, "usr/local/bin/box64"))
+            ExecBits.force(File(rootfs, "opt/wine/bin/wine"))
+            ExecBits.force(File(rootfs, "usr/bin/Xvfb"))
+            ExecBits.force(File(rootfs, "usr/bin/xdotool"))
             // 確保 null ALSA
             val asound = File(rootfs, "etc/asound.conf")
             if (!asound.exists()) {
@@ -235,6 +293,8 @@ object ComponentInstaller {
                 asound.writeText("pcm.!default { type null }\nctl.!default { type null }\n")
             }
             ensureWineLaunchScript(ctx)
+            ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), root)
+            ensureProot(ctx)
             onProgress(Progress("ready", message = "運行時安裝完成"))
             return Result.success(root)
         } catch (t: Throwable) {
@@ -244,31 +304,123 @@ object ComponentInstaller {
         }
     }
 
-    private fun download(url: String, dest: File, progress: (Long, Long) -> Unit) {
-        if (dest.exists() && dest.length() > 1_000_000L) {
-            progress(dest.length(), dest.length())
+    private fun checkCancelled() {
+        if (cancelRequested.get()) throw CancelledException()
+    }
+
+    /**
+     * 斷點續傳：已有完整檔（sha 吻合或長度＝Content-Length）則跳過；
+     * 否則 Range 續傳／重下。支援 [requestCancel]。
+     */
+    private fun downloadResumable(
+        url: String,
+        dest: File,
+        expectSha: String,
+        progress: (Long, Long) -> Unit,
+    ) {
+        checkCancelled()
+        if (dest.exists() && dest.length() > 0L) {
+            if (expectSha.isNotBlank()) {
+                val got = runCatching { sha256(dest) }.getOrDefault("")
+                if (got.equals(expectSha, ignoreCase = true)) {
+                    progress(dest.length(), dest.length())
+                    return
+                }
+            }
+        }
+        var attempt = 0
+        var lastErr: Throwable? = null
+        while (attempt < 3) {
+            attempt++
+            checkCancelled()
+            try {
+                downloadOnce(url, dest, progress)
+                return
+            } catch (c: CancelledException) {
+                throw c
+            } catch (t: Throwable) {
+                lastErr = t
+                // 保留部分檔供續傳
+            }
+        }
+        throw lastErr ?: IllegalStateException("下載失敗：$url")
+    }
+
+    private fun downloadOnce(url: String, dest: File, progress: (Long, Long) -> Unit) {
+        dest.parentFile?.mkdirs()
+        val existing = if (dest.exists()) dest.length() else 0L
+        // HEAD：無 sha 時用 Content-Length 判斷是否已完整
+        val remoteLen = runCatching {
+            val c = (URL(url).openConnection() as HttpURLConnection).apply {
+                requestMethod = "HEAD"
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "x86-in-android/0.1")
+            }
+            val cl = c.contentLengthLong
+            c.disconnect()
+            cl
+        }.getOrDefault(-1L)
+        if (existing > 0L && remoteLen > 0L && existing == remoteLen) {
+            progress(existing, remoteLen)
             return
         }
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 30_000
-            readTimeout = 120_000
+            connectTimeout = 20_000
+            readTimeout = 60_000
             instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "x86-in-android/0.1")
+            if (existing > 0L && (remoteLen < 0L || existing < remoteLen)) {
+                setRequestProperty("Range", "bytes=$existing-")
+            }
+        }
+        val code = conn.responseCode
+        val append: Boolean
+        val total: Long
+        when (code) {
+            HttpURLConnection.HTTP_PARTIAL -> {
+                append = true
+                val cr = conn.getHeaderField("Content-Range") // bytes a-b/total
+                total = cr?.substringAfter('/')?.toLongOrNull()
+                    ?: (existing + conn.contentLengthLong.coerceAtLeast(0L))
+            }
+            HttpURLConnection.HTTP_OK -> {
+                // 伺服器忽略 Range → 重頭
+                append = false
+                total = conn.contentLengthLong.coerceAtLeast(0L)
+                if (existing > 0L) dest.delete()
+            }
+            416 -> { // Range Not Satisfiable → 已完整
+                conn.disconnect()
+                progress(existing, existing)
+                return
+            }
+            else -> {
+                conn.disconnect()
+                throw IllegalStateException("HTTP $code for $url")
+            }
         }
         conn.inputStream.use { input ->
-            val total = conn.contentLengthLong.coerceAtLeast(0L)
-            FileOutputStream(dest).use { output ->
+            FileOutputStream(dest, append).use { output ->
                 val buf = ByteArray(256 * 1024)
-                var got = 0L
+                var got = if (append) existing else 0L
                 while (true) {
+                    checkCancelled()
                     val n = input.read(buf)
                     if (n <= 0) break
                     output.write(buf, 0, n)
                     got += n
-                    progress(got, total)
+                    progress(got, total.coerceAtLeast(got))
                 }
             }
         }
         conn.disconnect()
+    }
+
+    /** @deprecated 內部改走 downloadResumable */
+    private fun download(url: String, dest: File, progress: (Long, Long) -> Unit) {
+        downloadResumable(url, dest, "", progress)
     }
 
     private fun extractRootfs(archive: File, dest: File, stripPrefix: String) {
@@ -312,7 +464,7 @@ object ComponentInstaller {
             ?: throw IllegalStateException("wcp 內找不到 box64")
         val dest = File(binDir, "box64")
         box.copyTo(dest, overwrite = true)
-        dest.setExecutable(true, false)
+        ExecBits.force(dest)
         tmp.deleteRecursively()
     }
 
@@ -343,7 +495,7 @@ object ComponentInstaller {
                                 out.parentFile?.mkdirs()
                                 FileOutputStream(out).use { fos -> tis.copyTo(fos) }
                                 if (entry.mode and 0b001001001 != 0) {
-                                    out.setExecutable(true, false)
+                                    ExecBits.force(out)
                                 }
                             }
                             entry = tis.nextEntry
@@ -376,7 +528,7 @@ object ComponentInstaller {
                 FileOutputStream(dest).use { output -> input.copyTo(output) }
             }
         }
-        if (executable) dest.setExecutable(true, false)
+        if (executable) ExecBits.force(dest)
         return dest
     }
 

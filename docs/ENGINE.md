@@ -23,3 +23,9 @@
 1. 選 `.exe` → 日誌含 `啟動 Winlator Java X`／`INPROCESS_X_OK`（客體 gpu-stack.log）。
 2. 不應再出現 GpuStack 路徑的 `X_PROTOCOL_STUB=xvfb`。
 3. Surface 有幀（客體窗口或 stub 至首幀）。
+
+## proot 可執行（0.1.16）
+
+- 宿主 `proot` 以 `jniLibs/arm64-v8a/libproot.so` 為準（`nativeLibraryDir`，避開 filesDir `execv EACCES`）
+- 落地後一律 `Os.chmod`（[ExecBits]）；安裝完成掃描 wine／box64／腳本
+- 首次下載：並行＋斷點續傳＋進度條＋可取消

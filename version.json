@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.15",
-  "versionCode": 16,
-  "notes": "0.1.15: WinHandler 級輸入（相對滑鼠／雙指・長按右鍵／滾輪／可選手把）"
+  "versionName": "0.1.16",
+  "versionCode": 17,
+  "notes": "0.1.16: 修 proot execv EACCES（libproot.so／Os.chmod）；首次下載進度／取消／並行斷點"
 }

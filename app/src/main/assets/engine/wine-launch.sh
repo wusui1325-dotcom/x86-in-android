@@ -230,10 +230,10 @@ else
   log "WARN: x64lib stamp missing (want bookworm libgcc). Reinstall runtime recommended."
 fi
 
-# 0.1.37: Box64 wine64k-align stamp (DOS 0x10000:0x10000 + low 0x100000:0x30000000)
+# 0.1.38: Box64 wine64k stamp (align-0x100000) + runtime hole-fit for mid prereserve
 BOX64_WINE64K_STAMP=/usr/local/bin/.box64-wine64k-stamp
-if [ ! -f "$BOX64_WINE64K_STAMP" ] || ! grep -q 'wine64k-align-0x100000' "$BOX64_WINE64K_STAMP" 2>/dev/null; then
-  log "FATAL: box64 wine64k-align-0x100000 stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
+if [ ! -f "$BOX64_WINE64K_STAMP" ] || ! grep -qE 'wine64k-align-0x100000|wine64k-holefit-0x100000' "$BOX64_WINE64K_STAMP" 2>/dev/null; then
+  log "FATAL: box64 wine64k-align/holefit stamp missing ($BOX64_WINE64K_STAMP). Reinstall runtime (Box64-0.4.4-glibc-wine64k)."
   exit 127
 fi
 log "BOX64_WINE64K_STAMP=$(cat "$BOX64_WINE64K_STAMP" 2>/dev/null)"
@@ -244,11 +244,10 @@ export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 export WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine
 export WINE_REAL=/opt/wine/lib/wine/x86_64-unix/wine
 export WINELOADERNOEXEC=1
-# Wine11 + Box64：unset 讓 Box64 用內建表（0.1.37：DOS 0x10000:0x10000 + low 0x100000:0x30000000 + hi）
-# 空字串 WINEPRELOADRESERVE="" 會走 get_prereserve 特例；勿 export 空值
-if [ -z "${WINEPRELOADRESERVE+x}" ] || [ -z "${WINEPRELOADRESERVE}" ]; then
-  unset WINEPRELOADRESERVE || true
-fi
+# 0.1.38: mid 0x100000:0x30000000 often silently dropped under 39-bit/proot
+# (Box64 isBlockFree fails; "is not free" only prints when WINEPRELOADRESERVE parses).
+# Tiny env enables warnings; hole-fit patches mid addr/size to a free hole.
+export WINEPRELOADRESERVE="${WINEPRELOADRESERVE:-100000-1}"
 # Winlator 同款：關閉 MMAP32，讓 39-bit VA 下 prereserve／mmap 行為較穩
 export BOX64_MMAP32=0
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
@@ -297,6 +296,168 @@ export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
 export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
+# ---- 0.1.38 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
+# Evidence (0.1.37): asset table IS {0x100000,0x30000000} but runtime only prints
+# DOS+hi; mid removed silently when 768MiB hole is not free under 39-bit VA.
+box64_find_prereserve_mid_off() {
+  python3 - "$1" <<'PY'
+import sys
+from pathlib import Path
+data = Path(sys.argv[1]).read_bytes()
+dos = (0x10000).to_bytes(8,"little") + (0x10000).to_bytes(8,"little")
+hi = (0x7f000000).to_bytes(8,"little") + (0x3000000).to_bytes(8,"little")
+idx = 0
+found = []
+while True:
+    i = data.find(dos, idx)
+    if i < 0:
+        break
+    if data[i+32:i+48] == hi:
+        found.append(i)
+    idx = i + 1
+if len(found) != 1:
+    sys.exit(2)
+base = found[0]
+print(base + 16, base + 24)
+PY
+}
+
+box64_patch_prereserve_mid() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import struct, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+addr = int(sys.argv[2], 0)
+size = int(sys.argv[3], 0)
+data = bytearray(path.read_bytes())
+dos = (0x10000).to_bytes(8,"little") + (0x10000).to_bytes(8,"little")
+hi = (0x7f000000).to_bytes(8,"little") + (0x3000000).to_bytes(8,"little")
+idx = 0
+found = []
+while True:
+    i = data.find(dos, idx)
+    if i < 0:
+        break
+    if data[i+32:i+48] == hi:
+        found.append(i)
+    idx = i + 1
+if len(found) != 1:
+    raise SystemExit("prereserve table not unique: %r" % (found,))
+base = found[0]
+struct.pack_into("<QQ", data, base + 16, addr, size)
+path.write_bytes(data)
+print("patched mid -> %#x:%#x @ file_off %#x" % (addr, size, base + 16))
+PY
+}
+
+box64_probe_mid_done() {
+  local expect="$1"
+  local out=/mnt/data/wine-prereserve-probe.out
+  : > "$out"
+  local oldlog="${BOX64_LOG-}"
+  export BOX64_LOG=1
+  set +e
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine --version >"$out" 2>&1 &
+  local pid=$!
+  local t=0
+  local ok=1
+  while kill -0 "$pid" 2>/dev/null; do
+    if grep -q "WINE prereserve of ${expect}:" "$out" 2>/dev/null; then
+      sleep 0.3
+      if grep -q "WINE prereserve of ${expect}:.* done" "$out" 2>/dev/null; then
+        ok=0
+      fi
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    if grep -q 'WINE prereserve of 0x7f000000' "$out" 2>/dev/null; then
+      if grep -q "WINE prereserve of ${expect}:.* done" "$out" 2>/dev/null; then
+        ok=0
+      fi
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    t=$((t+1))
+    if [ "$t" -ge 5 ]; then
+      kill -KILL "$pid" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  wait "$pid" 2>/dev/null || true
+  "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+  if [ -n "$oldlog" ]; then export BOX64_LOG="$oldlog"; else export BOX64_LOG=0; fi
+  grep -E 'prereserve|Wine64 detected|is not free' "$out" 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+  set -e
+  return $ok
+}
+
+box64_holefit_mid() {
+  local marker=/usr/local/bin/.box64-wine64k-holefit
+  local box=/usr/local/bin/box64
+  if [ ! -x "$box" ]; then
+    log "WARN: holefit skip — no $box"
+    return 0
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "WARN: holefit skip — python3 missing"
+    return 0
+  fi
+  if ! box64_find_prereserve_mid_off "$box" >/tmp/box64-mid-off.txt 2>/dev/null; then
+    log "WARN: holefit skip — cannot locate my_wine_reserve mid in $box"
+    return 0
+  fi
+  local cand_addrs="0x100000 0x800000 0x1000000 0x10000000"
+  local cand_sizes="0x10000000 0x8000000 0x4000000 0x1000000 0x300000"
+  if [ -f "$marker" ]; then
+    # shellcheck disable=SC1090
+    . "$marker" 2>/dev/null || true
+    if [ -n "${HOLEFIT_ADDR:-}" ] && [ -n "${HOLEFIT_SIZE:-}" ]; then
+      log "HOLEFIT reuse marker addr=$HOLEFIT_ADDR size=$HOLEFIT_SIZE"
+      if box64_patch_prereserve_mid "$box" "$HOLEFIT_ADDR" "$HOLEFIT_SIZE" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
+        if box64_probe_mid_done "$HOLEFIT_ADDR"; then
+          log "HOLEFIT ok (cached) WINE prereserve of $HOLEFIT_ADDR:$HOLEFIT_SIZE"
+          export HOLEFIT_ADDR HOLEFIT_SIZE
+          return 0
+        fi
+        log "WARN: holefit marker stale — re-probing"
+      fi
+    fi
+  fi
+  log "HOLEFIT begin (mid silently dropped under 39-bit if 768MiB not free)"
+  local a s
+  for a in $cand_addrs; do
+    for s in $cand_sizes; do
+      python3 - "$a" "$s" <<'PY' || continue
+import sys
+a=int(sys.argv[1],0); s=int(sys.argv[2],0)
+if a & 0xFFFF: sys.exit(1)
+if s & 0xFFFF: sys.exit(1)
+if a < 0x100000: sys.exit(1)
+if a + s > 0x7f000000: sys.exit(1)
+if a + s <= a: sys.exit(1)
+sys.exit(0)
+PY
+      log "HOLEFIT try addr=$a size=$s"
+      if ! box64_patch_prereserve_mid "$box" "$a" "$s" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
+        continue
+      fi
+      if box64_probe_mid_done "$a"; then
+        printf 'HOLEFIT_ADDR=%s\nHOLEFIT_SIZE=%s\n' "$a" "$s" > "$marker"
+        log "HOLEFIT ok addr=$a size=$s (saved $marker)"
+        export HOLEFIT_ADDR="$a" HOLEFIT_SIZE="$s"
+        return 0
+      fi
+    done
+  done
+  log "WARN: HOLEFIT failed all candidates — mid prereserve still missing"
+  return 0
+}
+
+box64_holefit_mid
+
+
+
 # 冒煙 0.1.37：
 # 1) wine.inf 版號（不觸發 wineboot；Wine11 unix stub 無 --version 短路）
 # 2) 短 PE 探測（可選）：wine --version／wineboot；對齊 prereserve；偵測 LdrInitializeThunk SIGSEGV 迴圈
@@ -323,7 +484,7 @@ else
 fi
 
 # PE 短探測：驗證 prereserve + 能否走過 loader（空 prefix 仍可能 wineboot）
-log "WINE_PE_SMOKE begin timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (expect prereserve 0x100000)"
+log "WINE_PE_SMOKE begin timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (expect prereserve mid holefit=${HOLEFIT_ADDR:-0x100000}:${HOLEFIT_SIZE:-?})"
 SMOKE_WINEDEBUG_SAVE="${WINEDEBUG-}"
 SMOKE_PREFIX_SAVE="${WINEPREFIX-}"
 SMOKE_LOG_SAVE="${BOX64_LOG-}"
@@ -414,16 +575,18 @@ log "--- WINE_PE_SMOKE output begin (head) ---"
 head -60 /mnt/data/wine-version.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 log "--- WINE_PE_SMOKE output end ---"
 
-# prereserve 期待：三行（DOS + low 0x100000 + hi）
-if grep -q 'WINE prereserve of 0x100000:0x30000000 done' /mnt/data/wine-version.out 2>/dev/null; then
-  log "WINE_PRERESERVE low=0x100000 OK"
+# prereserve 期待：DOS + mid(holefit) + hi
+EXPECT_MID_ADDR="${HOLEFIT_ADDR:-0x100000}"
+if grep -qE "WINE prereserve of ${EXPECT_MID_ADDR}:0x[0-9a-fA-F]+ done" /mnt/data/wine-version.out 2>/dev/null; then
+  MID_LINE=$(grep -E "WINE prereserve of ${EXPECT_MID_ADDR}:0x[0-9a-fA-F]+ done" /mnt/data/wine-version.out 2>/dev/null | head -1)
+  log "WINE_PRERESERVE mid OK ($MID_LINE)"
 else
-  log "WARN: missing WINE prereserve of 0x100000:0x30000000 done — check stamp wine64k-align-0x100000 / reinstall box64"
+  log "WARN: missing WINE prereserve of ${EXPECT_MID_ADDR}:* done — holefit/stamp; see is not free"
   if grep -q 'prereserve of 0x110000' /mnt/data/wine-version.out 2>/dev/null; then
-    log "HINT: still using old 0x110000 table — cover-install 0.1.37+ and reinstall runtime box64"
+    log "HINT: still using old 0x110000 table — cover-install 0.1.38+ and reinstall runtime box64"
   fi
   if grep -q 'prereserve of .* is not free' /mnt/data/wine-version.out 2>/dev/null; then
-    log "HINT: low prereserve not free under 39-bit VA — ASLR collision"
+    log "HINT: mid prereserve not free under 39-bit VA — holefit should shrink/move; paste probe lines"
   fi
 fi
 if grep -q 'WINE prereserve of 0x10000:0x10000 done' /mnt/data/wine-version.out 2>/dev/null; then
@@ -458,7 +621,7 @@ fi
 # 閘門：必須有版號（inf 或 PE）；PE hang／SIGSEGV 已在上面 FATAL
 if [ "$WV" = "124" ]; then
   log "FATAL: WINE_PE_SMOKE HANG (timeout ${SMOKE_TIMEOUT}s, exit 124)."
-  log "HINT: expect prereserve 0x10000:0x10000 AND 0x100000:0x30000000 AND 0x7f000000:0x3000000"
+  log "HINT: expect prereserve DOS 0x10000:0x10000 + mid holefit + hi 0x7f000000:0x3000000"
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 124

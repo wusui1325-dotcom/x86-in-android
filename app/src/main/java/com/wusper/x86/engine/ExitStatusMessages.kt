@@ -114,16 +114,16 @@ object ExitStatusMessages {
             )
         124 -> (
             "客體退出碼 124＝WINE_PE_SMOKE 逾時。0.1.37+ 版號改讀 wine.inf；PE 探測仍逾時＝loader／wineboot 卡住。" +
-                "請確認 BOX64_WINE64K_STAMP 含 wine64k-align-0x100000，日誌有 prereserve 0x100000:0x30000000。"
+                "請確認日誌有 HOLEFIT ok／WINE prereserve of <addr>:<size> done（0.1.38+ 會自動縮小 mid）。"
             )
         139 -> (
-            "客體退出碼 139＝Wine PE SIGSEGV。0.1.36 常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
-                "Box64 低位預留 0x110000 非 Wine11 64KiB 對齊或 mmap 失敗被丟棄。0.1.37+ 改 0x100000:0x30000000；" +
-                "請蓋裝後讓運行時重抽 box64（stamp wine64k-align-0x100000）。"
+            "客體退出碼 139＝Wine PE SIGSEGV。常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
+                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.38+ hole-fit 會改 addr/size；" +
+                "請蓋裝後看 HOLEFIT ok 與 prereserve mid done。"
             )
         134 -> (
             "客體退出碼 134＝SIGABRT。常見 Wine11 set_mem_area_state granularity_mask assert。" +
-                "0.1.37+ 需 Box64 wine64k-align（DOS 0x10000:0x10000 + low 0x100000）；看 BOX64_WINE64K_STAMP。"
+                "0.1.38+ 需 wine64k-align + hole-fit mid；看 HOLEFIT ok／BOX64_WINE64K_STAMP。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

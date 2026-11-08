@@ -1,3 +1,24 @@
+## 0.1.38 — mid prereserve silently dropped (hole-fit)
+
+**Symptom (0.1.37 Boss):** stamp `wine64k-align-0x100000` installed, hex table in asset is
+`{0x100000,0x30000000}`, but runtime only prints:
+`prereserve 0x10000:0x10000` + `0x7f000000:0x3000000`. **Missing mid.**
+`WINE_PE_SMOKE exit=1`, `WINE_EXIT=1`.
+
+**Root cause:** Box64 `wine_prereserve()` calls `isBlockFree(0x100000, 0x30000000)`.
+Under Android 39-bit VA / proot, that 768MiB hole is often **not free**. On failure it
+`remove_prereserve()` **without logging** when `WINEPRELOADRESERVE` is unset
+(`if(addr>=0x10000)` uses the env-parsed addr, which stays NULL).
+
+**Fix:**
+- Export `WINEPRELOADRESERVE=100000-1` so "is not free" warnings appear
+- Runtime **hole-fit**: probe/patch `my_wine_reserve` mid addr/size in `/usr/local/bin/box64`
+  until `WINE prereserve of <addr>:<size> done` appears; persist `.box64-wine64k-holefit`
+- Do not export empty `WINEPRELOADRESERVE=` from Kotlin
+
+**Retest:** Cover-install 0.1.38 → expect `HOLEFIT ok addr=… size=…`,
+`WINE prereserve of <addr>:<size> done`, then `WINE_START` / frame.
+
 ## 0.1.37 — wineboot LdrInitializeThunk SIGSEGV + log-only Session
 
 **Symptom (0.1.36):** Boss「好像成了／沒畫面／全熒幕都是 log」。`DYNAREC=1`、

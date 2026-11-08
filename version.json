@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.37",
-  "versionCode": 38,
-  "notes": "0.1.37: wineboot LdrInitializeThunk SIGSEGV — Box64 low prereserve 0x110000→0x100000 (Wine11 align); smoke via wine.inf + WINE_PE_SMOKE (SEGV loop→139); quiet BOX64_LOG; Session collapse log while running"
+  "versionName": "0.1.38",
+  "versionCode": 39,
+  "notes": "0.1.38: mid prereserve silently dropped — Box64 isBlockFree fails on 0x100000:0x30000000 under 39-bit/proot with no log when WINEPRELOADRESERVE unset; hole-fit patches mid addr/size until 'prereserve done'; WINEPRELOADRESERVE=100000-1 enables warnings"
 }

@@ -374,9 +374,8 @@ object LaunchPipeline {
             // WINELOADER 必須是帶 wine_main_preload_info 的 x86_64-unix/wine（避 c0000018）
             "WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine",
             "WINELOADERNOEXEC=1",
-            // 0.1.34: Winlator-style; Wine11 granularity needs Box64 wine64k prereserve
+            // 0.1.38: do NOT export empty WINEPRELOADRESERVE — wine-launch hole-fits mid
             "BOX64_MMAP32=0",
-            "WINEPRELOADRESERVE=",
             "WINE_REAL=/opt/wine/lib/wine/x86_64-unix/wine",
             "WINESERVER_REAL=/opt/wine/bin/wineserver",
             "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",

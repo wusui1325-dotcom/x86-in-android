@@ -182,3 +182,8 @@
 
 - 真機 `execve/chmod/chdir … Function not implemented`：舊靜態 proot 經 strip 破壞內嵌 loader，或未帶齊 loader／talloc
 - 改 Termux `proot`＋`loader`＋`libtalloc`＋`libandroid-shmem`；`PROOT_TMP_DIR`→codeCacheDir；bind `/mnt/app` 確保源目錄存在
+
+## 更新 0.1.19 — proot 只從 nativeLibraryDir 執行
+
+- 修 `execv(.../code_cache/proot-bundle/proot) EACCES`：禁止複製到 code_cache／files 再 exec
+- `PROOT_LOADER`／依賴 `.so` 同用 jniLibs 抽出目錄；TMP 仍可 code_cache

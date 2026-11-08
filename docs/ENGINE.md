@@ -41,3 +41,7 @@ Ubuntu Noble **usrmerge**：`bin`→`usr/bin`、`usr/bin/sh`→`dash`。解壓�
 - `proot`（Termux 5.1.107）＋`libexec/proot/loader{,32}`＋`libtalloc.so.2`＋`libandroid-shmem.so`
 - 部署於 `codeCacheDir/proot-bundle`；`PROOT_LOADER`／`LD_LIBRARY_PATH`／`PROOT_TMP_DIR`（可 exec）
 - **禁止 strip** `libproot*.so`（靜態包內嵌 loader 被 strip → ENOSYS）
+
+## proot 執行路徑（0.1.19）
+
+Android `files`／`code_cache` 常 **noexec**。宿主 `libproot.so`／`libprootloader.so`／`libtalloc.so`／`libandroid-shmem.so` **只**從 `applicationInfo.nativeLibraryDir`（jniLibs）`execve`；`PROOT_TMP_DIR` 可放 `codeCacheDir`。

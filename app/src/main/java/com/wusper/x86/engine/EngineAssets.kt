@@ -8,15 +8,15 @@ import java.io.FileOutputStream
 /**
  * 引擎二進位落地。
  *
- * proot 對齊 Termux／Winlator 可用組合：
- * `proot` + `libexec/proot/loader{,32}` + `libtalloc.so.2` + `libandroid-shmem.so`
- * 部署到 [codeCacheDir]（可寫可 exec），設 PROOT_LOADER／LD_LIBRARY_PATH／PROOT_TMP_DIR。
+ * **Android noexec**：`filesDir`／`codeCacheDir` 常不可 exec。
+ * 宿主 `proot`／`loader`／依賴 `.so` **只**從 [Context.getApplicationInfo] 的
+ * `nativeLibraryDir`（jniLibs：`libproot.so`／`libprootloader.so`／`libtalloc.so`／…）啟動。
+ * `PROOT_TMP_DIR` 可放 codeCache（只寫暫存，不 exec）。
  */
 object EngineAssets {
     private const val TAG = "EngineAssets"
     private const val ENGINE_DIR = "engine"
     private const val TESTDATA = "testdata"
-    private const val BUNDLE_ASSET = "engine/proot-bundle"
 
     fun engineRoot(ctx: Context): File =
         File(ctx.filesDir, ENGINE_DIR).also { it.mkdirs() }
@@ -43,11 +43,22 @@ object EngineAssets {
     }
 
     fun ensureBox64(ctx: Context): File {
+        // 宿主 box64 若用於 smoke：優先 native；否則 assets→勿當主路徑 exec
+        val native = File(ctx.applicationInfo.nativeLibraryDir, "libbox64.so")
+        if (native.isFile) {
+            ExecBits.force(native)
+            return native
+        }
         val dest = File(engineRoot(ctx), "box64")
         return copyAsset(ctx, "engine/box64", dest, executable = true)
     }
 
     fun findBox64(ctx: Context): File? {
+        val native = File(ctx.applicationInfo.nativeLibraryDir, "libbox64.so")
+        if (native.isFile) {
+            ExecBits.force(native)
+            return native
+        }
         val ensured = runCatching { ensureBox64(ctx) }.getOrNull()
         if (ensured != null && ensured.exists()) {
             ExecBits.force(ensured)
@@ -57,102 +68,109 @@ object EngineAssets {
     }
 
     data class ProotBundle(
+        /** 必須位於 nativeLibraryDir，可 exec */
         val proot: File,
         val loader: File,
         val loader32: File?,
+        /** 同為 nativeLibraryDir（libtalloc／shmem） */
         val libDir: File,
+        /** 可寫暫存；不必可 exec */
         val tmpDir: File,
         val rootDir: File,
     ) {
         fun envVars(): List<String> {
-            return listOf(
-                "PROOT_TMP_DIR=${tmpDir.absolutePath}",
-                "PROOT_LOADER=${loader.absolutePath}",
-                "LD_LIBRARY_PATH=${libDir.absolutePath}",
-                "PROOT_NO_SECCOMP=1",
-                "TMPDIR=${tmpDir.absolutePath}",
-                "TMP=${tmpDir.absolutePath}",
-                "TEMP=${tmpDir.absolutePath}",
-            ).let { list ->
-                if (loader32 != null && loader32.exists()) {
-                    list + "PROOT_LOADER_32=${loader32.absolutePath}"
-                } else list
+            val lib = libDir.absolutePath
+            return buildList {
+                add("PROOT_TMP_DIR=${tmpDir.absolutePath}")
+                add("PROOT_LOADER=${loader.absolutePath}")
+                add("LD_LIBRARY_PATH=$lib")
+                add("PROOT_NO_SECCOMP=1")
+                add("TMPDIR=${tmpDir.absolutePath}")
+                add("TMP=${tmpDir.absolutePath}")
+                add("TEMP=${tmpDir.absolutePath}")
+                // 清掉可能的 termux-exec 等
+                add("LD_PRELOAD=")
+                if (loader32 != null && loader32.isFile) {
+                    add("PROOT_LOADER_32=${loader32.absolutePath}")
+                }
             }
         }
     }
 
+    /** 僅暫存；不在此放置可執行檔 */
     fun prootTmpDir(ctx: Context): File =
         File(ctx.codeCacheDir, "proot-tmp").also { dir ->
             dir.mkdirs()
             dir.setReadable(true, false)
             dir.setWritable(true, false)
+            // 目錄需可遍歷（x bit on dir ≠ 執行檔）
             dir.setExecutable(true, false)
         }
 
+    /**
+     * 宿主 proot 包：執行檔／loader／.so **只**用 jniLibs→nativeLibraryDir。
+     * 禁止複製到 code_cache／files 再 exec（Android noexec → EACCES 13）。
+     */
     fun ensureProotBundle(ctx: Context): ProotBundle {
-        val root = File(ctx.codeCacheDir, "proot-bundle").also { it.mkdirs() }
-        val wantVer = runCatching {
-            ctx.assets.open("$BUNDLE_ASSET/VERSION").bufferedReader().readText().trim()
-        }.getOrDefault("")
-        val haveVer = File(root, "VERSION").takeIf { it.exists() }?.readText()?.trim().orEmpty()
-        if (wantVer.isNotBlank() && wantVer != haveVer) {
-            root.deleteRecursively()
-            root.mkdirs()
+        val nlib = File(ctx.applicationInfo.nativeLibraryDir)
+        require(nlib.isDirectory) {
+            "nativeLibraryDir 不存在：${nlib.absolutePath}（jniLibs 未打包？）"
         }
 
-        val proot = copyAsset(ctx, "$BUNDLE_ASSET/proot", File(root, "proot"), true)
-        val loader = copyAsset(
-            ctx, "$BUNDLE_ASSET/libexec/proot/loader",
-            File(root, "libexec/proot/loader"), true,
-        )
-        val loader32 = runCatching {
-            copyAsset(
-                ctx, "$BUNDLE_ASSET/libexec/proot/loader32",
-                File(root, "libexec/proot/loader32"), true,
-            )
-        }.getOrNull()
-        val libDir = File(root, "lib").also { it.mkdirs() }
-        copyAsset(ctx, "$BUNDLE_ASSET/lib/libtalloc.so.2", File(libDir, "libtalloc.so.2"), true)
-        copyAsset(ctx, "$BUNDLE_ASSET/lib/libandroid-shmem.so", File(libDir, "libandroid-shmem.so"), true)
-        // soname 相容
-        val tallocLink = File(libDir, "libtalloc.so")
-        if (!tallocLink.exists()) {
-            runCatching {
-                java.nio.file.Files.createSymbolicLink(
-                    tallocLink.toPath(),
-                    java.nio.file.Paths.get("libtalloc.so.2"),
+        val proot = File(nlib, "libproot.so")
+        val loader = File(nlib, "libprootloader.so")
+        val loader32 = File(nlib, "libprootloader32.so").takeIf { it.isFile }
+        val talloc = File(nlib, "libtalloc.so")
+        val shmem = File(nlib, "libandroid-shmem.so")
+
+        fun need(f: File, label: String) {
+            if (!f.isFile || f.length() < 1000L) {
+                throw IllegalStateException(
+                    "缺 $label：${f.absolutePath}（請確認 jniLibs/arm64-v8a 已打進 APK）",
                 )
-            }.onFailure {
-                File(libDir, "libtalloc.so.2").copyTo(tallocLink, overwrite = true)
             }
+            ExecBits.force(f)
         }
-        if (wantVer.isNotBlank()) File(root, "VERSION").writeText(wantVer + "\n")
+        need(proot, "libproot.so")
+        need(loader, "libprootloader.so")
+        need(talloc, "libtalloc.so")
+        need(shmem, "libandroid-shmem.so")
+        loader32?.let { ExecBits.force(it) }
 
-        // files 鏡像（舊路徑／除錯）
-        val mirror = File(engineRoot(ctx), "proot")
-        proot.copyTo(mirror, overwrite = true)
-        ExecBits.force(mirror)
+        if (!proot.canExecute()) {
+            Log.w(TAG, "libproot.so canExecute=false（仍嘗試 exec；應在 nativeLibraryDir）")
+        }
 
         val tmp = prootTmpDir(ctx)
-        // 清掉殘留壞 loader
+        // 清殘留抽出的 loader 碎片（舊版誤寫入）
         tmp.listFiles()?.forEach { f ->
             if (f.name.startsWith(".proot-") || f.name.contains("loader")) {
                 runCatching { f.delete() }
             }
         }
-
-        ExecBits.force(proot, 0b111_000_000)
-        ExecBits.force(loader, 0b111_000_000)
-        loader32?.let { ExecBits.force(it, 0b111_000_000) }
-        File(libDir, "libtalloc.so.2").let { ExecBits.force(it) }
-        File(libDir, "libandroid-shmem.so").let { ExecBits.force(it) }
+        // 順便清掉舊版誤放在 code_cache 的可執行複本（避免誤用）
+        runCatching {
+            File(ctx.codeCacheDir, "proot-bundle").takeIf { it.exists() }?.let { stale ->
+                Log.i(TAG, "removing stale noexec proot-bundle at ${stale.absolutePath}")
+                stale.deleteRecursively()
+            }
+            File(ctx.codeCacheDir, "proot").takeIf { it.isFile }?.delete()
+        }
 
         Log.i(
             TAG,
-            "proot bundle ready proot=${proot.absolutePath} loader=${loader.absolutePath} " +
-                "lib=${libDir.absolutePath} tmp=${tmp.absolutePath} canExec=${proot.canExecute()}",
+            "proot from nativeLibraryDir proot=${proot.absolutePath} " +
+                "loader=${loader.absolutePath} lib=$nlib tmp=${tmp.absolutePath} " +
+                "canExec=${proot.canExecute()} loaderExec=${loader.canExecute()}",
         )
-        return ProotBundle(proot, loader, loader32, libDir, tmp, root)
+        return ProotBundle(
+            proot = proot,
+            loader = loader,
+            loader32 = loader32,
+            libDir = nlib,
+            tmpDir = tmp,
+            rootDir = nlib,
+        )
     }
 
     fun ensureProot(ctx: Context): File = ensureProotBundle(ctx).proot

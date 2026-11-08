@@ -5,7 +5,7 @@
 - **不是** Winlator 假桌面殼
 - 啟動：進 App → 選裝置上的 `.exe` 或 App 私有工作區 → 全螢幕直開
 - Package：`com.wusper.x86`
-- 工程：Compose Material3 殼＋P0 啟動管線；**已內嵌 Box64**（Android x86_64 ELF 驗收，見 docs/ENGINE.md）
+- 工程：Compose Material3；內嵌 Box64（Android ELF）；**PE／.exe → PRoot＋Wine**（首次下載 rootfs／Wine／glibc Box64，見 docs/ENGINE.md）
 
 詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)。
 

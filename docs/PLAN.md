@@ -239,3 +239,8 @@ com.wusper.x86（暫名）
 ### Boss 效能硬指標（2026-11-09）
 
 - 同機同負載：Box64 ≥ 原生 arm64 **70%**（CPU 微基準；見 docs/ENGINE.md）。
+
+### 進度（2026-11-09 ~00:15 HKT）
+
+- Boss：要能跑真實 x86 應用（例 Codex），非 hello。
+- 已接：選 exe→工作區→Wine／PRoot 鏈；組件首次下載；GUI／X11 與 Codex 本體仍待真機驗證。

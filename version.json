@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.2",
-  "versionCode": 3,
-  "notes": "0.1.2: 內嵌 Box64+Dynarec；Android x86_64 驗收；performance preset；microbench 70% 對照"
+  "versionName": "0.1.3",
+  "versionCode": 4,
+  "notes": "0.1.3: PE→PRoot+Wine+glibc Box64（首次下載運行時）；選 exe 進工作區啟動；whoami 煙測"
 }

@@ -1,0 +1,31 @@
+{
+  "runtimeId": "wine-proot-v1",
+  "approxDownloadBytes": 170000000,
+  "components": [
+    {
+      "id": "rootfs",
+      "filename": "ubuntu-noble-aarch64-pd.tar.xz",
+      "url": "https://github.com/termux/proot-distro/releases/download/v4.18.0/ubuntu-noble-aarch64-pd-v4.18.0.tar.xz",
+      "sha256": "",
+      "extract": "rootfs",
+      "stripPrefix": "ubuntu-noble-aarch64"
+    },
+    {
+      "id": "wine",
+      "filename": "wine-11.21-staging-amd64.tar.xz",
+      "url": "https://github.com/Kron4ek/Wine-Builds/releases/download/11.21/wine-11.21-staging-amd64.tar.xz",
+      "sha256": "d0e685787b1079f12003f60f3f6e029658226bf6c350dce648be07db1f5e3e20",
+      "extract": "rootfs/opt",
+      "renameFrom": "wine-11.21-staging-amd64",
+      "renameTo": "wine"
+    },
+    {
+      "id": "box64-glibc",
+      "filename": "Box64-0.4.3.wcp",
+      "url": "https://github.com/The412Banner/Nightlies/releases/download/Box64/Box64-0.4.3.wcp",
+      "sha256": "",
+      "extract": "rootfs/usr/local/bin",
+      "pickFiles": ["box64"]
+    }
+  ]
+}

@@ -37,10 +37,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
+import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.ui.theme.X86Theme
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import java.io.File
 
 class SessionActivity : ComponentActivity() {
@@ -62,6 +65,7 @@ class SessionActivity : ComponentActivity() {
         val forceSmoke = intent.getBooleanExtra(EXTRA_FORCE_SMOKE, false)
         val forceGuestSmoke = intent.getBooleanExtra(EXTRA_FORCE_GUEST_SMOKE, false)
         val preferAndroidGuest = intent.getBooleanExtra(EXTRA_PREFER_ANDROID_GUEST, true)
+        val forcePeSmoke = intent.getBooleanExtra(EXTRA_FORCE_PE_SMOKE, false)
         val ws = WorkspaceStore.listWorkspaces(this).firstOrNull { it.id == workspaceId }
 
         setContent {
@@ -70,14 +74,14 @@ class SessionActivity : ComponentActivity() {
                 var status by remember { mutableStateOf("初始化") }
                 var logFile by remember { mutableStateOf<File?>(null) }
 
-                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest) {
+                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke) {
                     if (ws == null) {
                         status = "錯誤"
                         logText += "找不到工作區：$workspaceId\n"
                         return@LaunchedEffect
                     }
                     EngineForegroundService.start(this@SessionActivity, ws.displayName)
-                    val plan = LaunchPipeline.prepare(
+                    var plan = LaunchPipeline.prepare(
                         ctx = this@SessionActivity,
                         ws = ws,
                         targetPath = ws.sourceExePath,
@@ -85,15 +89,35 @@ class SessionActivity : ComponentActivity() {
                         forceHostSmoke = forceSmoke,
                         forceGuestSmoke = forceGuestSmoke,
                         preferAndroidGuest = preferAndroidGuest,
+                        forcePeSmoke = forcePeSmoke,
                     )
                     logFile = plan.logFile
                     logText += "目標：${plan.targetFile.absolutePath}\n"
                     logText += "類型：${plan.kindMessage}\n"
                     logText += "模式：${plan.mode}\n"
+                    if (plan.needsRuntimeInstall || (plan.mode == LaunchPipeline.Mode.WineProot && !ComponentInstaller.isReady(this@SessionActivity))) {
+                        status = "安裝運行時"
+                        logText += "首次 PE 啟動：下載 Wine／Ubuntu rootfs／glibc Box64（約 160MB+）…\n"
+                        val install = withContext(Dispatchers.IO) {
+                            ComponentInstaller.install(this@SessionActivity) { p ->
+                                // 進度回寫在 IO；簡化：只記 message
+                            }
+                        }
+                        if (install.isFailure) {
+                            status = "安裝失敗"
+                            logText += "安裝失敗：${install.exceptionOrNull()?.message}\n"
+                            EngineForegroundService.stop(this@SessionActivity)
+                            return@LaunchedEffect
+                        }
+                        logText += "運行時就緒，重建啟動計畫…\n"
+                        plan = LaunchPipeline.buildWineProotPlan(
+                            this@SessionActivity, ws, plan.targetFile, plan.logFile,
+                        )
+                        logText += "模式：${plan.mode}\n${plan.kindMessage}\n"
+                    }
                     val result = LaunchPipeline.start(plan)
                     status = if (result.ok) "執行中 pid=${result.pid}" else "失敗"
                     logText += result.message + "\n"
-                    // 輪詢進程與日誌
                     while (true) {
                         delay(400)
                         val wait = NativeEngine.nativeWaitNonBlocking()
@@ -102,22 +126,11 @@ class SessionActivity : ComponentActivity() {
                             logText = lf.readText()
                         }
                         if (wait != 1) {
-                            status = if (wait == 0 && result.ok) {
-                                // 可能已結束
-                                "已結束"
-                            } else if (wait < 0) {
-                                "已結束 code=$wait"
-                            } else {
-                                status
-                            }
-                            if (wait != 1) {
-                                // wait==0 且剛啟動可能尚未 fork 完成；若 result.ok 且 pid 仍在則繼續
-                                val pid = NativeEngine.nativeRunningPid()
-                                if (pid <= 0) {
-                                    status = if (wait < 0) "已結束 ($wait)" else "已結束"
-                                    EngineForegroundService.stop(this@SessionActivity)
-                                    break
-                                }
+                            val pid = NativeEngine.nativeRunningPid()
+                            if (pid <= 0) {
+                                status = if (wait < 0) "已結束 ($wait)" else "已結束"
+                                EngineForegroundService.stop(this@SessionActivity)
+                                break
                             }
                         }
                     }
@@ -218,5 +231,6 @@ class SessionActivity : ComponentActivity() {
         const val EXTRA_FORCE_SMOKE = "force_smoke"
         const val EXTRA_FORCE_GUEST_SMOKE = "force_guest_smoke"
         const val EXTRA_PREFER_ANDROID_GUEST = "prefer_android_guest"
+        const val EXTRA_FORCE_PE_SMOKE = "force_pe_smoke"
     }
 }

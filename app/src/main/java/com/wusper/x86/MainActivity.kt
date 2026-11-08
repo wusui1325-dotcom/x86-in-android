@@ -170,6 +170,16 @@ class MainActivity : ComponentActivity() {
                             )
                             tick++
                         },
+                        onPeSmoke = {
+                            startSmoke(
+                                displayName = "wine_whoami.exe",
+                                path = "asset://testdata/wine_whoami.exe",
+                                forceHost = false,
+                                forceGuest = false,
+                                forcePe = true,
+                            )
+                            tick++
+                        },
                     )
                 }
             }
@@ -199,6 +209,7 @@ class MainActivity : ComponentActivity() {
         forceHost: Boolean,
         forceGuest: Boolean,
         preferAndroidGuest: Boolean = true,
+        forcePe: Boolean = false,
     ) {
         val smoke = DeviceExe(displayName = displayName, path = path, uriString = null)
         val ws = WorkspaceStore.ensureWorkspace(this, smoke)
@@ -208,7 +219,8 @@ class MainActivity : ComponentActivity() {
                 .putExtra(SessionActivity.EXTRA_WORKSPACE_ID, ws.id)
                 .putExtra(SessionActivity.EXTRA_FORCE_SMOKE, forceHost)
                 .putExtra(SessionActivity.EXTRA_FORCE_GUEST_SMOKE, forceGuest)
-                .putExtra(SessionActivity.EXTRA_PREFER_ANDROID_GUEST, preferAndroidGuest),
+                .putExtra(SessionActivity.EXTRA_PREFER_ANDROID_GUEST, preferAndroidGuest)
+                .putExtra(SessionActivity.EXTRA_FORCE_PE_SMOKE, forcePe),
         )
     }
 
@@ -236,6 +248,7 @@ private fun HomeScreen(
     onGuestLinuxSmoke: () -> Unit,
     onMicrobenchNative: () -> Unit,
     onMicrobenchBox64: () -> Unit,
+    onPeSmoke: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -278,6 +291,10 @@ private fun HomeScreen(
                 AssistChip(
                     onClick = onMicrobenchBox64,
                     label = { Text(stringResource(R.string.btn_microbench_box64)) },
+                )
+                AssistChip(
+                    onClick = onPeSmoke,
+                    label = { Text(stringResource(R.string.btn_pe_smoke)) },
                 )
             }
         }

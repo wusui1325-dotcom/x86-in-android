@@ -7,11 +7,10 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * 真啟動管線（P0）：
- * 1) 解析目標檔（工作區 exe／URI／內建測試 ELF）
- * 2) probe 類型
- * 3) AArch64 → 直接 exec；x86_64 → box64；PE → 回報需 Wine
- * 4) stdout/stderr → workspace/logs/session.log
+ * 真啟動管線：
+ * - AArch64 ELF → 直接 exec
+ * - x86_64 ELF → Box64（APK 內 ANDROID=1 或 runtime glibc）
+ * - PE／.exe → PRoot＋glibc rootfs＋glibc Box64＋Wine（組件首次下載）
  */
 object LaunchPipeline {
 
@@ -24,11 +23,14 @@ object LaunchPipeline {
         val mode: Mode,
         val targetFile: File,
         val env: List<String> = emptyList(),
+        /** PE 啟動前若為 true，Session 需先跑 ComponentInstaller */
+        val needsRuntimeInstall: Boolean = false,
     )
 
     enum class Mode {
         HostExec,
         Box64,
+        WineProot,
         Unsupported,
     }
 
@@ -46,8 +48,8 @@ object LaunchPipeline {
         targetUri: String?,
         forceHostSmoke: Boolean = false,
         forceGuestSmoke: Boolean = false,
-        /** true＝優先 Android x86_64 測試 ELF；false＝Linux glibc 靜態 hello_x86_64 */
         preferAndroidGuest: Boolean = true,
+        forcePeSmoke: Boolean = false,
     ): Plan {
         val logDir = File(ws.dir, "logs").also { it.mkdirs() }
         val logFile = File(logDir, "session.log")
@@ -55,14 +57,12 @@ object LaunchPipeline {
         if (forceHostSmoke) {
             val bins = EngineAssets.ensureTestBinaries(ctx)
             val host = bins.hostArm64
-            val msg = NativeEngine.nativeProbeMessage(host.absolutePath)
-            val kind = BinaryKind.fromNative(NativeEngine.nativeProbe(host.absolutePath))
             return Plan(
                 argv = listOf(host.absolutePath),
                 cwd = ws.dataDir.absolutePath,
                 logFile = logFile,
-                kind = kind,
-                kindMessage = msg,
+                kind = BinaryKind.fromNative(NativeEngine.nativeProbe(host.absolutePath)),
+                kindMessage = NativeEngine.nativeProbeMessage(host.absolutePath),
                 mode = Mode.HostExec,
                 targetFile = host,
             )
@@ -75,7 +75,11 @@ object LaunchPipeline {
             return planForX86(ctx, guest, logFile, ws.dataDir.absolutePath)
         }
 
-        // forceMicrobench 經 Session EXTRA：targetPath 以 asset://microbench 區分
+        if (forcePeSmoke) {
+            val pe = ensurePeSmokeAsset(ctx, ws)
+            return planForPe(ctx, ws, pe, logFile)
+        }
+
         if (targetPath == "asset://testdata/microbench_host_arm64") {
             val bins = EngineAssets.ensureTestBinaries(ctx)
             val host = bins.microbenchHostArm64
@@ -112,15 +116,7 @@ object LaunchPipeline {
                 targetFile = local,
             )
             BinaryKind.ElfX86_64 -> planForX86(ctx, local, logFile, ws.dataDir.absolutePath)
-            BinaryKind.Pe -> Plan(
-                argv = emptyList(),
-                cwd = ws.dataDir.absolutePath,
-                logFile = logFile,
-                kind = kind,
-                kindMessage = msg + " · Wine 屬 P2",
-                mode = Mode.Unsupported,
-                targetFile = local,
-            )
+            BinaryKind.Pe -> planForPe(ctx, ws, local, logFile)
             else -> Plan(
                 argv = emptyList(),
                 cwd = ws.dataDir.absolutePath,
@@ -160,14 +156,97 @@ object LaunchPipeline {
                 cwd = cwd,
                 logFile = logFile,
                 kind = kind,
-                kindMessage = msg + " · Box64 抽出失敗（見 docs/ENGINE.md）",
+                kindMessage = msg + " · Box64 抽出失敗",
                 mode = Mode.Unsupported,
                 targetFile = local,
             )
         }
     }
 
+    private fun planForPe(
+        ctx: Context,
+        ws: Workspace,
+        pe: File,
+        logFile: File,
+    ): Plan {
+        // 保證工作區內有 app.exe
+        val staged = File(ws.exeDir, "app.exe")
+        if (pe.absolutePath != staged.absolutePath) {
+            pe.copyTo(staged, overwrite = true)
+        }
+        val ready = ComponentInstaller.isReady(ctx)
+        val msg = NativeEngine.nativeProbeMessage(staged.absolutePath)
+        if (!ready) {
+            return Plan(
+                argv = emptyList(),
+                cwd = ws.dataDir.absolutePath,
+                logFile = logFile,
+                kind = BinaryKind.Pe,
+                kindMessage = msg + " · 需安裝 Wine／rootfs 運行時（約 160MB+）",
+                mode = Mode.WineProot,
+                targetFile = staged,
+                needsRuntimeInstall = true,
+            )
+        }
+        return buildWineProotPlan(ctx, ws, staged, logFile)
+    }
+
+    fun buildWineProotPlan(
+        ctx: Context,
+        ws: Workspace,
+        pe: File,
+        logFile: File,
+    ): Plan {
+        val proot = ComponentInstaller.ensureProot(ctx)
+        val runtime = ComponentInstaller.runtimeRoot(ctx)
+        val rootfs = File(runtime, "rootfs")
+        val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
+        val tmp = File(ctx.filesDir, "engine/proot-tmp").also { it.mkdirs() }
+        val wineBin = File(rootfs, "opt/wine/bin/wine")
+        val box64 = File(rootfs, "usr/local/bin/box64")
+        // 客體內路徑
+        val guestExe = "/mnt/app/app.exe"
+        val argv = listOf(
+            proot.absolutePath,
+            "--kill-on-exit",
+            "-r", rootfs.absolutePath,
+            "-b", "/dev",
+            "-b", "/proc",
+            "-b", "${ws.exeDir.absolutePath}:/mnt/app",
+            "-b", "${prefix.absolutePath}:/home/xuser/.wine",
+            "-b", "${ws.dataDir.absolutePath}:/mnt/data",
+            "-w", "/mnt/app",
+            box64.absolutePath,
+            wineBin.absolutePath,
+            guestExe,
+        )
+        val env = mutableListOf(
+            "PROOT_TMP_DIR=${tmp.absolutePath}",
+            "HOME=/home/xuser",
+            "WINEPREFIX=/home/xuser/.wine",
+            "WINEDEBUG=-all",
+            "WINEARCH=win64",
+            "BOX64_PATH=/opt/wine/bin",
+        )
+        env += Box64Preset.performance.toList()
+        return Plan(
+            argv = argv,
+            cwd = ws.dataDir.absolutePath,
+            logFile = logFile,
+            kind = BinaryKind.Pe,
+            kindMessage = "Windows PE · PRoot→Box64→Wine ${pe.name}",
+            mode = Mode.WineProot,
+            targetFile = pe,
+            env = env,
+            needsRuntimeInstall = false,
+        )
+    }
+
     fun start(plan: Plan): Result {
+        if (plan.needsRuntimeInstall) {
+            plan.logFile.writeText("NEED_RUNTIME: ${plan.kindMessage}\n")
+            return Result(false, -1, plan.kindMessage, plan)
+        }
         if (plan.mode == Mode.Unsupported || plan.argv.isEmpty()) {
             plan.logFile.writeText("UNSUPPORTED: ${plan.kindMessage}\n")
             return Result(false, -1, plan.kindMessage, plan)
@@ -191,16 +270,34 @@ object LaunchPipeline {
         NativeEngine.nativeStop()
     }
 
+    private fun ensurePeSmokeAsset(ctx: Context, ws: Workspace): File {
+        val staged = File(ws.exeDir, "app.exe")
+        ctx.assets.open("testdata/wine_whoami.exe").use { input ->
+            FileOutputStream(staged).use { output -> input.copyTo(output) }
+        }
+        return staged
+    }
+
     private fun resolveTargetFile(
         ctx: Context,
         ws: Workspace,
         targetPath: String?,
         targetUri: String?,
     ): File {
-        val staged = File(ws.exeDir, "payload.bin")
+        val staged = File(ws.exeDir, "app.exe")
         if (staged.exists() && staged.length() > 0) return staged
 
-        if (!targetPath.isNullOrBlank() && !targetPath.startsWith("content:") && !targetPath.startsWith("asset:")) {
+        // 兼容舊 payload.bin
+        val legacy = File(ws.exeDir, "payload.bin")
+        if (legacy.exists() && legacy.length() > 0) {
+            legacy.copyTo(staged, overwrite = true)
+            return staged
+        }
+
+        if (!targetPath.isNullOrBlank() &&
+            !targetPath.startsWith("content:") &&
+            !targetPath.startsWith("asset:")
+        ) {
             val f = File(targetPath)
             if (f.exists()) {
                 f.copyTo(staged, overwrite = true)

@@ -63,24 +63,23 @@ object WorkspaceStore {
         }.sortedByDescending { it.lastLaunchedAt.takeIf { t -> t > 0 } ?: it.createdAt }
     }
 
-    /** 已有工作區的來源 exe 路徑／檔名集合（用來從裝置 exe 列表隱藏）。 */
+    /** 已有工作區的來源 exe **路徑**集合（僅路徑；同檔名不同路徑不互相隱藏）。 */
     fun coveredExeKeys(ctx: Context): Set<String> {
         val keys = mutableSetOf<String>()
         for (ws in listWorkspaces(ctx)) {
             if (ws.sourceExePath.isNotBlank()) keys += normalizeKey(ws.sourceExePath)
-            if (ws.sourceExeName.isNotBlank()) keys += normalizeKey(ws.sourceExeName)
         }
         return keys
     }
 
     /**
-     * 若已有同名／同路徑工作區，隱藏對應 exe，只顯示工作區入口。
+     * 僅隱藏「同一絕對路徑／URI」已有工作區的 exe；同檔名不同路徑仍顯示。
      */
     fun filterVisibleExes(ctx: Context, exes: List<DeviceExe>): List<DeviceExe> {
         val covered = coveredExeKeys(ctx)
         if (covered.isEmpty()) return exes
         return exes.filterNot { exe ->
-            normalizeKey(exe.path) in covered || normalizeKey(exe.displayName) in covered
+            normalizeKey(exe.path) in covered
         }
     }
 
@@ -117,11 +116,28 @@ object WorkspaceStore {
 
     fun findByExe(ctx: Context, exe: DeviceExe): Workspace? {
         val keyPath = normalizeKey(exe.path)
-        val keyName = normalizeKey(exe.displayName)
+        if (keyPath.isBlank()) return null
         return listWorkspaces(ctx).firstOrNull {
-            normalizeKey(it.sourceExePath) == keyPath ||
-                (keyName.isNotBlank() && normalizeKey(it.sourceExeName) == keyName)
+            normalizeKey(it.sourceExePath) == keyPath
         }
+    }
+
+    /**
+     * 刪除工作區目錄（含 wineprefix／logs／exe 副本）。
+     * [deleteFiles]=false 時僅從索引移除 meta（保留 dir 於磁碟，進階用）。
+     * 預設刪除 App 私有 files/workspaces/<id>；**不**動 files/engine。
+     */
+    fun deleteWorkspace(ctx: Context, ws: Workspace, deleteFiles: Boolean = true): Boolean {
+        return runCatching {
+            if (deleteFiles) {
+                if (ws.dir.exists()) ws.dir.deleteRecursively()
+            } else {
+                File(ws.dir, META).delete()
+            }
+            // 同步裝置 exe 列表：保留 picked（用戶可再啟動成新工作區）
+            touchIndex(ctx)
+            true
+        }.getOrDefault(false)
     }
 
     fun addPickedExe(ctx: Context, exe: DeviceExe) {

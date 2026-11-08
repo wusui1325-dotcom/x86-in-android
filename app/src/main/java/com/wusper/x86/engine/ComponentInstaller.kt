@@ -25,6 +25,9 @@ object ComponentInstaller {
     private val busy = AtomicBoolean(false)
     private val cancelRequested = AtomicBoolean(false)
 
+    /** 首次下載必須有非空 sha256 的組件 */
+    private val CRITICAL_SHA_IDS = setOf("rootfs", "box64-glibc", "wine")
+
     data class Progress(
         val stage: String,
         val current: Long = 0,
@@ -42,6 +45,54 @@ object ComponentInstaller {
     fun isBusy(): Boolean = busy.get()
 
     class CancelledException : Exception("安裝已取消")
+
+    /** 統一文案：請用戶在 App 內重裝，勿提內部路徑。 */
+    const val USER_HINT_REINSTALL_RUNTIME = "請在 App 內點「重裝運行時」後再試（不會刪除工作區）。"
+
+    /**
+     * 清除引擎運行時（files/engine/runtime）與下載快取（files/engine/cache）。
+     * **不**刪除 files/workspaces。回傳清除的位元組估算。
+     */
+    fun clearRuntime(ctx: Context, alsoClearCache: Boolean = true): Long {
+        var freed = 0L
+        val runtime = File(ctx.filesDir, "engine/runtime")
+        if (runtime.exists()) {
+            freed += dirSize(runtime)
+            runtime.deleteRecursively()
+        }
+        if (alsoClearCache) {
+            val cache = File(ctx.filesDir, "engine/cache")
+            if (cache.exists()) {
+                freed += dirSize(cache)
+                cache.deleteRecursively()
+            }
+        }
+        // GpuStack 組件（Turnip／DXVK）一併清，避免半殘
+        val gpu = File(ctx.filesDir, "engine/gpu-stack")
+        if (gpu.exists()) {
+            freed += dirSize(gpu)
+            gpu.deleteRecursively()
+        }
+        return freed
+    }
+
+    fun approxDownloadBytes(ctx: Context): Long =
+        runCatching {
+            JSONObject(ctx.assets.open("engine/components.json").bufferedReader().readText())
+                .optLong("approxDownloadBytes", 450_000_000L)
+        }.getOrDefault(450_000_000L)
+
+    fun approxDownloadMbLabel(ctx: Context): String {
+        val mb = (approxDownloadBytes(ctx) + 500_000) / 1_000_000
+        return "約 ${mb}MB"
+    }
+
+    private fun dirSize(f: File): Long {
+        if (!f.exists()) return 0L
+        if (f.isFile) return f.length()
+        return f.listFiles()?.sumOf { dirSize(it) } ?: 0L
+    }
+
 
     fun runtimeRoot(ctx: Context): File =
         File(ctx.filesDir, "engine/runtime").also { it.mkdirs() }
@@ -324,6 +375,11 @@ object ComponentInstaller {
                             val filename = c.getString("filename")
                             val url = c.getString("url")
                             val expectSha = c.optString("sha256", "")
+                            if (id in CRITICAL_SHA_IDS && expectSha.isBlank()) {
+                                throw IllegalStateException(
+                                    "組件 $id 缺少完整性校驗（sha256）。請更新 App 後再裝運行時。",
+                                )
+                            }
                             val out = File(cache, filename)
                             downloadResumable(url, out, expectSha) { cur, tot ->
                                 onProgress(
@@ -410,7 +466,7 @@ object ComponentInstaller {
             ensureUsrmergeShell(rootfs)
             if (!hasValidRootfs(rootfs)) {
                 return Result.failure(
-                    IllegalStateException("安裝後 rootfs 仍缺 shell 或 /lib/ld-linux-aarch64.so.1，請清除 files/engine 後重試"),
+                    IllegalStateException("安裝後運行時不完整（缺 shell 或動態連結器）。$USER_HINT_REINSTALL_RUNTIME"),
                 )
             }
             ensureWineLaunchScript(ctx)
@@ -559,7 +615,7 @@ object ComponentInstaller {
         ensureUsrmergeShell(dest)
         if (!hasValidRootfs(dest)) {
             throw IllegalStateException(
-                "rootfs 解壓後仍無可用 shell／ld-linux（usrmerge 或 PT_INTERP）。請清除 cache 重試。",
+                "rootfs 解壓後仍不完整（缺 shell／動態連結器）。$USER_HINT_REINSTALL_RUNTIME",
             )
         }
     }

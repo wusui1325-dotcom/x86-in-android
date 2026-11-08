@@ -15,9 +15,36 @@
     <string name="empty_workspaces">尚無工作區。選一個 .exe 啟動後會自動建立。</string>
     <string name="empty_exes">尚未選取任何 .exe。點右下角＋從裝置挑選。</string>
     <string name="workspace_created">已建立工作區：%1$s</string>
-    <string name="hidden_exe_hint">已有工作區的 exe 會從此列表隱藏，請從「已有工作區」進入。</string>
+    <string name="hidden_exe_hint">已建立工作區的「同一路徑」exe 會從此列表隱藏；同檔名但不同路徑仍會顯示。</string>
     <string name="session_title">執行中</string>
     <string name="notify_channel">引擎執行中</string>
     <string name="notify_running">執行中：%1$s</string>
     <string name="notify_running_hint">點開回到全螢幕工作階段</string>
+
+    <string name="btn_clear_runtime">重裝運行時</string>
+    <string name="btn_retry">重試</string>
+    <string name="btn_delete_workspace">刪除工作區</string>
+    <string name="btn_developer_options">開發者選項</string>
+    <string name="menu_more">更多</string>
+    <string name="dev_options_enabled">已開啟開發者選項（煙測芯片）</string>
+    <string name="dev_options_hint">連點版本號七次可開啟開發者選項</string>
+
+    <string name="dialog_download_title">需要下載運行時</string>
+    <string name="dialog_download_message">首次執行 Windows .exe 需下載 Wine／glibc rootfs／Box64 等組件（%1$s，可斷點續傳）。建議在 Wi‑Fi 下進行。是否繼續？</string>
+    <string name="dialog_download_confirm">開始下載</string>
+    <string name="dialog_cancel">取消</string>
+
+    <string name="dialog_clear_runtime_title">重裝運行時？</string>
+    <string name="dialog_clear_runtime_message">將清除本機引擎運行時與下載快取，下次啟動會重新下載。不會刪除工作區與遊戲存檔（wineprefix）。</string>
+    <string name="dialog_clear_runtime_confirm">清除並重裝</string>
+    <string name="clear_runtime_done">已清除運行時（約釋放 %1$s）。下次啟動將重新下載。</string>
+
+    <string name="dialog_delete_ws_title">刪除工作區？</string>
+    <string name="dialog_delete_ws_message">將移除「%1$s」工作區目錄（含 wineprefix／日誌）。裝置上的原始 .exe 不會被刪。</string>
+    <string name="dialog_delete_ws_confirm">刪除</string>
+
+    <string name="error_card_title">啟動失敗</string>
+    <string name="error_ended_title">已結束</string>
+    <string name="uri_permission_failed">無法取得持久讀取權限，仍會嘗試本次開啟；若之後失敗請重新選取檔案。</string>
+    <string name="version_label">版本 %1$s（%2$d）</string>
 </resources>

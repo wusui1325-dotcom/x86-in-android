@@ -196,3 +196,8 @@
   因而找不到同目錄的 `libtalloc.so`／`libandroid-shmem.so`
 - 修：拿掉 guestEnv 覆寫（客體路徑改由 `wine-launch.sh` prepend）；`LaunchPipeline.mergeEnv` 強制
   `nativeLibraryDir` 置頂；`nativeExec` 再 prepend `dirname(argv[0])`；jniLibs 設 `DT_RUNPATH=$ORIGIN`
+
+## 更新 0.1.21 — rootfs `/usr/bin/sh` ENOENT（ld-linux）
+
+- 修 proot `execve(/usr/bin/sh) No such file`：補 usrmerge `lib`＋`/lib/ld-linux-aarch64.so.1`（dash PT_INTERP）
+- 校驗改為 shell ELF＋動態連結器皆需可解析；啟動優先 `/usr/bin/dash`

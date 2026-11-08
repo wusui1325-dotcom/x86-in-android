@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.20",
-  "versionCode": 21,
-  "notes": "0.1.20: 修 libtalloc.so not found — guestEnv 勿覆寫宿主 LD_LIBRARY_PATH；mergeEnv 置頂 nativeLibraryDir；nativeExec prepend dirname；DT_RUNPATH=$ORIGIN"
+  "versionName": "0.1.21",
+  "versionCode": 22,
+  "notes": "0.1.21: 修 execve(/usr/bin/sh) ENOENT — 補 usrmerge lib＋/lib/ld-linux-aarch64.so.1（dash PT_INTERP）；校驗 shell ELF＋linker；啟動優先 /usr/bin/dash"
 }

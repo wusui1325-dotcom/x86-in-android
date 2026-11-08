@@ -53,8 +53,14 @@ object ExecBits {
             "opt/wine/bin/wineserver",
             "usr/bin/Xvfb",
             "usr/bin/xdotool",
+            "usr/bin/dash",
+            "usr/bin/bash",
+            "usr/bin/sh",
             "bin/bash",
             "bin/sh",
+            "lib/ld-linux-aarch64.so.1",
+            "usr/lib/ld-linux-aarch64.so.1",
+            "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
         ).forEach { force(File(rootfs, it)) }
         // wine 目錄下其他可執行
         File(rootfs, "opt/wine/bin").listFiles()?.forEach { if (it.isFile) force(it) }

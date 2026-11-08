@@ -48,3 +48,12 @@ Android `files`／`code_cache` 常 **noexec**。宿主 `libproot.so`／`libproot
 - **LD_LIBRARY_PATH**：啟動 `libproot.so` 時必須含 `nativeLibraryDir`（勿被客體 Gladio／Turnip 路徑覆寫）；
   `DT_RUNPATH=$ORIGIN` 作保底。客體 `LD_LIBRARY_PATH` 由 `wine-launch.sh` 設定。
 
+## rootfs shell／ld-linux（0.1.21）
+
+真機 `proot error: execve("/usr/bin/sh"): No such file or directory` 常見 **不是** sh 本體缺檔，
+而是 **PT_INTERP** `/lib/ld-linux-aarch64.so.1` 在 rootfs 內不可解析（usrmerge `lib`→`usr/lib` 未建、
+或 `ld-linux` symlink／實體缺失）——Linux／proot 對缺 interpreter 同樣回 ENOENT。
+
+- `ensureUsrmergeShell`：補 `bin`／`lib`／`sh→dash`，並保證 `lib/ld-linux-aarch64.so.1`（symlink 失敗則 copy）
+- `hasValidRootfs`：必須有可解析 shell ELF **且** 有 ld-linux；不接受 dangling symlink
+- 啟動 argv 優先 `/usr/bin/dash`（真實 ELF），不再只靠 `/bin/sh` 字面

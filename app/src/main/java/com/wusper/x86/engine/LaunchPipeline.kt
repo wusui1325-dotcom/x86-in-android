@@ -267,11 +267,16 @@ object LaunchPipeline {
         val rootfsDir = File(ComponentInstaller.runtimeRoot(ctx), "rootfs")
         ComponentInstaller.ensureUsrmergeShell(rootfsDir)
         if (!ComponentInstaller.hasValidRootfs(rootfsDir)) {
+            val shell = ComponentInstaller.resolveShellElf(rootfsDir)?.guestPath ?: "(none)"
+            val ld = ComponentInstaller.hasDynamicLinker(rootfsDir)
             throw IllegalStateException(
-                "rootfs 缺 /bin/sh（${rootfsDir.absolutePath}）。請重裝運行時或清除 files/engine/runtime",
+                "rootfs 缺可用 shell 或動態連結器（shell=$shell ld-linux=$ld，${rootfsDir.absolutePath}）。" +
+                    "請清除 files/engine/runtime 後重裝。常見：execve(/usr/bin/sh) ENOENT = 缺 /lib/ld-linux-aarch64.so.1",
             )
         }
         ExecBits.forceEngineBins(EngineAssets.engineRoot(ctx), ComponentInstaller.runtimeRoot(ctx))
+        // 再補一次（forceEngineBins 不應破壞 symlink；保險）
+        ComponentInstaller.ensureUsrmergeShell(rootfsDir)
         val guestShell = ComponentInstaller.shellPathInRootfs(rootfsDir)
         val runtime = ComponentInstaller.runtimeRoot(ctx)
         val prefix = File(ws.dataDir, "wineprefix").also { it.mkdirs() }
@@ -337,6 +342,7 @@ object LaunchPipeline {
             "USER=xuser",
             "LOGNAME=xuser",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "X86_GUEST_SHELL=$guestShell",
             "WINEPREFIX=/home/xuser/.wine",
             "WINEDEBUG=-all",
             "WINEARCH=win64",

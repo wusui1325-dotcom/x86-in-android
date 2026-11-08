@@ -73,28 +73,73 @@ object ComponentInstaller {
             File(lib, "libxcb-dri3.so.0").exists()
     }
 
-    /** rootfs 必須有可用 shell（/bin/sh 或 bash／dash；含 symlink） */
+    /**
+     * rootfs 可啟動條件：
+     * 1) 有可解析到真實 ELF 的 shell（bin/sh／usr/bin/sh／dash／bash）
+     * 2) 有動態連結器 `/lib/ld-linux-aarch64.so.1`（dash 的 PT_INTERP；
+     *    缺此檔時 execve(sh) 也回 ENOENT，proot 常顯示成 `/usr/bin/sh` not found）
+     * 不接受 dangling symlink。
+     */
     fun hasValidRootfs(rootfs: File): Boolean {
         if (!rootfs.isDirectory) return false
-        val sh = File(rootfs, "bin/sh")
-        val bash = File(rootfs, "bin/bash")
-        val dash = File(rootfs, "bin/dash")
-        val usrBash = File(rootfs, "usr/bin/bash")
-        val usrDash = File(rootfs, "usr/bin/dash")
-        fun ok(f: File): Boolean =
-            runCatching {
-                Files.exists(f.toPath()) || Files.isSymbolicLink(f.toPath())
-            }.getOrDefault(f.exists())
-        return ok(sh) || ok(bash) || ok(dash) || ok(usrBash) || ok(usrDash)
+        return resolveShellElf(rootfs) != null && hasDynamicLinker(rootfs)
     }
 
+    /** 客體路徑：優先真實 ELF（/usr/bin/dash|bash），再 /usr/bin/sh、/bin/sh */
     fun shellPathInRootfs(rootfs: File): String {
-        val candidates = listOf("bin/sh", "bin/bash", "bin/dash", "usr/bin/bash", "usr/bin/dash")
+        resolveShellElf(rootfs)?.let { return it.guestPath }
+        return "/usr/bin/dash"
+    }
+
+    data class ShellElf(val guestPath: String, val hostFile: File)
+
+    /** 跟隨 symlink，必須落到 size>0 的常規檔 */
+    fun resolveShellElf(rootfs: File): ShellElf? {
+        val candidates = listOf(
+            "usr/bin/dash",
+            "usr/bin/bash",
+            "usr/bin/sh",
+            "bin/dash",
+            "bin/bash",
+            "bin/sh",
+        )
         for (rel in candidates) {
             val f = File(rootfs, rel)
-            if (f.exists()) return "/$rel"
+            val real = resolveRegularFile(f) ?: continue
+            if (real.length() < 1024L) continue
+            return ShellElf("/$rel", real)
         }
-        return "/bin/sh"
+        return null
+    }
+
+    fun hasDynamicLinker(rootfs: File): Boolean {
+        val candidates = listOf(
+            "lib/ld-linux-aarch64.so.1",
+            "usr/lib/ld-linux-aarch64.so.1",
+            "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+            "lib/aarch64-linux-gnu/ld-linux-aarch64.so.1",
+        )
+        return candidates.any { rel ->
+            resolveRegularFile(File(rootfs, rel))?.let { it.length() > 1024L } == true
+        }
+    }
+
+    /** 解析最終常規檔；dangling／缺檔回 null */
+    private fun resolveRegularFile(f: File): File? {
+        return runCatching {
+            if (!f.exists() && !Files.isSymbolicLink(f.toPath())) return null
+            var cur = f.toPath()
+            repeat(8) {
+                if (Files.isSymbolicLink(cur)) {
+                    val target = Files.readSymbolicLink(cur)
+                    cur = if (target.isAbsolute) target else cur.parent.resolve(target).normalize()
+                } else {
+                    val file = cur.toFile()
+                    return if (file.isFile && file.length() > 0L) file else null
+                }
+            }
+            null
+        }.getOrNull()
     }
 
     /**
@@ -359,7 +404,7 @@ object ComponentInstaller {
             ensureUsrmergeShell(rootfs)
             if (!hasValidRootfs(rootfs)) {
                 return Result.failure(
-                    IllegalStateException("安裝後 rootfs 仍缺 /bin/sh，請清除 files/engine 後重試"),
+                    IllegalStateException("安裝後 rootfs 仍缺 shell 或 /lib/ld-linux-aarch64.so.1，請清除 files/engine 後重試"),
                 )
             }
             ensureWineLaunchScript(ctx)
@@ -508,59 +553,127 @@ object ComponentInstaller {
         ensureUsrmergeShell(dest)
         if (!hasValidRootfs(dest)) {
             throw IllegalStateException(
-                "rootfs 解壓後仍無 /bin/sh（usrmerge symlink 失敗）。請清除 cache 重試。",
+                "rootfs 解壓後仍無可用 shell／ld-linux（usrmerge 或 PT_INTERP）。請清除 cache 重試。",
             )
         }
     }
 
     /**
-     * Ubuntu Noble usrmerge：bin→usr/bin、usr/bin/sh→dash。
-     * 若舊版解壓跳過 symlink，在此補齊。
+     * Ubuntu Noble usrmerge＋動態連結器：
+     * - bin→usr/bin、sbin→usr/sbin、lib→usr/lib
+     * - usr/bin/sh→dash（或 bash）
+     * - /lib/ld-linux-aarch64.so.1 必須可解析（dash PT_INTERP；缺則 execve ENOENT）
+     * symlink 失敗時改 copy 真實檔，避免裝置不支援 symlink 或解壓靜默跳過。
      */
     fun ensureUsrmergeShell(rootfs: File) {
         if (!rootfs.isDirectory) return
         val usrBin = File(rootfs, "usr/bin")
+        val usrLib = File(rootfs, "usr/lib")
         if (usrBin.isDirectory) {
             ensureRelativeSymlink(File(rootfs, "bin"), "usr/bin")
             ensureRelativeSymlink(File(rootfs, "sbin"), "usr/sbin")
+        }
+        if (usrLib.isDirectory) {
             ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
         }
+
         val dash = File(usrBin, "dash")
         val bash = File(usrBin, "bash")
-        val sh = File(usrBin, "sh")
-        when {
-            dash.isFile -> ensureRelativeSymlink(sh, "dash")
-            bash.isFile -> ensureRelativeSymlink(sh, "bash")
+        val shellSrc = when {
+            resolveRegularFile(dash) != null -> dash
+            resolveRegularFile(bash) != null -> bash
+            else -> null
         }
-        // 若仍無 bin/sh 路徑：寫一個最小 wrapper（極少走到）
-        val binSh = File(rootfs, "bin/sh")
-        if (!binSh.exists() && !Files.isSymbolicLink(binSh.toPath())) {
-            val target = when {
-                dash.isFile -> dash
-                bash.isFile -> bash
-                else -> null
+        if (shellSrc != null) {
+            // /usr/bin/sh
+            ensureSymlinkOrCopy(File(usrBin, "sh"), shellSrc.name, shellSrc)
+            // /bin/sh：若 bin 已是 usrmerge symlink，上面的 usr/bin/sh 已覆蓋；
+            // 若 bin 是真實目錄，再補一份。
+            val binDir = File(rootfs, "bin")
+            if (binDir.isDirectory && !Files.isSymbolicLink(binDir.toPath())) {
+                ensureSymlinkOrCopy(File(binDir, "sh"), "../usr/bin/${shellSrc.name}", shellSrc)
             }
-            if (target != null) {
-                File(rootfs, "bin").mkdirs()
-                runCatching {
-                    if (binSh.exists()) binSh.delete()
-                    Files.createSymbolicLink(binSh.toPath(), Paths.get("usr/bin/${target.name}"))
-                }.onFailure {
-                    target.copyTo(binSh, overwrite = true)
-                    ExecBits.force(binSh)
-                }
-            }
+            ExecBits.force(shellSrc)
         }
-        ExecBits.force(File(rootfs, "usr/bin/dash"))
-        ExecBits.force(File(rootfs, "usr/bin/bash"))
-        // symlink 本身不需 chmod 目標已 force
+
+        ensureDynamicLinker(rootfs)
+
+        // 再 force 常見 shell 實體
+        resolveRegularFile(dash)?.let { ExecBits.force(it) }
+        resolveRegularFile(bash)?.let { ExecBits.force(it) }
     }
 
-    private fun ensureRelativeSymlink(link: File, targetRel: String) {
+    /** 確保 PT_INTERP `/lib/ld-linux-aarch64.so.1` 在 rootfs 內可開 */
+    private fun ensureDynamicLinker(rootfs: File) {
+        if (hasDynamicLinker(rootfs)) {
+            // 仍保證 usrmerge lib→usr/lib，方便 INTERP 路徑 /lib/...
+            if (File(rootfs, "usr/lib").isDirectory) {
+                ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
+            }
+            // 若只有 aarch64-linux-gnu 實體，補 usr/lib 與 lib 入口
+        }
+        val realCandidates = listOf(
+            File(rootfs, "usr/lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"),
+            File(rootfs, "lib/aarch64-linux-gnu/ld-linux-aarch64.so.1"),
+            File(rootfs, "usr/lib/ld-linux-aarch64.so.1"),
+            File(rootfs, "lib/ld-linux-aarch64.so.1"),
+        )
+        val real = realCandidates.mapNotNull { resolveRegularFile(it) }.firstOrNull()
+            ?: return
+        ExecBits.force(real)
+
+        // usr/lib/ld-linux-aarch64.so.1
+        val usrLibLd = File(rootfs, "usr/lib/ld-linux-aarch64.so.1")
+        if (resolveRegularFile(usrLibLd) == null) {
+            val rel = runCatching {
+                File(rootfs, "usr/lib").toPath().relativize(real.toPath()).toString()
+            }.getOrDefault("aarch64-linux-gnu/ld-linux-aarch64.so.1")
+            ensureSymlinkOrCopy(usrLibLd, rel, real)
+        }
+
+        // lib → usr/lib（usrmerge）後 /lib/ld-linux 即可用；若 symlink 失敗則直接落地 lib/
+        ensureRelativeSymlink(File(rootfs, "lib"), "usr/lib")
+        val libLd = File(rootfs, "lib/ld-linux-aarch64.so.1")
+        if (resolveRegularFile(libLd) == null) {
+            // lib 可能仍是真目錄（symlink 失敗）
+            File(rootfs, "lib").mkdirs()
+            ensureSymlinkOrCopy(libLd, "aarch64-linux-gnu/ld-linux-aarch64.so.1", real)
+            if (resolveRegularFile(libLd) == null) {
+                // 最後手段：複製實體到 /lib/ld-linux-aarch64.so.1
+                real.copyTo(libLd, overwrite = true)
+                ExecBits.force(libLd)
+            }
+        }
+    }
+
+    /** 建相對 symlink；失敗則 copy 真實檔 */
+    private fun ensureSymlinkOrCopy(link: File, targetRel: String, copyFrom: File) {
+        if (resolveRegularFile(link)?.absolutePath == resolveRegularFile(copyFrom)?.absolutePath) {
+            return
+        }
+        val linked = ensureRelativeSymlink(link, targetRel)
+        if (!linked || resolveRegularFile(link) == null) {
+            link.parentFile?.mkdirs()
+            runCatching {
+                if (Files.isSymbolicLink(link.toPath()) || link.exists()) {
+                    if (link.isDirectory && !Files.isSymbolicLink(link.toPath())) {
+                        link.deleteRecursively()
+                    } else {
+                        link.delete()
+                    }
+                }
+            }
+            copyFrom.copyTo(link, overwrite = true)
+            ExecBits.force(link)
+        }
+    }
+
+    /** @return true if symlink exists with desired target */
+    private fun ensureRelativeSymlink(link: File, targetRel: String): Boolean {
         try {
             if (Files.isSymbolicLink(link.toPath())) {
                 val cur = runCatching { Files.readSymbolicLink(link.toPath()).toString() }.getOrDefault("")
-                if (cur == targetRel || cur.endsWith(targetRel)) return
+                if (cur == targetRel || cur.endsWith(targetRel)) return true
                 link.delete()
             } else if (link.exists()) {
                 // 錯誤地被建成空目錄／檔 → 清掉再連
@@ -568,8 +681,10 @@ object ComponentInstaller {
             }
             link.parentFile?.mkdirs()
             Files.createSymbolicLink(link.toPath(), Paths.get(targetRel))
+            return Files.isSymbolicLink(link.toPath())
         } catch (t: Throwable) {
             android.util.Log.w("ComponentInstaller", "symlink ${link.name} → $targetRel: ${t.message}")
+            return false
         }
     }
 
@@ -652,8 +767,10 @@ object ComponentInstaller {
                                 entry.isSymbolicLink -> {
                                     out.parentFile?.mkdirs()
                                     val target = entry.linkName ?: ""
-                                    if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
-                                        runCatching {
+                                    val critical = name == "bin" || name == "lib" || name == "sbin" ||
+                                        name == "usr/bin/sh" || name.endsWith("/ld-linux-aarch64.so.1")
+                                    fun linkOrLog() {
+                                        try {
                                             if (out.exists() || Files.isSymbolicLink(out.toPath())) {
                                                 if (out.isDirectory && !Files.isSymbolicLink(out.toPath())) {
                                                     out.deleteRecursively()
@@ -662,16 +779,27 @@ object ComponentInstaller {
                                                 }
                                             }
                                             Files.createSymbolicLink(out.toPath(), Paths.get(target))
+                                        } catch (t: Throwable) {
+                                            android.util.Log.w(
+                                                "ComponentInstaller",
+                                                "extract symlink $name → $target: ${t.message}",
+                                            )
+                                            if (critical) throw t
                                         }
+                                    }
+                                    if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
+                                        linkOrLog()
                                     } else if (target.isNotBlank() && !target.startsWith("/")) {
                                         // 允許相對含 .. 但解析後仍在 dest 內
-                                        runCatching {
-                                            val resolved = out.parentFile!!.toPath().resolve(target).normalize()
-                                            if (resolved.startsWith(dest.canonicalFile.toPath())) {
-                                                if (out.exists() || Files.isSymbolicLink(out.toPath())) out.delete()
-                                                Files.createSymbolicLink(out.toPath(), Paths.get(target))
-                                            }
+                                        val resolved = out.parentFile!!.toPath().resolve(target).normalize()
+                                        if (resolved.startsWith(dest.canonicalFile.toPath())) {
+                                            linkOrLog()
                                         }
+                                    } else if (critical && target.isNotBlank()) {
+                                        android.util.Log.w(
+                                            "ComponentInstaller",
+                                            "skip absolute symlink $name → $target",
+                                        )
                                     }
                                 }
                                 entry.isLink -> {

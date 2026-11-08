@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.26",
-  "versionCode": 27,
-  "notes": "0.1.26: Wine ntdll.so 無法 dlopen — 補 Box64 x64lib（libgcc_s 等）至 /usr/lib/box64-x86_64-linux-gnu，設定 BOX64_LD_LIBRARY_PATH／WINEDLLPATH；isReady／解壓校驗要求 ntdll.so；runtimeId wine-gpustack-v0.1.26-box64-x64lib"
+  "versionName": "0.1.27",
+  "versionCode": 28,
+  "notes": "0.1.27: ntdll 之後 Illegal instruction／exit 132（SIGILL）— Box64Preset／wine-launch 強制 BOX64_AVX=0（對齊 Winlator）；STRONGMEM=1／BIGBLOCK=1；exit 132 繁中說明；runtimeId wine-gpustack-v0.1.27-box64-noavx"
 }

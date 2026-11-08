@@ -86,6 +86,7 @@ object ExitStatusMessages {
         127 -> "客體命令不存在"
         126 -> "客體命令無法執行"
         1 -> "客體以錯誤結束"
+        132 -> "客體非法指令（SIGILL）"
         else -> "客體異常結束"
     }
 
@@ -104,9 +105,14 @@ object ExitStatusMessages {
                 "若出現 could not load ntdll.so／Cannot dlopen、權限被拒、或缺動態庫，" +
                 "請優先點「重裝運行時」（不要只改系統儲存權限）。"
             )
+        132 -> (
+            "客體退出碼 132＝SIGILL（Illegal instruction）。常見於 Box64 開啟 AVX 後，" +
+                "Wine／客體庫走 AVX 路徑觸發 dynarec 宿主非法指令。0.1.27+ 已強制 BOX64_AVX=0。" +
+                "請更新 App 後直接重開；若日誌仍見 Illegal instruction，再點「重裝運行時」。"
+            )
         else -> (
             "客體退出碼 $code。請查看日誌；" +
-                "若含 linker／libtalloc／permission／ENOENT，請點「重裝運行時」後重試。"
+                "若含 linker／libtalloc／permission／ENOENT／Illegal instruction，請點「重裝運行時」後重試。"
             )
     }
 
@@ -118,12 +124,14 @@ object ExitStatusMessages {
             "libtalloc", "cannot link", "linker",
             "ld-linux", "enoent", "/usr/bin/sh", "not found",
             "box64", "動態連結", "ntdll", "cannot dlopen", "x64lib", "libgcc",
+            "illegal instruction", "sigill",
         ).any { it in s }
     }
 
     private fun signalName(sig: Int): String = when (sig) {
         1 -> "SIGHUP"
         2 -> "SIGINT"
+        4 -> "SIGILL"
         6 -> "SIGABRT"
         9 -> "SIGKILL"
         11 -> "SIGSEGV"

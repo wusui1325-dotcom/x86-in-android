@@ -90,3 +90,12 @@ Box64 以**模擬**方式載入該 x86_64 `.so`，並解析其 `NEEDED`（含 **
 缺 x64lib 時錯誤形如：`wine: could not load ntdll.so` + Box64 `Cannot dlopen("…ntdll.so"/…, 2)`
 （此處 `2` 是 `RTLD_NOW` flag，不是 errno）。
 
+
+## Box64 AVX／SIGILL（0.1.27）
+
+ntdll 可載入後若立刻 `Illegal instruction`、客體退出碼 **132**（128+4＝SIGILL）：
+常見根因是預設 `BOX64_AVX=1` 讓客體 Wine／glibc 走 AVX 路徑，Box64 dynarec 在部分 SoC
+產生**宿主**非法指令。Winlator 7.1+ 亦預設關閉 AVX。
+
+修復：`Box64Preset.performance` 與 `wine-launch.sh` **強制 `BOX64_AVX=0`**，並略收斂
+`STRONGMEM`／`BIGBLOCK`；啟動時 `ensureWineLaunchScript` 會覆寫腳本，**通常只需更新 APK 重開**。

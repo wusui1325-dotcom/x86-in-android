@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.26-box64-x64lib",
+  "runtimeId": "wine-gpustack-v0.1.27-box64-noavx",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "GpuStack default; box64 x64lib required for Wine ntdll.so under Box64"
+  "notes": "GpuStack default; box64 x64lib; BOX64_AVX=0 (Winlator-safe, avoid SIGILL)"
 }

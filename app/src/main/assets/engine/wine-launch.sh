@@ -177,6 +177,17 @@ echo "NTDLL=ok $(ls -la "$NTDLL" 2>&1)" >> /mnt/data/gpu-stack.log
 echo "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)" >> /mnt/data/gpu-stack.log
 echo "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH" >> /mnt/data/gpu-stack.log
 
+# Wine 安全預設：Winlator 關閉 AVX。AVX dynarec／客體 AVX 路徑在部分 SoC 會宿主 SIGILL（exit 132）。
+# LaunchPipeline 也會設 BOX64_AVX=0；此處強制覆蓋，避免舊 env／手動覆寫踩雷。
+export BOX64_AVX=0
+export BOX64_SSE42="${BOX64_SSE42:-1}"
+export BOX64_DYNAREC="${BOX64_DYNAREC:-1}"
+export BOX64_DYNAREC_STRONGMEM="${BOX64_DYNAREC_STRONGMEM:-1}"
+export BOX64_DYNAREC_SAFEFLAGS="${BOX64_DYNAREC_SAFEFLAGS:-1}"
+export BOX64_DYNAREC_BIGBLOCK="${BOX64_DYNAREC_BIGBLOCK:-1}"
+export BOX64_DYNAREC_CALLRET="${BOX64_DYNAREC_CALLRET:-1}"
+echo "BOX64_FLAGS AVX=$BOX64_AVX SSE42=$BOX64_SSE42 DYNAREC=$BOX64_DYNAREC STRONGMEM=$BOX64_DYNAREC_STRONGMEM SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK CALLRET=$BOX64_DYNAREC_CALLRET" >> /mnt/data/gpu-stack.log
+
 "$BOX64" "$WINEBIN" explorer /desktop=x86,${W}x${H} "$@"
 RC=$?
 

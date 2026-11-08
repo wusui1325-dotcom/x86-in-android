@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.8",
-  "versionCode": 9,
-  "notes": "0.1.8: Present AHB→ANativeWindow；PRESENTATION_READY=true；X stub＋shm／xwd feeder／stub 可測"
+  "versionName": "0.1.9",
+  "versionCode": 10,
+  "notes": "0.1.9: 進程內 Winlator Java X；拿掉 GpuStack Xvfb stub；Drawable→AHB Present"
 }

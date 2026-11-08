@@ -266,3 +266,7 @@ com.wusper.x86（暫名）
 
 - Present：AHB→ANativeWindow 落地；PRESENTATION_READY=true（0.1.8）。
 - X 仍為 Xvfb 協定 stub；DRI3 零拷貝與完整進程內 X 下一檔。
+
+### 進度（2026-11-09 ~01:10 HKT）
+
+- 進程內 Winlator Java X 已接；GpuStack 拿掉 Xvfb stub（0.1.9）。

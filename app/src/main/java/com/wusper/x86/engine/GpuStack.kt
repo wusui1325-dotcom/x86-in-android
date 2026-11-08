@@ -19,10 +19,10 @@ import java.util.zip.ZipInputStream
 object GpuStack {
 
     /**
-     * Present 通路已就緒（AHB→ANativeWindow＋shm／stub／XWD feeder）。
-     * X 協定暫以進程內 Xvfb socket 為 stub（非 SoftLegacy Canvas）；DRI3 零拷貝下一檔。
+     * Present＋進程內 X（Winlator Java X vendor）已接；畫面走 AHB→Session Surface。
      */
     const val PRESENTATION_READY: Boolean = true
+    const val INPROCESS_X_READY: Boolean = true
 
     const val TURNIP_VERSION = "26.2.6"
     const val DXVK_VERSION = "2.7.1"
@@ -68,10 +68,10 @@ object GpuStack {
         if (!PRESENTATION_READY) {
             g += "缺 Present→AHardwareBuffer→Session Surface"
         }
-        g += "缺完整進程內 X（目前 X 協定 stub＝Xvfb socket；待 Winlator 級 Java／native X＋DRI3）"
-        g += "缺 DRI3／Vortek 零拷貝（現為 AHB CPU present；XWD 僅過渡 feeder）"
-        g += "缺 WinHandler 級輸入橋（觸控／鍵鼠→客體；取代 xdotool 檔案佇列）"
+        g += "缺 DRI3／Vortek 零拷貝（現為 Drawable→RGBA→AHB CPU present）"
+        g += "缺完整 WinHandler／觸控注入（XServer.inject* 可接；暫未接 Session 觸控）"
         g += "缺 Pulse／ALSA→AAudio 真輸出"
+        g += "缺 GLX／gladiorenderer（OpenGL 客體暫 BadImplementation）"
         return g
     }
 
@@ -82,7 +82,8 @@ object GpuStack {
         val parts = mutableListOf<String>()
         parts += if (hasTurnip(ctx)) "Turnip✓" else "Turnip✗"
         parts += if (hasDxvk(ctx)) "DXVK✓" else "DXVK✗"
-        parts += if (PRESENTATION_READY) "Present✓（AHB→Surface）" else "Present✗"
+        parts += if (PRESENTATION_READY) "Present✓" else "Present✗"
+        parts += if (INPROCESS_X_READY) "X✓（Winlator）" else "X✗"
         return parts.joinToString(" · ")
     }
 
@@ -109,7 +110,7 @@ object GpuStack {
         env += "X86_GPU_STATUS=${statusMessage(ctx)}"
         env += "X86_WS_DATA=$wsDataAbs"
         env += "PRESENT_SHM=/mnt/data/present.shm"
-        env += "X_PROTOCOL_STUB=1"
+        env += "X_PROTOCOL=inprocess_winlator"
         return env
     }
 

@@ -5,7 +5,7 @@
 - **不是** Winlator 假桌面殼
 - 啟動：進 App → 選裝置上的 `.exe` 或 App 私有工作區 → 全螢幕直開
 - Package：`com.wusper.x86`
-- 工程：Compose Material3；Box64；**PE → PRoot＋Wine＋GpuStack（Turnip／DXVK／真 Surface）**；Xvfb 軟渲非預設（見 docs/ENGINE.md、docs/GPU_STACK.md）
+- 工程：Compose Material3；Box64；**PE → PRoot＋Wine＋GpuStack（Turnip／DXVK／真 Surface）**；進程內 Winlator X＋AHB Present；Xvfb 僅 SoftLegacy（見 docs/ENGINE.md、docs/GPU_STACK.md）
 
 詳見 [docs/PLAN.md](docs/PLAN.md)、[docs/ENGINE.md](docs/ENGINE.md)。
 

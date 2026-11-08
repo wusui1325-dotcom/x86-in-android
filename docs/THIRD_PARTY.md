@@ -37,11 +37,20 @@
 - 授權：**Zlib**
 - 用途：D3D8/9/10/11 → Vulkan；stage 進 wineprefix `system32`
 
-## Winlator（架構參考・未整樹 vendor）
+
+## Winlator Java X／libwinlator（進程內 X · 已 vendor）
+
+- 來源：https://github.com/brunodev85/winlator-app
+- 授權：**LGPL-2.1**（`third_party/winlator/LICENSE`）
+- 路徑：`app/src/main/java/com/winlator/{xserver,xconnector,sysvshm,…}`、`app/src/main/cpp/winlator/`
+- 用途：進程內 X11＋epoll connector＋drawable／MIT-SHM；畫面接我們的 Present
+- 注意：未 vendor gladiorenderer（GLX stub）；未併入 Winlator 假桌面 UX
+
+## Winlator（其餘架構參考）
 
 - https://github.com/brunodev85/winlator
 - 授權：**LGPL-2.1**
-- 用途：對齊容器／GPU／輸入層蛋糕與 Present→Surface 思路；本專案自研殼，不繼承假桌面 UX
+- 用途：容器／GPU／輸入參考；Java X 已部分 vendor（見上）
 - 若未來連結其修改後函式庫：遵守 LGPL（來源告知、目標檔／可替換連結）
 
 ## SoftLegacy 專用（非預設）

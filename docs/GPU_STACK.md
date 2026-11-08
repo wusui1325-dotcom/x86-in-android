@@ -67,3 +67,19 @@
 
 `GpuStack.PRESENTATION_READY` 已為 **true**（Present 通路可測）；X stub≠最終 X。
 
+
+
+## 更新 0.1.9 — 進程內 X
+
+- **拿掉 GpuStack Xvfb stub**
+- Vendor：`brunodev85/winlator-app` 的 `xserver`／`xconnector`／`sysvshm`／`libwinlator`（LGPL-2.1，見 `third_party/winlator/`）
+- 宿主：`InProcessX`＋`PresentXFramePump` → 既有 AHB Present
+- Guest：`DISPLAY=:0` 經 PRoot bind 到 imagefs socket
+- **不做** Termux-X11／Lorie 整包（GPL-3）
+
+### 還缺
+
+1. DRI3／Vortek 零拷貝（現 CPU 轉 RGBA）
+2. Session 觸控 → `XServer.inject*`
+3. GLX／gladiorenderer
+4. Turnip ICD thunk 實機；AAudio

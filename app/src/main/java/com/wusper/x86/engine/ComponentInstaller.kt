@@ -156,14 +156,12 @@ object ComponentInstaller {
             val hasAddons = hasWineAddons(rootfs)
             val baseOk = hasWine && hasBox
             // GpuStack 預設：不再強制抓 Xvfb／xdotool；僅補 Electron／mono 等
-            val hasXvfb = File(rootfs, "usr/bin/Xvfb").exists()
             val needExtras = mutableSetOf<String>()
             if (!hasElectron) needExtras += "electron-overlay"
             if (!hasAddons) needExtras += "wine-addons-overlay"
-            // GpuStack X 協定 stub 需要 Xvfb binary（非 SoftLegacy 顯示路徑）
-            if (!hasXvfb) needExtras += "x11-overlay"
+            // SoftLegacy 才需要 Xvfb；GpuStack 用進程內 X
             val onlyExtras = baseOk && needExtras.isNotEmpty()
-            val stampOnly = baseOk && hasElectron && hasAddons && hasXvfb
+            val stampOnly = baseOk && hasElectron && hasAddons
             if (stampOnly) {
                 onProgress(Progress("ready", message = "更新 runtimeId → $runtimeId"))
             }

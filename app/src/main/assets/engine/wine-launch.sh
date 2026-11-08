@@ -5,8 +5,7 @@ BACKEND="${GRAPHICS_BACKEND:-gpu}"
 
 W="${WINE_DESKTOP_W:-1280}"
 H="${WINE_DESKTOP_H:-720}"
-mkdir -p /mnt/data/xfb /tmp/.X11-unix /mnt/data
-rm -f /mnt/data/xfb/* 2>/dev/null || true
+mkdir -p /mnt/data /tmp/.X11-unix /tmp/.sysvshm
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
 if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
@@ -31,46 +30,47 @@ if [ -f /mnt/gpu/turnip/freedreno_icd.json ]; then
   export VK_ICD_FILENAMES="/mnt/gpu/turnip/freedreno_icd.json"
 fi
 
+export ANDROID_SYSVSHM_SERVER="${ANDROID_SYSVSHM_SERVER:-/tmp/.sysvshm/SM0}"
+
 XPID=
 IPID=
 
-start_x_stub() {
-  # X 協定 stub：提供 DISPLAY unix socket。畫面由宿主 Present（AHB）吃 shm／XWD feeder。
-  # 非 SoftLegacy 產品軟渲路徑（不強制 LIBGL_ALWAYS_SOFTWARE）。
-  if [ ! -x /usr/bin/Xvfb ] && ! command -v Xvfb >/dev/null 2>&1; then
-    echo "FATAL: X protocol stub (Xvfb) missing" >> /mnt/data/gpu-stack.log
-    exit 92
-  fi
-  Xvfb :0 -screen 0 ${W}x${H}x24 -ac -nolisten tcp -fbdir /mnt/data/xfb >/mnt/data/xvfb.log 2>&1 &
-  XPID=$!
-  i=0
-  while [ $i -lt 80 ]; do
-    if [ -e /mnt/data/xfb/Xvfb_screen0 ] || [ -S /tmp/.X11-unix/X0 ]; then break; fi
-    i=$((i+1)); sleep 0.1
-  done
-  echo "X_PROTOCOL_STUB=xvfb pid=$XPID" >> /mnt/data/gpu-stack.log
-}
-
 if [ "$BACKEND" = "soft" ]; then
+  # SoftLegacy only
   export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-1}"
   export GALLIUM_DRIVER="${GALLIUM_DRIVER:-llvmpipe}"
-  export MESA_GL_VERSION_OVERRIDE="${MESA_GL_VERSION_OVERRIDE:-3.3}"
-  start_x_stub
-  if [ -x /usr/bin/xdotool ] || command -v xdotool >/dev/null 2>&1; then
-    if [ -x /usr/local/bin/x11-input-agent.sh ]; then
-      /usr/local/bin/x11-input-agent.sh >/mnt/data/x11input-agent.out 2>&1 &
-    elif [ -f /mnt/data/x11-input-agent.sh ]; then
-      sh /mnt/data/x11-input-agent.sh >/mnt/data/x11input-agent.out 2>&1 &
-    fi
-    IPID=$!
+  mkdir -p /mnt/data/xfb
+  if [ -x /usr/bin/Xvfb ] || command -v Xvfb >/dev/null 2>&1; then
+    Xvfb :0 -screen 0 ${W}x${H}x24 -ac -nolisten tcp -fbdir /mnt/data/xfb >/mnt/data/xvfb.log 2>&1 &
+    XPID=$!
+    i=0
+    while [ $i -lt 80 ]; do
+      if [ -S /tmp/.X11-unix/X0 ] || [ -e /mnt/data/xfb/Xvfb_screen0 ]; then break; fi
+      i=$((i+1)); sleep 0.1
+    done
+  else
+    echo "FATAL: SoftLegacy needs Xvfb" >> /mnt/data/gpu-stack.log
+    exit 92
   fi
 else
-  # GpuStack：不強制軟渲；X stub 只為 DISPLAY；Present 在宿主
   unset LIBGL_ALWAYS_SOFTWARE || true
   unset GALLIUM_DRIVER || true
-  echo "GRAPHICS_BACKEND=gpu turnip=${VK_ICD_FILENAMES:-none} present_shm=${PRESENT_SHM:-/mnt/data/present.shm}" > /mnt/data/gpu-stack.log
-  start_x_stub
-  # 觸控：過渡仍可用 xdotool（WinHandler 級輸入下一檔）
+  echo "GRAPHICS_BACKEND=gpu inprocess_x=1 present=AHB" > /mnt/data/gpu-stack.log
+  # 等待宿主進程內 X（Winlator Java X）socket
+  i=0
+  while [ $i -lt 100 ]; do
+    if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then break; fi
+    i=$((i+1)); sleep 0.1
+  done
+  if [ ! -S /tmp/.X11-unix/X0 ] && [ ! -e /tmp/.X11-unix/X0 ]; then
+    echo "FATAL: in-process X socket missing (/tmp/.X11-unix/X0)" >> /mnt/data/gpu-stack.log
+    exit 93
+  fi
+  echo "INPROCESS_X_OK wait=${i}" >> /mnt/data/gpu-stack.log
+fi
+
+# 輸入：過渡 xdotool 僅 SoftLegacy；GpuStack 待 WinHandler／inject
+if [ "$BACKEND" = "soft" ]; then
   if [ -x /usr/bin/xdotool ] || command -v xdotool >/dev/null 2>&1; then
     if [ -x /usr/local/bin/x11-input-agent.sh ]; then
       /usr/local/bin/x11-input-agent.sh >/mnt/data/x11input-agent.out 2>&1 &

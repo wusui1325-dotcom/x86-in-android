@@ -40,13 +40,14 @@ import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.GpuStack
+import com.wusper.x86.x11.InProcessX
+import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.engine.GraphicsBackend
 import com.wusper.x86.engine.LaunchPipeline
 import com.wusper.x86.graphics.SurfaceFrameBridge
 import com.wusper.x86.graphics.PresentSurfaceBridge
 import com.wusper.x86.graphics.X11InputBridge
 import android.view.MotionEvent
-import com.wusper.x86.engine.NativeEngine
 import com.wusper.x86.ui.theme.X86Theme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -83,6 +84,7 @@ class SessionActivity : ComponentActivity() {
                 var logFile by remember { mutableStateOf<File?>(null) }
                 var frameBridge by remember { mutableStateOf<SurfaceFrameBridge?>(null) }
                 var presentBridge by remember { mutableStateOf<PresentSurfaceBridge?>(null) }
+                var inProcessX by remember { mutableStateOf<InProcessX?>(null) }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
 
@@ -158,19 +160,20 @@ class SessionActivity : ComponentActivity() {
                         inputBridgeRef.set(input)
                         logText += "輸入橋：xdotool 過渡\n"
                     }
-                    // 若缺 X 協定 stub（Xvfb binary），補裝 x11-overlay
+                    // 進程內 X（Winlator）先於客體 Wine 啟動
                     if (plan.mode == LaunchPipeline.Mode.WineProot &&
-                        plan.graphicsBackend == GraphicsBackend.GpuStack &&
-                        ComponentInstaller.needsX11Overlay(this@SessionActivity)
+                        plan.graphicsBackend == GraphicsBackend.GpuStack
                     ) {
-                        status = "安裝 X stub"
-                        logText += "補裝 X 協定 stub（x11-overlay／Xvfb）…\n"
-                        val inst = withContext(Dispatchers.IO) {
-                            ComponentInstaller.install(this@SessionActivity) { }
+                        status = "啟動進程內 X"
+                        logText += "啟動 Winlator Java X → Present…\n"
+                        val x = InProcessX(this@SessionActivity)
+                        // Surface 稍後 attach；先建 AHB
+                        NativeEngine.nativePresentCreate(1280, 720)
+                        x.start { rgba, w, h, stride ->
+                            NativeEngine.nativePresentRgba(rgba, w, h, stride)
                         }
-                        if (inst.isFailure) {
-                            logText += "X stub 安裝失敗：${inst.exceptionOrNull()?.message}\n"
-                        }
+                        inProcessX = x
+                        logText += "InProcessX imagefs=${x.imageFsRoot.absolutePath}\n"
                     }
                     val result = LaunchPipeline.start(plan)
                     status = when {
@@ -193,21 +196,18 @@ class SessionActivity : ComponentActivity() {
                     ) {
                         presentBridge?.shutdown()
                         frameBridge?.shutdown()
-                        val input = inputBridgeRef.get()
+                        NativeEngine.nativePresentAttachSurface(surf)
+                        logText += "Present：進程內 X Drawable → AHB → Surface（已 attach）\n"
+                        // 可選：shm 旁路仍可用
                         val bridge = PresentSurfaceBridge(
                             dataDir = ws.dataDir,
                             surface = surf,
-                            targetFps = 30,
-                            allowXwdFeeder = true,
-                            allowStub = true,
-                            onBlitRect = { r ->
-                                input?.blitRect = r
-                                // letterbox 假設桌面滿版 Present
-                            },
+                            targetFps = 15,
+                            allowXwdFeeder = false,
+                            allowStub = false,
                         )
+                        // 不 start 輪詢（幀由 PresentXFramePump 推）；僅保留物件以便 shutdown 路徑一致
                         presentBridge = bridge
-                        bridge.start()
-                        logText += "Present：AHB→ANativeWindow（shm／xwd feeder／stub）\n"
                     } else if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.SoftLegacy && holder != null
                     ) {
@@ -268,6 +268,7 @@ class SessionActivity : ComponentActivity() {
                         inputBridgeRef.get()?.shutdown()
                         frameBridge?.shutdown()
                         presentBridge?.shutdown()
+                        inProcessX?.stop()
                         LaunchPipeline.stop()
                         EngineForegroundService.stop(this@SessionActivity)
                     }
@@ -282,6 +283,7 @@ class SessionActivity : ComponentActivity() {
                                     inputBridgeRef.get()?.shutdown()
                                     frameBridge?.shutdown()
                                     presentBridge?.shutdown()
+                                    inProcessX?.stop()
                                     LaunchPipeline.stop()
                                     EngineForegroundService.stop(this@SessionActivity)
                                     finish()

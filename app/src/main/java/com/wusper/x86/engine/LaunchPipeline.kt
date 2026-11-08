@@ -262,6 +262,16 @@ object LaunchPipeline {
             add("-b"); add("${ws.exeDir.absolutePath}:/mnt/app")
             add("-b"); add("${prefix.absolutePath}:/home/xuser/.wine")
             add("-b"); add("${ws.dataDir.absolutePath}:/mnt/data")
+            // 進程內 X／SysVSHM socket（宿主 imagefs）
+            val imageFs = File(ctx.filesDir, "engine/imagefs")
+            val x11 = File(imageFs, "tmp/.X11-unix")
+            val shm = File(imageFs, "tmp/.sysvshm")
+            if (x11.isDirectory) {
+                add("-b"); add("${x11.absolutePath}:/tmp/.X11-unix")
+            }
+            if (shm.isDirectory) {
+                add("-b"); add("${shm.absolutePath}:/tmp/.sysvshm")
+            }
             addAll(bindGpu)
             add("-w"); add("/mnt/app")
             add("/bin/sh")
@@ -279,6 +289,7 @@ object LaunchPipeline {
             "WINE_DESKTOP_W=1280",
             "WINE_DESKTOP_H=720",
             "BOX64_PATH=/opt/wine/bin",
+            "ANDROID_SYSVSHM_SERVER=/tmp/.sysvshm/SM0",
         )
         env += Box64Preset.performance.toList()
 
@@ -287,7 +298,7 @@ object LaunchPipeline {
             GraphicsBackend.GpuStack -> {
                 env += GpuStack.guestEnv(ctx, ws.dataDir.absolutePath)
                 kindMessage =
-                    "Windows PE · GpuStack Present（AHB→Surface）＋X stub · PRoot→Box64→Wine ${pe.name}"
+                    "Windows PE · GpuStack＋進程內 X（Winlator）→AHB Present · PRoot→Box64→Wine ${pe.name}"
             }
             GraphicsBackend.SoftLegacy -> {
                 env += "GRAPHICS_BACKEND=soft"

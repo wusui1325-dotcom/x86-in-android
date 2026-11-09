@@ -7,6 +7,10 @@ package com.wusper.x86.session
  */
 object BlueScreenMessages {
 
+    /** 0.1.105 UX：藍屏固定末行（永不省略／不輪替） */
+    const val FOOTER =
+        "我們既沒有嘗試在收集你的問題，也不會提供二維碼和支援聯繫"
+
     enum class Reason {
         MACHINE_ZERO,
         NO_STARTED_PID,
@@ -175,6 +179,9 @@ object BlueScreenMessages {
         if (lines.none { "：（" in it } && lines.isNotEmpty()) {
             lines[0] = lines[0].trimEnd('。', '…') + "：（"
         }
+        // Fixed footer always last (Boss UX after 105 tip bake)
+        lines.removeAll { it == FOOTER }
+        lines += FOOTER
         return Pick(lines = lines, reasons = reasons)
     }
 

@@ -281,6 +281,7 @@ class SessionActivity : ComponentActivity() {
                 // 0.1.105: 藍屏人話錯誤（≥50 句庫；可多句；含：（）
                 var blueScreenLines by remember { mutableStateOf<List<String>>(emptyList()) }
                 var blueScreenSalt by remember { mutableIntStateOf(0) }
+                var statusTick by remember { mutableIntStateOf(0) }
                 // 0.1.64: sticky UI lines survive session.log overwrite every 400ms
                 var uiStickyLog by remember { mutableStateOf("") }
                 fun appendSticky(line: String) {
@@ -584,6 +585,7 @@ class SessionActivity : ComponentActivity() {
                         status = "啟動進程內 X"
                         guestPresented = false
                         blueScreenLines = emptyList()
+                        statusTick = 0
                         presentDiagLines = 0
                         lastPresentDiag = ""
                         uiStickyLog = ""
@@ -714,35 +716,39 @@ class SessionActivity : ComponentActivity() {
                             val softCont = Regex("""WINEBOOT_INIT soft-continue t=(\d+)s""")
                                 .findAll(logText).lastOrNull()
                             val rpcBusy = "RPCSS_PRESTART" in logText && "WINE_START" !in logText
-                            when {
+                            // 0.1.105 UX: ≥100 dynamic status lines (zh-TW), rotate by tick+phase
+                            statusTick += 1
+                            val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
+                            val metric = when {
                                 !sawWineStart && rpcBusy -> {
-                                    status = if ("RpcSs ready" in logText) {
-                                        "RpcSs 就緒，即將啟動…"
-                                    } else {
-                                        "正在初始化 RpcSs…"
-                                    }
+                                    if ("RpcSs ready" in logText) "RpcSs ready" else "RPCSS"
                                 }
                                 !sawWineStart && (wbHb != null || "WINEBOOT_INIT begin" in logText) -> {
                                     val tSec = softCont?.groupValues?.getOrNull(1)
                                         ?: wbHb?.groupValues?.getOrNull(1)
                                         ?: "?"
                                     val regB = wbHb?.groupValues?.getOrNull(2) ?: "?"
-                                    status = "正在初始化 Wine… t=${tSec}s reg=${regB}B"
+                                    "t=${tSec}s reg=${regB}B"
                                 }
-                                else -> {
-                                    val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
-                                    if (hb != null && (
-                                            status.startsWith("執行中") ||
-                                                status.startsWith("正在初始化") ||
-                                                status.startsWith("RpcSs")
-                                            )
-                                    ) {
-                                        val tSec = hb.groupValues[1]
-                                        val pidHb = hb.groupValues[2]
-                                        status = "執行中 pid=$pidHb t=${tSec}s"
-                                    }
-                                }
+                                hb != null -> "pid=${hb.groupValues[2]} t=${hb.groupValues[1]}s"
+                                status.startsWith("執行中") || status.startsWith("正在初始化") ||
+                                    status.startsWith("RpcSs") || status.startsWith("啟動") ->
+                                    status.substringAfter(' ', missingDelimiterValue = "").ifBlank { "…" }
+                                else -> ""
                             }
+                            val hint = when {
+                                !sawWineStart && rpcBusy -> "正在初始化 RpcSs…"
+                                !sawWineStart && (wbHb != null || "WINEBOOT_INIT begin" in logText) ->
+                                    "正在初始化 Wine…"
+                                hb != null || status.startsWith("執行中") -> "執行中"
+                                else -> status
+                            }
+                            status = LaunchStatusLines.pick(
+                                logText = logText,
+                                statusHint = hint,
+                                tick = statusTick,
+                                metric = metric,
+                            )
                         }
                         if (wait != 1) {
                             val pid = NativeEngine.nativeRunningPid()
@@ -1001,7 +1007,8 @@ class SessionActivity : ComponentActivity() {
                             Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
-                                .background(Color(0xFF0A0E14)),
+                                // 0.1.105 UX: classic Windows BSOD blue (#0000AA), not Win10 teal
+                                .background(Color(0xFF0000AA)),
                         ) {
                             AndroidView(
                                 factory = { ctx ->
@@ -1059,6 +1066,9 @@ class SessionActivity : ComponentActivity() {
                                 wineInitPhase || status.startsWith("執行中")
                             )
                             if (showSurfaceHint) {
+                                val bodyLines = blueScreenLines.filter {
+                                    it != BlueScreenMessages.FOOTER
+                                }
                                 Column(
                                     modifier = Modifier
                                         .align(Alignment.Center)
@@ -1069,25 +1079,36 @@ class SessionActivity : ComponentActivity() {
                                     Text(
                                         text = if (wineInitPhase) {
                                             getString(com.wusper.x86.R.string.session_wine_init)
-                                        } else if (blueScreenLines.isNotEmpty()) {
+                                        } else if (bodyLines.isNotEmpty()) {
                                             "啟動說明：（"
                                         } else {
                                             getString(com.wusper.x86.R.string.session_waiting_surface)
                                         },
-                                        color = Color(0xCCFFFFFF),
+                                        color = Color(0xFFFFFFFF),
                                         style = MaterialTheme.typography.titleMedium,
                                     )
-                                    if (!wineInitPhase && blueScreenLines.isNotEmpty()) {
+                                    if (!wineInitPhase && bodyLines.isNotEmpty()) {
                                         Spacer(Modifier.height(10.dp))
-                                        blueScreenLines.forEach { line ->
+                                        bodyLines.forEach { line ->
                                             Text(
                                                 text = line,
-                                                color = Color(0xE6FFFFFF),
-                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = Color(0xFFFFFFFF),
+                                                style = MaterialTheme.typography.bodyMedium.copy(
+                                                    fontFamily = FontFamily.Monospace,
+                                                ),
                                                 modifier = Modifier.padding(vertical = 2.dp),
                                             )
                                         }
                                     }
+                                    // Fixed BSOD footer (always last on blue screen)
+                                    Spacer(Modifier.height(16.dp))
+                                    Text(
+                                        text = BlueScreenMessages.FOOTER,
+                                        color = Color(0xFFE0E0FF),
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = FontFamily.Monospace,
+                                        ),
+                                    )
                                 }
                             }
                             if (showErrorCard) {

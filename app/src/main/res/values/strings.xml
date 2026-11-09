@@ -94,6 +94,8 @@
     <string name="btn_hot_connect_google">連 Google</string>
     <string name="btn_hot_disconnect_google">解除 Google</string>
     <string name="btn_hot_https_upload">改用 HTTPS 上傳</string>
+    <string name="btn_hot_enable_autoloop">啟用自動熱更</string>
+    <string name="toast_hot_autoloop_on">已啟用自動熱更（官方 manifest）</string>
     <string name="dialog_hot_auth_title">上傳需要 Google 授權</string>
     <string name="dialog_hot_auth_body">煙測 log 會上傳到 Drive 資料夾 x86-a-log。請一鍵「連 Google」授權（不要手貼 OAuth token）。若已有 relay，可改用 HTTPS 上傳。</string>
     <string name="dialog_hot_https_title">設定 HTTPS 上傳</string>

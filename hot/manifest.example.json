@@ -1,22 +1,22 @@
 {
   "schema": 1,
-  "coreVersion": "0.1.96-hot.1+core.1",
+  "coreVersion": "0.1.98+core.hot4",
   "channel": "smokeHot",
-  "createdAt": "2026-11-09T23:00:00+08:00",
-  "notes": "Example hot core: wine-launch.sh only. Host files on HTTPS with matching sha256.",
+  "createdAt": "2026-11-10T00:00:08+08:00",
+  "notes": "0.1.98 wine-launch (NOEXEC kept + cmd //c + mmap32_parent=0) + hot4 stamp. Replaces 0.1.97+core.hot4. minApk=109701 so hot.1+/hot.2/hot.3 can apply without new APK.",
   "minApkVersionCode": 109701,
   "files": [
     {
       "path": "wine-launch.sh",
-      "url": "https://example.com/hot/0.1.96-hot.1/wine-launch.sh",
-      "sha256": "REPLACE_WITH_REAL_SHA256",
-      "size": 0
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/hot-core-0.1.98.1/wine-launch.sh",
+      "sha256": "3bffc03678f17c1f2bf8bed4da8b6ac14ec9c83d3e1c9f878e1802754fed77e1",
+      "size": 185062
     },
     {
-      "path": "wine-reg-helper.py",
-      "url": "https://example.com/hot/0.1.96-hot.1/wine-reg-helper.py",
-      "sha256": "REPLACE_WITH_REAL_SHA256",
-      "size": 0
+      "path": "hot-core-stamp.txt",
+      "url": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/hot-core-0.1.98.1/hot-core-stamp.txt",
+      "sha256": "f14faa68aefbcf10b40a7580babb4af1e0c6e2d418df8a046e69355c464086be",
+      "size": 120
     }
   ],
   "smoke": {

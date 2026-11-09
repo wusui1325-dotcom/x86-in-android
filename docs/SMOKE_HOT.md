@@ -1,12 +1,14 @@
 # smokeHot channel — core hot-update + smoke log loop (MVP)
 
+> **全自動／零操作**：見 [`SMOKE_HOT_AUTO.md`](./SMOKE_HOT_AUTO.md)（0.1.96-hot.4+：`autoLoop`、官方 manifest、configGen 遷移）。
+
 Parallel to Path A (`mainline`). **Does not bump** `version.json` 0.1.96 / vc97.
 
 ## Versions
 | | value |
 |--|--|
-| versionName | `0.1.96-hot.1` |
-| versionCode | `109701` (= `100000 + 97*100 + 1`) |
+| versionName | `0.1.96-hot.4` |
+| versionCode | `109704` (= `100000 + 97*100 + 4`) |
 | applicationId | `com.wusper.x86.smokehot` |
 | flavor | `smokeHot` |
 
@@ -42,7 +44,8 @@ adb shell run-as com.wusper.x86.smokehot \
 2. Launch a workspace once so `session.log` exists (or hot-only round will say no log).
 3. ⋮ → **跑一輪熱更煙測**
 4. Or: `adb shell am start -n com.wusper.x86.smokehot/.MainActivity --ez hot_smoke_now true`
-5. Auto loop: set `autoLoop=true` + `manifestUrl` (poll every `pollIntervalSec`, default 300).
+5. Auto loop (hot.4+): default `autoLoop=true` + official `manifestUrl` (poll every `pollIntervalSec`, default 300).
+   ⋮ → **啟用自動熱更** forces official URL + one round. See `SMOKE_HOT_AUTO.md`.
 
 ## Rollback
 Hot apply sha/HTTP failure → restore `engine/hot/previous` → `current`. APK assets remain ultimate fallback.

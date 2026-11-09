@@ -54,11 +54,7 @@ object SmokeHotLoop {
                     delay(cfg.pollIntervalSec * 1000L)
                     continue
                 }
-                if (cfg.manifestUrl.isBlank()) {
-                    listener?.onStatus("manifestUrl empty — idle")
-                    delay(cfg.pollIntervalSec * 1000L)
-                    continue
-                }
+                // load() already falls back to OFFICIAL_MANIFEST_URL when blank
                 runCatching {
                     runOneRound(app, triggerHot = true, listener = listener)
                 }.onFailure {
@@ -90,9 +86,10 @@ object SmokeHotLoop {
         try {
             val cfg = HotSmokeConfig.load(ctx)
             var hotResult: HotCoreManager.ApplyResult? = null
-            if (triggerHot && cfg.manifestUrl.isNotBlank()) {
-                listener?.onStatus("fetch manifest…")
-                val man = HotCoreManager.fetchManifest(cfg.manifestUrl)
+            if (triggerHot) {
+                val url = cfg.effectiveManifestUrl()
+                listener?.onStatus("fetch manifest… ($url)")
+                val man = HotCoreManager.fetchManifest(url)
                 listener?.onStatus("manifest core=${man.coreVersion}")
                 hotResult = HotCoreManager.applyIfNewer(ctx, man, BuildConfig.VERSION_CODE)
                 listener?.onStatus(hotResult.message)
@@ -102,7 +99,7 @@ object SmokeHotLoop {
                     return@withContext RoundReport(hotResult, null, null, false, detail)
                 }
             } else {
-                listener?.onStatus("skip hot (no manifestUrl or triggerHot=false); installed=${HotCoreManager.installedCoreVersion(ctx)}")
+                listener?.onStatus("skip hot (triggerHot=false); installed=${HotCoreManager.installedCoreVersion(ctx)}")
             }
 
             listener?.onStatus("collect session.log…")

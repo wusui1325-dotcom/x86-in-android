@@ -581,6 +581,36 @@ class MainActivity : ComponentActivity() {
                                                 hotHttpsGate.value = true
                                             },
                                         )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.btn_hot_enable_autoloop)) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                val url = HotSmokeConfig.enableOfficialAutoLoop(this@MainActivity)
+                                                Toast.makeText(
+                                                    this@MainActivity,
+                                                    getString(R.string.toast_hot_autoloop_on),
+                                                    Toast.LENGTH_SHORT,
+                                                ).show()
+                                                android.util.Log.i("SmokeHotLoop", "enableOfficialAutoLoop url=$url")
+                                                // restart poll with new prefs + one immediate round
+                                                SmokeHotLoop.startAutoPoll(
+                                                    this@MainActivity,
+                                                    lifecycleScope,
+                                                    object : SmokeHotLoop.Listener {
+                                                        override fun onStatus(line: String) {
+                                                            android.util.Log.i("SmokeHotLoop", line)
+                                                        }
+                                                        override fun onRoundDone(ok: Boolean, detail: String) {
+                                                            android.util.Log.i("SmokeHotLoop", "done ok=$ok $detail")
+                                                        }
+                                                    },
+                                                )
+                                                runHotSmokeRound(skipAuthGate = false)
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Refresh, contentDescription = null)
+                                            },
+                                        )
                                     }
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.btn_about)) },

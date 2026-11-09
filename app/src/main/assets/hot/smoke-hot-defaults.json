@@ -1,7 +1,7 @@
 {
-  "manifestUrl": "",
+  "manifestUrl": "https://github.com/wusui1325-dotcom/x86-in-android/releases/download/hot-core-0.1.98.1/manifest.json",
   "pollIntervalSec": 300,
-  "autoLoop": false,
+  "autoLoop": true,
   "uploadMode": "drive",
   "uploadUrl": "",
   "uploadMethod": "POST",
@@ -10,5 +10,6 @@
   "driveFolderName": "x86-a-log",
   "driveOAuthClientId": "",
   "smokeWaitSeconds": 90,
-  "notes": "Use in-app 「連 Google」 (Drive scope) — do NOT paste OAuth tokens. Optional driveOAuthClientId = Web client id. Or uploadMode=https + uploadUrl → scripts/hot-smoke-drive-relay.py."
+  "configGen": 4,
+  "notes": "0.1.96-hot.4: official manifestUrl (hot-core-0.1.98.1 / 0.1.98+core.hot4) + autoLoop=true. Existing hot.2/hot.3 prefs migrated via configGen=4. Daily = push core+manifest; reinstall APK only for minApk/Sign-In/package."
 }

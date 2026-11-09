@@ -22,7 +22,7 @@ export GIT_SHA_OVERRIDE="${GIT_SHA_OVERRIDE:-$(git rev-parse --short HEAD)}"
 
 ./gradlew assembleSmokeHotRelease --no-daemon "$@"
 
-VER="0.1.96-hot.3"
+VER="0.1.96-hot.4"
 APK="$ROOT/app/build/outputs/apk/smokeHot/release/x86-in-android-${VER}.apk"
 if [[ ! -f "$APK" ]]; then
   APK=$(find "$ROOT/app/build/outputs/apk/smokeHot/release" -name '*.apk' | head -1 || true)

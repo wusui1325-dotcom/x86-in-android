@@ -3,5 +3,5 @@
   "versionName": "0.1.113",
   "versionCode": 115,
   "notes": "0.1.113: Dig112 REGRESSION — 112 kicked explorer from isApplicationWindow + required App hwnd for marker → .x86-x11-ready never written → MAP_WAIT desktop_ready=0 → APP_LOAD_FATAL → 0× Loaded (Boss pure black). Knives: (A) write desk marker on explorer desk=1 WITHOUT App hwnd (Present still excludes explorer); (B) APP_HWND_WAIT+force-map ONLY after APP_LOAD; (C) APP_LOAD_RETRY on late marker; (D) PRESENT_DIAG forceMap= + clear present_black only on live App. KEEP 112 anti-FP dig/NSIS seed/GRAN_ALIGN/amd64_wow64/mmap32_guest=0/NOEXEC/cmdline. No trampoline/hot/FF. vc115.",
-  "tipSha": "PENDING"
+  "tipSha": "367a0cb"
 }

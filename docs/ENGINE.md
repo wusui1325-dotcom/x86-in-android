@@ -1,3 +1,23 @@
+## 0.1.106 — Loaded A2 + phase-bound UX (no tick-rotate / hideable log)
+
+**Smoke (0.1.105):** `/machine x86` real spawn + CPIW single-BS + NtCreate machine 14c PASS;
+still **0× Loaded** / **0× App started_pid**; ShellExecuteEx fatal after machine 14c;
+ladder **0×** advance; dig stamps missing; Boss: status tick-rotate + `!running` force-open log covers Present.
+
+**P0 A2:** (1) `app_load_slice_file` kill `dd bs=1` (105 early_dig dump hung → starved dig+ladder);
+(2) `machine_014c` match Wine TRACE bare `machine 14c`; restore dig stamps;
+(3) PRIMARY `start /exec /machine x86 /wait`; (4) fast ladder on fail_sig/inner fatal (≥2s);
+(5) `create_fail=shellex_after_machine14c` + NTSTATUS hint. KEEP 102–105 gates / quiet / cap40 /
+MAP_WAIT / defer / NOEXEC / mmap32_creators / stub_quoted.
+
+**P0 UX:** status = **true phase-bound** (forbid tick rotate); log overlay **hideable**
+(user hide wins; never `!running` force; auto-collapse on WINE_START). KEEP BSOD `#0000AA` +
+footer + `：（` + ≥50 multi-line + status library ≥100.
+
+**Expect:** dig stamps `machine_014c=1` / `create_fail=` / `started_pid_after_app`; ladder advance
+after machine fail; ideally `Loaded L"C:\App\app.exe"` + started pid; status not tick-rotating;
+log hideable with Present visible.
+
 ## 0.1.104 — Wow64/machine App create + CPIW dblslash kill
 
 **Smoke (0.1.103):** RPCSS ready=1 / sc_rc=0 / hard-gate pass / creators OK;

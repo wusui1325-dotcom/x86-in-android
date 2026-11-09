@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.105",
-  "versionCode": 107,
-  "notes": "0.1.105: P0 actually SPAWN /machine x86 + CPIW dblslash kill for real (104 dig). PRIMARY decide=machine_x86 (start /machine x86 /wait) with spawn_evidence pid stamps; hang-ladder kill+SPAWN before heavy dig (set +e); order machine→direct→explorer→unix→start; cmd via quoted stub x86_launch.cmd to kill CPIW C:\\App\\\\app.exe; Secondary UX: blue-screen ≥50 zh-TW phrases (multi-line, ：（). KEEP 102/103/104 hard-gate/quiet RPCSS/soft-cap40/MAP_WAIT I*100ms/defer/TERM/dwell/creator_hang/mmap32_creators/parent MMAP32=0/WINELOADERNOEXEC. No hot/no soft-continue/no Present rewrite/no DXVK x32/no FF. UX+: BSOD #0000AA + footer disclaimer + LaunchStatusLines≥100. vc107.",
-  "tipSha": "a72b5db"
+  "versionName": "0.1.106",
+  "versionCode": 108,
+  "notes": "0.1.106: P0 A2+UX. Dig105: machine spawn+14c+dblslash PASS but 0×Loaded/started_pid; ShellExecuteEx after machine14c; ladder0×; dig stamps missing; Boss status tick-rotate + log !running force-open. Knives: slice_file kill dd bs=1; machine_014c match bare 14c; PRIMARY start /exec /machine x86; fast ladder on fail_sig/inner fatal; create_fail=shellex_after_machine14c; status phase-bound (no tick rotate); log hideable (user hide wins, never !running force). KEEP 102-105 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/BSOD#0000AA/footer/：（/≥50. No hot/soft-continue/Present rewrite/DXVK x32/FF. vc108.",
+  "tipSha": "PENDING"
 }

@@ -126,6 +126,8 @@ class SessionActivity : ComponentActivity() {
                 val scope = rememberCoroutineScope()
                 var logHighlightEpoch by remember { mutableIntStateOf(0) }
                 var logExpanded by remember { mutableStateOf(false) }
+                // 0.1.106: user hide must win — never let !running force-open log over Present
+                var logForceHidden by remember { mutableStateOf(false) }
                 fun annotatedLog(src: String) = buildAnnotatedString {
                     if (src.isEmpty()) { append(""); return@buildAnnotatedString }
                     val lower = src.lowercase()
@@ -282,6 +284,7 @@ class SessionActivity : ComponentActivity() {
                 var blueScreenLines by remember { mutableStateOf<List<String>>(emptyList()) }
                 var blueScreenSalt by remember { mutableIntStateOf(0) }
                 var statusTick by remember { mutableIntStateOf(0) }
+                var autoCollapsedOnWineStart by remember { mutableStateOf(false) }
                 // 0.1.64: sticky UI lines survive session.log overwrite every 400ms
                 var uiStickyLog by remember { mutableStateOf("") }
                 fun appendSticky(line: String) {
@@ -302,6 +305,14 @@ class SessionActivity : ComponentActivity() {
                     if (userScrolledLog) return@LaunchedEffect
                     val last = (logText.count { it == '\n' }).coerceAtLeast(0)
                     runCatching { logListState.scrollToItem(last) }
+                }
+                // 0.1.106: once WINE_START, default-collapse log so Present Surface is visible
+                LaunchedEffect(logText) {
+                    if (!autoCollapsedOnWineStart && "WINE_START" in logText && !showErrorCard) {
+                        autoCollapsedOnWineStart = true
+                        logExpanded = false
+                        // do not set logForceHidden — user can still expand; wineInit no longer forces
+                    }
                 }
                 LaunchedEffect(logListState.isScrollInProgress) {
                     if (logListState.isScrollInProgress) {
@@ -777,9 +788,10 @@ class SessionActivity : ComponentActivity() {
                     val x = inProcessX ?: return@LaunchedEffect
                     while (true) {
                         delay(2000)
-                        val runningNow = status.startsWith("執行中") || status.startsWith("正在初始化") ||
-                            status.startsWith("RpcSs") || status.startsWith("啟動")
-                        if (!runningNow && !status.startsWith("Present")) break
+                        // 0.1.106: engine liveness from log/pid — not LaunchStatusLines prefix
+                        val runningNow = "WINE_START" in logText || "WINEBOOT_INIT" in logText ||
+                            status.startsWith("Present") || guestPresented
+                        if (!runningNow) break
                         val stats = try { x.pathStats() } catch (_: Throwable) { "pathStats-error" }
                         val line = "PRESENT_DIAG $stats"
                         if (line != lastPresentDiag && presentDiagLines < 15) {
@@ -1059,12 +1071,12 @@ class SessionActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxSize(),
                             )
-                            val wineInitPhase = status.startsWith("正在初始化") || status.startsWith("RpcSs") ||
-                                (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_START" !in logText)
+                            // 0.1.106: wine-init from log stamps (status lines no longer start with 正在初始化/RpcSs)
+                            val wineInitPhase = (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) &&
+                                "WINE_START" !in logText)
                             // 0.1.63: clear 「等待客體」once Present posts (or stub-fallback)
-                            val showSurfaceHint = !showErrorCard && !guestPresented && (
-                                wineInitPhase || status.startsWith("執行中")
-                            )
+                            val sessionLiveHint = "WINE_START" in logText || wineInitPhase || guestPresented
+                            val showSurfaceHint = !showErrorCard && !guestPresented && sessionLiveHint
                             if (showSurfaceHint) {
                                 val bodyLines = blueScreenLines.filter {
                                     it != BlueScreenMessages.FOOTER
@@ -1212,12 +1224,21 @@ class SessionActivity : ComponentActivity() {
                                 }
                             }
                         }
-                        // 執行中預設收合日誌，把版面留給 Surface；錯誤／安裝時自動展開
-                        // wineboot 階段強制展開日誌並顯示「正在初始化 Wine…」
-                        val running = status.startsWith("執行中") || status.startsWith("正在初始化") || status.startsWith("RpcSs")
-                        val wineInitPhasePanel = status.startsWith("正在初始化") || status.startsWith("RpcSs") ||
-                            (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_START" !in logText)
-                        val showLogPanel = logExpanded || showErrorCard || installing || !running || wineInitPhasePanel
+                        // 0.1.106 P0 UX: running = engine/log liveness — NOT status.startsWith("執行中")
+                        // Dig 105: LaunchStatusLines rewrote status → !running forced fullscreen log forever.
+                        val running = "WINE_START" in logText || guestPresented ||
+                            (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_EXIT" !in logText)
+                        val wineInitPhasePanel = (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) &&
+                            "WINE_START" !in logText)
+                        // User hide wins; default collapse once WINE_START so Present Surface visible.
+                        // NEVER force-open via !running.
+                        val showLogPanel = when {
+                            showErrorCard || installing -> true
+                            logForceHidden -> false
+                            logExpanded -> true
+                            wineInitPhasePanel -> true
+                            else -> false
+                        }
                         val showLogPanelEffective = showLogPanel
                         val logLines = remember(logText, logHighlightEpoch) { logText.split('\n') }
                         val keyLower = remember { KEY_LOG_PATTERNS.map { it.lowercase() } }
@@ -1228,7 +1249,16 @@ class SessionActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             OutlinedButton(
-                                onClick = { logExpanded = !logExpanded },
+                                onClick = {
+                                    if (showLogPanel) {
+                                        // 0.1.106: hide must stick even during wineInitPhasePanel
+                                        logForceHidden = true
+                                        logExpanded = false
+                                    } else {
+                                        logForceHidden = false
+                                        logExpanded = true
+                                    }
+                                },
                                 modifier = Modifier.weight(1f),
                             ) {
                                 Text(
@@ -1252,6 +1282,7 @@ class SessionActivity : ComponentActivity() {
                             }
                             OutlinedButton(
                                 onClick = {
+                                    logForceHidden = false
                                     logExpanded = true
                                     jumpToKeyLog()
                                 },

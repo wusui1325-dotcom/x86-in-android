@@ -1,8 +1,9 @@
 package com.wusper.x86.session
 
 /**
- * 0.1.105 UX：啟動狀態列動態人話庫（≥100 句繁中）。
- * 依階段＋log 指紋輪替，避免只有「執行中／正在初始化」兩句。
+ * 0.1.106 UX：啟動狀態列動態人話庫（≥100 句繁中）。
+ * **真階段綁定**選句 — 禁止同階段內 tick 隨機輪換（Boss 105 差評）。
+ * 庫保留 ≥100；選句依 log 指紋／階段，可附短 metric。
  */
 object LaunchStatusLines {
 
@@ -205,21 +206,74 @@ object LaunchStatusLines {
     }
 
     /**
+     * 0.1.106: 依真階段／log 指紋選 **一條穩定句**；禁止 tick 輪換。
      * @param metric 可嵌入的短度量（如 t=12s pid=123）；空則純人話
+     * @param tick 保留參數相容呼叫端；**不再**用於句庫輪換
      */
     fun pick(logText: String, statusHint: String, tick: Int, metric: String = ""): String {
         val phase = detectPhase(logText, statusHint)
         val pool = pools[phase].orEmpty().ifEmpty { pools.getValue(Phase.GENERIC) }
-        val line = pool[(tick * 3 + phase.ordinal * 5).floorMod(pool.size)]
+        val line = phaseBoundLine(phase, logText, pool)
         val m = metric.trim()
         return if (m.isNotEmpty()) "$line（$m）" else line
     }
 
-    fun poolSize(): Int = pools.values.sumOf { it.size }
+    /** 真進度綁定：同 phase 內依 stamps 選固定索引，绝不用 tick。 */
+    private fun phaseBoundLine(phase: Phase, logText: String, pool: List<String>): String {
+        fun at(i: Int, fallback: String = pool.first()) =
+            pool.getOrElse(i) { fallback }
 
-    private fun Int.floorMod(m: Int): Int {
-        if (m <= 0) return 0
-        val r = this % m
-        return if (r >= 0) r else r + m
+        return when (phase) {
+            Phase.INSTALL -> at(0)
+            Phase.GPU -> when {
+                "TURNIP" in logText && "ok" in logText.lowercase() -> at(7)
+                else -> at(0)
+            }
+            Phase.X_SERVER -> when {
+                "InProcessX" in logText && "OK" in logText -> at(2)
+                else -> at(0)
+            }
+            Phase.WINEBOOT -> when {
+                "WINEBOOT_INIT done" in logText || "wineboot" in logText.lowercase() && "done" in logText.lowercase() -> at(6)
+                "system.reg" in logText -> at(1)
+                else -> at(0)
+            }
+            Phase.RPCSS -> when {
+                "RpcSs ready" in logText || "ready=1" in logText && "RPCSS" in logText -> at(8)
+                "RPCSS_PRESTART" in logText -> at(0)
+                else -> at(2)
+            }
+            Phase.DESKTOP -> when {
+                "MAP_WAIT" in logText && "ready" in logText -> at(4)
+                "MAP_WAIT" in logText -> at(3)
+                else -> at(0)
+            }
+            Phase.APP_LOAD -> when {
+                "Loaded L\"" in logText && ("App\\app.exe" in logText || "App/app.exe" in logText) -> at(6)
+                "ladder advance" in logText -> at(5)
+                "create_fail=" in logText || "shellex_after_machine14c" in logText -> at(14)
+                "machine 14c" in logText || "machine_014c=1" in logText || "machine 0x014c" in logText -> at(8)
+                "spawn_evidence=machine_x86_pid" in logText || "mode=start_machine_x86" in logText ||
+                    "/machine x86" in logText -> at(2)
+                "APP_LOAD cmdline" in logText -> at(0)
+                else -> at(0)
+            }
+            Phase.RUNNING -> when {
+                "guestPresented" in logText -> at(2)
+                else -> at(0)
+            }
+            Phase.WAIT_PRESENT -> when {
+                "APP_HWND" in logText -> at(6)
+                else -> at(0)
+            }
+            Phase.FAIL_HINT -> when {
+                "ladder advance exhausted" in logText -> at(3)
+                "create_fail=" in logText -> at(4)
+                else -> at(0)
+            }
+            Phase.GENERIC -> at(0)
+        }
     }
+
+    fun poolSize(): Int = pools.values.sumOf { it.size }
 }

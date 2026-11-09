@@ -1,3 +1,22 @@
+## 0.1.85 — awk→POSIX + Present forceGpu ahbCpuAccess0
+
+**Boss smoke (0.1.84):** `/usr/local/bin/wine-launch.sh: 428: awk: not found` — imagefs has
+no awk. TURNIP probe `ls -la | awk` aborted mid-launch. Also Present residual: GPU-only AHB
+(`ahbCpuAccess=0`) with stale non-null software `data` waited for guestBlack sticky →
+ahb_skip/BGRA black.
+
+**Fix:**
+- Kill **all** `awk` in wine-launch.sh → POSIX (`wc`/`while read` `/proc/mounts`); TURNIP
+  probe, `path_is_mounted`, wipe bind check. No busybox awk / no install awk into imagefs.
+- `forceGpu |= (lastAhbCpuAccess == 0)` when `ahbPtr != 0`; log once
+  `PRESENT_DIAG forceGpu=ahb_gpu reason=ahbCpuAccess0`
+- Keep BGRA for software Drawables (`ahbPtr==0`); **not** Present CPU-first flip
+- Keep 084 d3dcompiler / 083 Present cpuAccess / 082 syncInterval / 081 msgbox / 080 CRT /
+  079 CUI / 078 sticky / 076 TU_GMEM / 070 ahb_gpu
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.85`; no `awk: not found`; `TURNIP_PROBE so=[…]`;
+DIAG `ahbCpuAccess=0` → `forceGpu=ahb_gpu reason=ahbCpuAccess0`.
+
 ## 0.1.84 — d3dcompiler seed (47/46/43)
 
 **Smoke risk (0.1.83):** HWND + Present cpuAccess=false still black possible when titles

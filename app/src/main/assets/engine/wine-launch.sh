@@ -14,6 +14,24 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+
+# 0.1.85: POSIX mountpoint check — imagefs has no awk (Boss: awk: not found @ TURNIP probe).
+# /proc/mounts field2 = mountpoint (spaces as \040; our Wine paths have none).
+path_is_mounted() {
+  _pim_s="$1"
+  [ -n "$_pim_s" ] || return 1
+  while read -r _pim_dev _pim_mp _pim_rest; do
+    [ "$_pim_mp" = "$_pim_s" ] && { unset _pim_s _pim_dev _pim_mp _pim_rest; return 0; }
+  done < /proc/mounts 2>/dev/null
+  unset _pim_s _pim_dev _pim_mp _pim_rest
+  return 1
+}
+
+# 0.1.85: (1) P0 awk→POSIX — imagefs has no awk; set -e + TURNIP probe `ls|awk` → exit 127
+# → UI「客體命令不存在」; APP_LOAD/d3dcompiler/Present never ran. Kill all awk → wc /
+# while-read /proc/mounts (path_is_mounted, wipe bind). No busybox awk / no install.
+# (2) Present forceGpu when ahbCpuAccess=0 (083 residual stale software data). Log
+# reason=ahbCpuAccess0. Not Present CPU-first flip. Keep 084–070 knives.
 # 0.1.84: d3dcompiler seed — d3dcompiler_47/46/43 (+33–42) into system32 + SysWOW64
 # (pe_dir has them; PREFIX_EXEC/DXVK reseed omit). Log APP_D3DCOMPILER_SEED. Miss →
 # shader compile fail / MessageBox / black after HWND. Keep 083 Present cpuAccess /
@@ -70,7 +88,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.84
+WINE_LAUNCH_STAMP=0.1.85
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -425,12 +443,15 @@ else
   _icd_json=/mnt/gpu/turnip/freedreno_icd.json
   _probe_so=MISSING
   _probe_json=MISSING
-  [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ] && _probe_so=$(ls -la /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null | awk '{print $5,$NF}')
+  if [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
+    _probe_sz=$(wc -c < /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null || echo 0)
+    _probe_so="${_probe_sz} /mnt/gpu/turnip/libvulkan_freedreno.so"
+  fi
   [ -f "$_icd_json" ] && _probe_json=$(head -c 200 "$_icd_json" 2>/dev/null | tr '\n' ' ')
   _kgsl_ls=$(ls -la /dev/kgsl-3d0 2>/dev/null || echo missing)
   log "TURNIP_PROBE so=[${_probe_so}] kgsl_node=[${_kgsl_ls}] icd_head=[${_probe_json}] VK_LOADER_DEBUG=${VK_LOADER_DEBUG:-} wrapper=${X86_DXWRAPPER:-dxvk}"
   log "TURNIP_PROBE note: grep wine-run.out for DXVK: / err:vulkan / vkCreate / Adapter"
-  unset _icd_ok _icd_sz _kgsl _dlls _dll_miss _d _f _sz _icd_json _probe_so _probe_json _kgsl_ls
+  unset _icd_ok _icd_sz _kgsl _dlls _dll_miss _d _f _sz _icd_json _probe_so _probe_sz _probe_json _kgsl_ls
   # Gladio 客體 libGL（Wine OpenGL → GLX → 宿主 gladiorenderer）
   if [ -f /opt/gladio/lib/libGL.so.1.7.0 ] || [ -f /opt/gladio/lib/libGL.so.1 ]; then
     export LD_LIBRARY_PATH="/opt/gladio/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -878,10 +899,7 @@ ensure_prefix_exec() {
     [ -d "$d" ]
   }
 
-  path_is_mounted() {
-    local s="$1"
-    awk -v m="$s" '$2==m {found=1} END{exit !found}' /proc/mounts 2>/dev/null
-  }
+  # path_is_mounted: use global POSIX helper (0.1.85 — no awk)
 
   # Drop stale bind from 0.1.48–0.1.51 that covered real system32
   if path_is_mounted "$sys32"; then
@@ -1816,7 +1834,7 @@ wipe_wine_prefix() {
   log "WINEBOOT_WIPE begin reason=$reason path=$p"
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
   # Drop stale system32 bind if any
-  if awk -v m="$p/drive_c/windows/system32" '$2==m {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+  if path_is_mounted "$p/drive_c/windows/system32"; then
     umount "$p/drive_c/windows/system32" 2>/dev/null || umount -l "$p/drive_c/windows/system32" 2>/dev/null || true
   fi
   # Keep parent dir; wipe prefix contents (regs + drive_c + markers)

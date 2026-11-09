@@ -1415,6 +1415,7 @@ class SessionActivity : ComponentActivity() {
             "X86_DXGI_SYNC",
             "PresentExtension GPUImage",
             "ahbCpuAccess",
+            "ahbCpuAccess0",
             "cpuAccess=false",
             "wineconsole",
             "reason=",

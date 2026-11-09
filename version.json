@@ -1,6 +1,6 @@
 {
-  "package": "com.wusper.x86",
-  "versionName": "0.1.84",
-  "versionCode": 85,
-  "notes": "0.1.84: d3dcompiler_47/46/43 (+33–42) seed into system32+SysWOW64 (APP_D3DCOMPILER_SEED); pe_dir has them, PREFIX_EXEC/DXVK reseed omitted; keep 083 Present cpuAccess/082 syncInterval/081 msgbox/080 CRT/079 CUI/078 sticky/076 TU_GMEM"
+  "minSdk": 28,
+  "versionName": "0.1.85",
+  "versionCode": 86,
+  "notes": "0.1.85: awk\u2192POSIX (TURNIP probe/path_is_mounted/wipe; imagefs no awk) + Present forceGpu when ahbCpuAccess=0 (reason=ahbCpuAccess0); keep 084\u2013070"
 }

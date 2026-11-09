@@ -38,6 +38,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * wait (no desktop steal) before first present; DIAG {@code mapState=} {@code mapWait=}.
  * 0.1.83: DIAG {@code ahbCpuAccess=} from GPUImage.getVirtualData()!=null (PresentExtension
  * now attaches cpuAccess=false to match DRI3; first-attach race fixed).
+ * 0.1.85: forceGpu also when {@code lastAhbCpuAccess==0} (GPU-only AHB with stale non-null
+ * software {@code data} was waiting for guestBlack sticky → ahb_skip/BGRA black). Log once
+ * {@code forceGpu=ahb_gpu reason=ahbCpuAccess0}. Not Present CPU-first flip.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -85,6 +88,8 @@ public final class PresentXFramePump extends Thread {
     private String lastGuestSample = "none";
     /** 0.1.83: 1 if GPUImage has CPU virtualData (cpuAccess=true); 0 if GPU-only; -1 if no AHB. */
     private int lastAhbCpuAccess = -1;
+    /** 0.1.85: once-log when forceGpu fires for ahbCpuAccess==0. */
+    private boolean loggedAhbCpuAccess0Force;
     /** DXVK_HUD top band + bottom-left corner to ignore when sampling. */
     private static final int HUD_EXCLUDE_TOP = 64;
     private static final int HUD_EXCLUDE_BL_W = 180;
@@ -218,7 +223,16 @@ public final class PresentXFramePump extends Thread {
         // always fails. True CPU path = BGRA(virtualData).
         // 0.1.70: forceGpu when no CPU mapping (DRI3) or guestBlack sticky (GPU wrote
         // AHB but CPU view stays black). Else ahb_skip → BGRA below.
-        boolean forceGpu = (ahbPtr != 0) && (data == null || guestBlackSticky != 0);
+        // 0.1.85: also forceGpu when ahbCpuAccess==0 (GPU-only AHB) even if Drawable still
+        // holds a stale non-null software ByteBuffer — otherwise wait for sticky / ahb_skip.
+        boolean forceGpu = (ahbPtr != 0)
+                && (data == null || guestBlackSticky != 0 || lastAhbCpuAccess == 0);
+        if (forceGpu && lastAhbCpuAccess == 0 && !loggedAhbCpuAccess0Force) {
+            loggedAhbCpuAccess0Force = true;
+            Log.i(TAG, "PRESENT_DIAG forceGpu=ahb_gpu reason=ahbCpuAccess0 frame=" + frameIndex
+                    + " data=" + (data != null ? "nonNull" : "null")
+                    + " sticky=" + guestBlackSticky);
+        }
         if (ahbPtr != 0 && data == null) {
             int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height, true);
             if (rc == 0) {

@@ -125,6 +125,7 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.85 awk→POSIX + forceGpu ahbCpuAccess0：** wine-launch 無 awk（TURNIP probe／path_is_mounted）；GPU-only AHB → `forceGpu=ahb_gpu reason=ahbCpuAccess0`
 - **0.1.84 d3dcompiler seed：** `d3dcompiler_47/46/43` (+33–42) → system32+SysWOW64
   (`APP_D3DCOMPILER_SEED`); pe_dir has them; PREFIX_EXEC/DXVK reseed omit. Miss →
   shader compile fail / MessageBox / black after HWND. Keep 083 Present cpuAccess /

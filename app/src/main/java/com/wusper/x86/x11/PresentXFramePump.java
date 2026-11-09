@@ -32,6 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * pathStats adds guestSample= / nonBlackGuest=.
  * 0.1.70: do NOT promote software Drawable→GPUImage (wipes GDI pixels). When AHB has no
  * CPU mapping or guestBlack sticky, forceGpu→ahb_gpu so DRI3/DXVK pixels can land.
+ * 0.1.74: prefer windows tagged with {@code _NET_WM_HWND} (real Wine HWND) over area-only
+ * app children so Present tracks the DXGI swapchain window; DIAG {@code hwnd=}.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -59,6 +61,8 @@ public final class PresentXFramePump extends Thread {
     private int lastMappedKids;
     private int lastDesktopOnly; // 1 = presenting explorer desktop with no app child
     private String lastWmClass = "";
+    /** 0.1.74: _NET_WM_HWND of presented window (0 if unset). */
+    private long lastHwnd;
     private int emptyAfterReady;
     private String lastStatsLogged = "";
     private ByteBuffer hudScratch;
@@ -146,6 +150,7 @@ public final class PresentXFramePump extends Thread {
                 lastMappedKids = pr.mappedKids;
                 lastDesktopOnly = pr.desktopOnly ? 1 : 0;
                 lastWmClass = pr.wmClass != null ? pr.wmClass : "";
+                lastHwnd = pr.hwnd;
                 Pick best = pr.pick;
                 if (best == null) {
                     best = pickFromWindow(root);
@@ -436,7 +441,9 @@ public final class PresentXFramePump extends Thread {
     /**
      * 0.1.67: prefer application / non-desktop windows over explorer desktop.
      * Largest-area desktop (full WxH) previously always beat real app children.
-     * Priority: focused application → any application → non-desktop → desktop/any.
+     * 0.1.74: among equals, prefer windows with {@code _NET_WM_HWND} (DXGI/D3D target).
+     * Priority: focused+HWND → focused app → HWND app → any app → HWND non-desk →
+     * non-desk → desktop/any.
      */
     private static PickResult pickBestContent(Window root, XServer xServer) {
         Hold hold = new Hold();
@@ -452,7 +459,8 @@ public final class PresentXFramePump extends Thread {
                     if (app || (!focused.isDesktopWindow())) {
                         Pick fp = pickFromWindow(focused);
                         if (fp != null) {
-                            return new PickResult(fp, focused, hold.mappedKids, false, classOf(focused));
+                            return new PickResult(fp, focused, hold.mappedKids, false, classOf(focused),
+                                    hwndOf(focused));
                         }
                     }
                 }
@@ -460,18 +468,35 @@ public final class PresentXFramePump extends Thread {
         } catch (Throwable ignored) {
         }
 
+        if (hold.bestAppHwnd != null) {
+            return new PickResult(hold.bestAppHwnd, hold.bestAppHwndWin, hold.mappedKids, false,
+                    classOf(hold.bestAppHwndWin), hwndOf(hold.bestAppHwndWin));
+        }
         if (hold.bestApp != null) {
             return new PickResult(hold.bestApp, hold.bestAppWin, hold.mappedKids, false,
-                    classOf(hold.bestAppWin));
+                    classOf(hold.bestAppWin), hwndOf(hold.bestAppWin));
+        }
+        if (hold.bestNonDeskHwnd != null) {
+            return new PickResult(hold.bestNonDeskHwnd, hold.bestNonDeskHwndWin, hold.mappedKids, false,
+                    classOf(hold.bestNonDeskHwndWin), hwndOf(hold.bestNonDeskHwndWin));
         }
         if (hold.bestNonDesktop != null) {
             return new PickResult(hold.bestNonDesktop, hold.bestNonDeskWin, hold.mappedKids, false,
-                    classOf(hold.bestNonDeskWin));
+                    classOf(hold.bestNonDeskWin), hwndOf(hold.bestNonDeskWin));
         }
         boolean deskOnly = hold.bestAnyWin != null && hold.bestAnyWin.isDesktopWindow();
         if (hold.bestAny == null) deskOnly = true;
         return new PickResult(hold.bestAny, hold.bestAnyWin, hold.mappedKids, deskOnly,
-                classOf(hold.bestAnyWin));
+                classOf(hold.bestAnyWin), hwndOf(hold.bestAnyWin));
+    }
+
+    private static long hwndOf(Window w) {
+        if (w == null) return 0L;
+        try {
+            return w.getHandle();
+        } catch (Throwable t) {
+            return 0L;
+        }
     }
 
     private static String classOf(Window w) {
@@ -492,18 +517,30 @@ public final class PresentXFramePump extends Thread {
             if (p != null) {
                 boolean desk = false;
                 boolean app = false;
+                long hwnd = 0L;
                 try {
                     desk = node.isDesktopWindow();
                     app = node.isApplicationWindow();
+                    hwnd = node.getHandle();
                 } catch (Throwable ignored) {
                 }
                 if (app && (hold.bestApp == null || p.area > hold.bestApp.area)) {
                     hold.bestApp = p;
                     hold.bestAppWin = node;
                 }
+                if (app && hwnd != 0L
+                        && (hold.bestAppHwnd == null || p.area > hold.bestAppHwnd.area)) {
+                    hold.bestAppHwnd = p;
+                    hold.bestAppHwndWin = node;
+                }
                 if (!desk && (hold.bestNonDesktop == null || p.area > hold.bestNonDesktop.area)) {
                     hold.bestNonDesktop = p;
                     hold.bestNonDeskWin = node;
+                }
+                if (!desk && hwnd != 0L
+                        && (hold.bestNonDeskHwnd == null || p.area > hold.bestNonDeskHwnd.area)) {
+                    hold.bestNonDeskHwnd = p;
+                    hold.bestNonDeskHwndWin = node;
                 }
                 if (hold.bestAny == null || p.area > hold.bestAny.area) {
                     hold.bestAny = p;
@@ -530,10 +567,14 @@ public final class PresentXFramePump extends Thread {
 
     private static final class Hold {
         Pick bestApp;
+        Pick bestAppHwnd;
         Pick bestNonDesktop;
+        Pick bestNonDeskHwnd;
         Pick bestAny;
         Window bestAppWin;
+        Window bestAppHwndWin;
         Window bestNonDeskWin;
+        Window bestNonDeskHwndWin;
         Window bestAnyWin;
         int mappedKids;
     }
@@ -544,13 +585,16 @@ public final class PresentXFramePump extends Thread {
         final int mappedKids;
         final boolean desktopOnly;
         final String wmClass;
+        final long hwnd;
 
-        PickResult(Pick pick, Window win, int mappedKids, boolean desktopOnly, String wmClass) {
+        PickResult(Pick pick, Window win, int mappedKids, boolean desktopOnly, String wmClass,
+                   long hwnd) {
             this.pick = pick;
             this.win = win;
             this.mappedKids = mappedKids;
             this.desktopOnly = desktopOnly;
             this.wmClass = wmClass;
+            this.hwnd = hwnd;
         }
     }
 
@@ -590,6 +634,8 @@ public final class PresentXFramePump extends Thread {
             Log.w(TAG, "PRESENT_DIAG guestBlack=1 path=" + path
                     + " desktopOnly=" + lastDesktopOnly
                     + " mappedKids=" + lastMappedKids
+                    + " hwnd=0x" + Long.toHexString(lastHwnd)
+                    + " wmClass=" + (lastWmClass.isEmpty() ? "-" : lastWmClass)
                     + " nonBlack=" + nonBlackHits
                     + " nonBlackGuest=" + nonBlackGuestHits
                     + " guestSample=" + lastGuestSample
@@ -614,6 +660,7 @@ public final class PresentXFramePump extends Thread {
                 + " mappedKids=" + lastMappedKids
                 + " desktopOnly=" + lastDesktopOnly
                 + " wmClass=" + (lastWmClass.isEmpty() ? "-" : lastWmClass)
+                + " hwnd=0x" + Long.toHexString(lastHwnd)
                 + " empty=" + emptyAfterReady
                 + " ready=" + NativeEngine.nativePresentReady()
                 + " egl=" + NativeEngine.nativePresentEglReady()

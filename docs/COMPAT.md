@@ -1,3 +1,20 @@
+## 0.1.74 — winex11 HWND / exclusive FS / depth
+
+**Smoke risk (0.1.73):** `noubwc,sysmem` + Mesa cache can still leave a black window when
+winex11 attempts XRandR/XVidMode mode-switch or DXGrab on in-process X, or Present
+samples a non-HWND child while DXGI paints into `_NET_WM_HWND`.
+
+**Fix:**
+- `patch-present-knobs`: `UseXRandR=N`, `UseXVidMode=N`, `DXGrab=N`, `ScreenDepth=32`,
+  `Decorated=N` (keep GrabFullscreen=N Managed=Y UseTakeFocus=N)
+- Present prefer `_NET_WM_HWND` windows; DIAG `hwnd=0x…`
+- dxvk.conf: `d3d9.enableDialogMode=True`, `dxvk.allowFse=False`
+- MED: `X86_TU_GMEM=1` → `TU_DEBUG=noconform,noubwc,gmem` (default sysmem unchanged)
+- Keep 073 noubwc/sysmem / 072 dxvk.conf / 071 ICD / 070 ahb_gpu
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.74`; `DRIVER_REG presentknobs … UseXRandR=N ScreenDepth=32`;
+Present `hwnd=0x… desktopOnly=0`; `guestBlack=0` with real pixels.
+
 ## 0.1.73 — Turnip queue noubwc/sysmem + Mesa shader cache
 
 **Smoke risk (0.1.72):** `deferSurfaceCreation` + VideoMemory/GrabFullscreen/ESYNC can still

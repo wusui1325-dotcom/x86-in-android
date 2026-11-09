@@ -415,10 +415,11 @@ def _upsert_section(text, section, kv_pairs):
 
 
 def cmd_patch_present_knobs(prefix):
-    """0.1.72: Wine Direct3D VideoMemorySize/csmt + X11 Driver grab/focus knobs.
+    """0.1.72/74: Wine Direct3D VideoMemorySize/csmt + X11 Driver grab/FS/depth knobs.
     Usage: wine_reg_helper.py patch-present-knobs <prefix>
-    Helps DXGI/DXVK post-create black (surface timing still needs dxvk.conf) and
-    wined3d bisect paint. Never invent user.reg before wineboot.
+    0.1.74 adds UseXRandR/UseXVidMode/DXGrab=N, ScreenDepth=32, Decorated=N
+    (leftover exclusive-FS / mode-switch on in-process X). Never invent user.reg
+    before wineboot.
     """
     path = os.path.join(prefix, "user.reg")
     info = detect(path)
@@ -437,12 +438,17 @@ def cmd_patch_present_knobs(prefix):
         ('"GrabFullscreen"', '"GrabFullscreen"="N"'),
         ('"Managed"', '"Managed"="Y"'),
         ('"UseTakeFocus"', '"UseTakeFocus"="N"'),
+        # 0.1.74: leftover exclusive-FS / mode-switch / depth on in-process X
+        ('"UseXRandR"', '"UseXRandR"="N"'),
+        ('"UseXVidMode"', '"UseXVidMode"="N"'),
+        ('"DXGrab"', '"DXGrab"="N"'),
+        ('"ScreenDepth"', '"ScreenDepth"="32"'),
+        ('"Decorated"', '"Decorated"="N"'),
     ])
     text = ensure_header_and_arch(text, "win64")
     write_utf8(path, text)
-    print("presentknobs VideoMemorySize=2048 csmt=1 GrabFullscreen=N Managed=Y UseTakeFocus=N")
+    print("presentknobs VideoMemorySize=2048 csmt=1 GrabFullscreen=N Managed=Y UseTakeFocus=N UseXRandR=N UseXVidMode=N DXGrab=N ScreenDepth=32 Decorated=N")
     sys.exit(0)
-
 
 def main():
     if len(sys.argv) < 3:

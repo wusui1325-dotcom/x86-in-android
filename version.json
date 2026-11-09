@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.73",
-  "versionCode": 74,
-  "notes": "0.1.73: Turnip queue — TU_DEBUG noconform,noubwc,sysmem + Mesa shader cache + soft KGSL/dma_heap"
+  "versionName": "0.1.74",
+  "versionCode": 75,
+  "notes": "0.1.74: winex11 HWND/FS — UseXRandR/UseXVidMode/DXGrab=N ScreenDepth=32 Decorated=N + Present HWND prefer + dxvk dialogMode; X86_TU_GMEM=1 bisect"
 }

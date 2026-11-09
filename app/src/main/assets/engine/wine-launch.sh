@@ -14,6 +14,8 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.74: winex11 HWND/FS — UseXRandR/UseXVidMode/DXGrab=N ScreenDepth=32 Decorated=N;
+# Present prefer _NET_WM_HWND; dxvk dialogMode; optional X86_TU_GMEM=1 (a710/720 bisect).
 # 0.1.73: Turnip queue — TU_DEBUG noconform,noubwc,sysmem + Mesa shader cache under /mnt/data;
 # soft KGSL/dma_heap bind (LaunchPipeline). Keep 0.1.72 dxvk.conf/ESYNC.
 # 0.1.72: DXGI Present — dxvk.conf deferSurfaceCreation + Direct3D/X11 reg + WINEESYNC.
@@ -35,7 +37,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.73
+WINE_LAUNCH_STAMP=0.1.74
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -127,7 +129,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.72 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.74 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -135,8 +137,11 @@ d3d9.deferSurfaceCreation = True
 dxgi.maxDeviceMemory = 2048
 # Prefer fifo; tearFree=True → mailbox often unsupported on mobile WSI
 dxvk.tearFree = False
+# 0.1.74: avoid exclusive-ish D3D8/9 paths; FSE is Windows-only (explicit off)
+d3d9.enableDialogMode = True
+dxvk.allowFse = False
 DXVKEOF
-      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0"
+      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0 dialogMode=1 allowFse=0"
     fi
     export DXVK_CONFIG_FILE="$_dxvk_conf"
     log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} config=${DXVK_CONFIG_FILE:-off} (Present skips HUD band)"
@@ -193,7 +198,20 @@ ICDEOF
   export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   # 0.1.73: noubwc (AHB Present readback/sample) + sysmem (skip GMEM resolve black/hang;
   # Pipetto 25.1 R2 — not Autotuner). Overridable via TU_DEBUG env.
-  export TU_DEBUG="${TU_DEBUG:-noconform,noubwc,sysmem}"
+  # 0.1.74 MED: X86_TU_GMEM=1 → noconform,noubwc,gmem for a710/720 bisect (default unchanged).
+  if [ -z "${TU_DEBUG:-}" ]; then
+    case "${X86_TU_GMEM:-0}" in
+      1|y|Y|yes|YES|true|TRUE)
+        export TU_DEBUG="noconform,noubwc,gmem"
+        log "TURNIP_GMEM X86_TU_GMEM=1 → TU_DEBUG=$TU_DEBUG (a710/720 bisect)"
+        ;;
+      *)
+        export TU_DEBUG="noconform,noubwc,sysmem"
+        ;;
+    esac
+  else
+    export TU_DEBUG
+  fi
   # Writable Mesa shader cache under /mnt/data (Winlator-align; avoid PRoot /tmp noexec)
   export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/mnt/data/mesa_shader_cache}"
   export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-false}"
@@ -1422,7 +1440,7 @@ ensure_graphics_x11_reg() {
     while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-dll.out || true
   fi
   unset _dll_mode
-  # 0.1.72: Direct3D VideoMemorySize/csmt + X11 GrabFullscreen/Managed/UseTakeFocus
+  # 0.1.72/74: Direct3D VideoMemorySize/csmt + X11 Grab/FS/depth (UseXRandR/ScreenDepth/Decorated)
   set +e
   wine_reg_helper patch-present-knobs > /mnt/data/wine-present.out 2>&1
   PRESENT_RC=$?

@@ -125,6 +125,9 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.74 winex11 HWND/FS：** X11 `UseXRandR=N`/`UseXVidMode=N`/`DXGrab=N`/`ScreenDepth=32`/`Decorated=N`;
+  Present prefer `_NET_WM_HWND`; dxvk `enableDialogMode` + `allowFse=False`; optional
+  `X86_TU_GMEM=1` → `TU_DEBUG=…,gmem` (default sysmem unchanged). No Present CPU-first flip.
 - **0.1.73 Turnip queue：** default `TU_DEBUG=noconform,noubwc,sysmem` (UBWC-off for AHB
   Present sample; sysmem for GMEM black class on Pipetto 25.1 R2). Mesa shader cache under
   `/mnt/data/mesa_shader_cache` + `XDG_CACHE_HOME=/mnt/data/xdg-cache`. Soft dma_heap bind

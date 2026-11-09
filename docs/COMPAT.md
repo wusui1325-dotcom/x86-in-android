@@ -1,3 +1,25 @@
+## 0.1.58 — win64 prefix heal (32-bit installation refusal)
+
+**Bug (0.1.57 smoke):** Offline RpcSs/MountMgr SUCCESS (`file_rpcss=yes`), GUI_SEED OK, but
+every wine launch printed `wine: '/home/xuser/.wine' is a 32-bit installation, it cannot
+support 64-bit applications.` → `RPCSS_PRESTART alive=0` → `WINE_EXIT=1`.
+
+**Root cause:** Wine server (`registry.c`): if `system.reg` loads **without** `#arch=win64`,
+`prefix_type` defaults to **PREFIX_32BIT**. Reused ~1.5MB prefix lacked the directive
+(or had win32). x86_64-unix wine then refuses all 64-bit PE (rpcss/explorer/app).
+
+**Fix:**
+- `export WINEARCH=win64` on all wine paths.
+- Offline heal: force `#arch=win64` in `system.reg` / `user.reg` / `userdef.reg`;
+  `mkdir -p syswow64`. Never wine reg.
+- Re-heal after RpcSs offline patch (wineserver -k).
+- If wine still prints 32-bit message → `WINE_ARCH FATAL 32bit-prefix` + auto wipe+reinit
+  once (app heals; Boss need not manually wipe unless `.arch-repair-done` already set).
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.58` → `WINEARCH=win64` →
+`WINE_ARCH ensure done … #arch=win64` → `RPCSS_REG ensure done offline=yes` →
+`RPCSS_PRESTART … alive=1` (no 32-bit installation line) → `WINE_START` → Present or next err.
+
 ## 0.1.57 — offline system.reg RpcSs/MountMgr (no wine reg)
 
 **Bug (0.1.56 smoke):** Prefix complete (`system.reg≈1.5MB`) skipped wineboot; seed bins

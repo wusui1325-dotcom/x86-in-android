@@ -3,5 +3,5 @@
   "versionName": "0.1.96",
   "versionCode": 97,
   "notes": "0.1.96: P0 NtCreateUserProcess i386 (095 no started pid). BOX64_MMAP32=1 for APP_LOAD; C:/App forward-slash; direct_start64=start //exec //wait; unset WINELOADERNOEXEC (64-bit MAIN); BinaryType_host + ntcreate_diag stamps; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "PENDING"
+  "tipSha": "005d82c"
 }

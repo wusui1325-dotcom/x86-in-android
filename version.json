@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.106",
-  "versionCode": 108,
-  "notes": "0.1.106: P0 A2+UX. Dig105: machine spawn+14c+dblslash PASS but 0×Loaded/started_pid; ShellExecuteEx after machine14c; ladder0×; dig stamps missing; Boss status tick-rotate + log !running force-open. Knives: slice_file kill dd bs=1; machine_014c match bare 14c; PRIMARY start /exec /machine x86; fast ladder on fail_sig/inner fatal; create_fail=shellex_after_machine14c; status phase-bound (no tick rotate); log hideable (user hide wins, never !running force). KEEP 102-105 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/BSOD#0000AA/footer/：（/≥50. No hot/soft-continue/Present rewrite/DXVK x32/FF. vc108.",
-  "tipSha": "76c61fe"
+  "versionName": "0.1.107",
+  "versionCode": 109,
+  "notes": "0.1.107: P0 A2+BSOD. Dig106: ladder/dig/status/log OK but A2 REGRESS 14c→0 because PRIMARY start /exec /machine x86 → GetBinaryTypeW(\"/machine\") (/exec consumes rest); 0×MACHINE_TYPE; App machine0; ladder ends explorer (0×unix); Boss blueScreenSalt++ rotates BSOD ~2s + empty body. Knives: (1) PRIMARY start /machine x86 /wait /exec path (switches before /exec); (2) unix start /unix /wait /exec $SEED + faster explorer→unix; (3) create_fail=getbinarytype_flag_as_path; (4) overlay-keep require Loaded (no clear on nonBlackGuest alone); (5) BSOD lock by reason fingerprint — delete salt++; never blank ：（+≥1+footer. KEEP 102-106 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/dblslash/phase status/logForceHidden/BSOD#0000AA. No hot/soft-continue/Present rewrite/DXVK x32/FF. vc109.",
+  "tipSha": "PENDING"
 }

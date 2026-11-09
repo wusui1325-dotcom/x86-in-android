@@ -280,9 +280,9 @@ class SessionActivity : ComponentActivity() {
                 var guestPresented by remember { mutableStateOf(false) }
                 var presentDiagLines by remember { mutableIntStateOf(0) }
                 var lastPresentDiag by remember { mutableStateOf("") }
-                // 0.1.105: 藍屏人話錯誤（≥50 句庫；可多句；含：（）
+                // 0.1.107: 藍屏人話錯誤 — 依失敗原因鎖住；禁止 salt 每秒輪換；永不空白
                 var blueScreenLines by remember { mutableStateOf<List<String>>(emptyList()) }
-                var blueScreenSalt by remember { mutableIntStateOf(0) }
+                var blueScreenReasonKey by remember { mutableStateOf("") }
                 var statusTick by remember { mutableIntStateOf(0) }
                 var autoCollapsedOnWineStart by remember { mutableStateOf(false) }
                 // 0.1.64: sticky UI lines survive session.log overwrite every 400ms
@@ -595,7 +595,12 @@ class SessionActivity : ComponentActivity() {
                     ) {
                         status = "啟動進程內 X"
                         guestPresented = false
-                        blueScreenLines = emptyList()
+                        // 0.1.107: never leave BSOD body empty — seed locked GENERIC
+                        run {
+                            val seed = BlueScreenMessages.pick("", maxLines = 2)
+                            blueScreenLines = seed.lines
+                            blueScreenReasonKey = BlueScreenMessages.reasonFingerprint("")
+                        }
                         statusTick = 0
                         presentDiagLines = 0
                         lastPresentDiag = ""
@@ -809,16 +814,17 @@ class SessionActivity : ComponentActivity() {
                         val deskOnly = Regex("""\bdesktopOnly=(\d+)""").find(stats)
                             ?.groupValues?.getOrNull(1) == "1"
                         val presented = try { x.hasPresented() } catch (_: Throwable) { false }
-                        // 0.1.105 Secondary UX: 藍屏說明（desktopOnly／無 App）
-                        if (!guestPresented && (deskOnly || "create_fail=" in logText || "loaded_app=0" in logText)) {
-                            val pick = BlueScreenMessages.pick(logText, maxLines = 3, salt = blueScreenSalt)
-                            blueScreenSalt += 1
-                            if (pick.lines != blueScreenLines) {
+                        // 0.1.107 UX: 藍屏依失敗原因鎖住 — 刪 blueScreenSalt++；永不 blank
+                        if (!guestPresented && (deskOnly || "create_fail=" in logText || "loaded_app=0" in logText || blueScreenLines.isEmpty())) {
+                            val key = BlueScreenMessages.reasonFingerprint(logText)
+                            if (key != blueScreenReasonKey || blueScreenLines.isEmpty()) {
+                                val pick = BlueScreenMessages.pick(logText, maxLines = 3)
                                 blueScreenLines = pick.lines
+                                blueScreenReasonKey = key
                             }
-                        } else if (guestPresented) {
-                            blueScreenLines = emptyList()
                         }
+                        // 0.1.107: only clear overlay on real Loaded App — NOT nonBlackGuest alone
+                        // (Dig 106: nonBlackGuest=26 loadedHint=0 cleared BSOD → false Present)
                         if (!guestPresented && ready && !deskOnly) {
                             val okMatch = Regex("""\bok=(\d+)""").find(stats)
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
@@ -835,12 +841,20 @@ class SessionActivity : ComponentActivity() {
                                                         .containsMatchIn(logText)
                                                 )
                                         )
-                            if ((presented || ok > 0) && (nbg > 0 || loadedHint)) {
+                            if ((presented || ok > 0) && loadedHint) {
                                 guestPresented = true
                                 appendSticky(
                                     "PRESENT_DIAG guestPresented=true ok=$ok nonBlackGuest=$nbg " +
-                                        "loadedHint=${if (loadedHint) 1 else 0} desktopOnly=0 (overlay clear)"
+                                        "loadedHint=1 desktopOnly=0 overlay_keep=loaded_required (0.1.107)"
                                 )
+                            } else if (nbg > 0 && !loadedHint) {
+                                // Keep BSOD — explorer noise must not clear overlay
+                                if ("overlay_keep=nonBlackGuest_without_Loaded" !in uiStickyLog) {
+                                    appendSticky(
+                                        "PRESENT_DIAG overlay_keep=nonBlackGuest_without_Loaded " +
+                                            "nonBlackGuest=$nbg loadedHint=0 (0.1.107; dig106 false clear)"
+                                    )
+                                }
                             }
                         }
                     }
@@ -1078,9 +1092,13 @@ class SessionActivity : ComponentActivity() {
                             val sessionLiveHint = "WINE_START" in logText || wineInitPhase || guestPresented
                             val showSurfaceHint = !showErrorCard && !guestPresented && sessionLiveHint
                             if (showSurfaceHint) {
-                                val bodyLines = blueScreenLines.filter {
-                                    it != BlueScreenMessages.FOOTER
-                                }
+                                // 0.1.107: never blank BSOD — fallback locked GENERIC if empty
+                                val bodyLines = blueScreenLines
+                                    .filter { it != BlueScreenMessages.FOOTER }
+                                    .ifEmpty {
+                                        BlueScreenMessages.pick(logText, maxLines = 2).lines
+                                            .filter { it != BlueScreenMessages.FOOTER }
+                                    }
                                 Column(
                                     modifier = Modifier
                                         .align(Alignment.Center)
@@ -1091,15 +1109,13 @@ class SessionActivity : ComponentActivity() {
                                     Text(
                                         text = if (wineInitPhase) {
                                             getString(com.wusper.x86.R.string.session_wine_init)
-                                        } else if (bodyLines.isNotEmpty()) {
-                                            "啟動說明：（"
                                         } else {
-                                            getString(com.wusper.x86.R.string.session_waiting_surface)
+                                            "啟動說明：（"
                                         },
                                         color = Color(0xFFFFFFFF),
                                         style = MaterialTheme.typography.titleMedium,
                                     )
-                                    if (!wineInitPhase && bodyLines.isNotEmpty()) {
+                                    if (!wineInitPhase) {
                                         Spacer(Modifier.height(10.dp))
                                         bodyLines.forEach { line ->
                                             Text(

@@ -1,8 +1,9 @@
 package com.wusper.x86.session
 
 /**
- * 0.1.105 Secondary UX：藍屏（desktopOnly／App 未 Loaded）人話錯誤說明。
- * ≥50 句繁中備庫；依失敗原因動態挑選；可同時顯示多句；含經典：（
+ * 0.1.107 UX：藍屏（desktopOnly／App 未 Loaded）人話錯誤說明。
+ * ≥50 句繁中備庫；依失敗原因**鎖住**挑選（同 reason 指紋同句，不每秒輪換）；
+ * 可同時顯示多句；含經典：（；永不空白（fallback GENERIC）。
  * 不取代 P0 A2；僅 Present／HUD 疊字。
  */
 object BlueScreenMessages {
@@ -154,36 +155,54 @@ object BlueScreenMessages {
         return out.toList()
     }
 
+    /**
+     * 0.1.107: pick **locked** to reason fingerprint — same reasons → same lines.
+     * [salt] ignored (kept for call-site compat); **no** per-second pool walk.
+     * Always returns ≥1 human line containing `：（` + fixed [FOOTER].
+     */
+    @Suppress("UNUSED_PARAMETER")
     fun pick(logText: String, maxLines: Int = 3, salt: Int = 0): Pick {
         val reasons = detectReasons(logText)
-        val lines = ArrayList<String>(maxLines)
+        // Stable seed from reason set only (NOT wall-clock / PRESENT poll salt)
+        val reasonKey = reasons.joinToString(",") { it.name }
+        val stable = reasonKey.hashCode()
+        val lines = ArrayList<String>(maxLines + 1)
         for ((idx, reason) in reasons.withIndex()) {
             if (lines.size >= maxLines) break
             val pool = pools[reason].orEmpty()
             if (pool.isEmpty()) continue
-            val line = pool[(salt + idx * 7 + reason.ordinal * 3).floorMod(pool.size)]
+            // Fixed index per reason+fingerprint — never advances with time
+            val line = pool[(stable + idx * 7 + reason.ordinal * 3).floorMod(pool.size)]
             if (line !in lines) lines += line
         }
-        // Fill remaining slots from GENERIC / LOADED_ZERO so multi-line feels alive
+        // Fill remaining from GENERIC / LOADED_ZERO with same stable seed
         if (lines.size < maxLines) {
             val fill = pools[Reason.GENERIC].orEmpty() + pools[Reason.LOADED_ZERO].orEmpty()
-            var i = salt
+            var i = 0
             while (lines.size < maxLines && fill.isNotEmpty()) {
-                val cand = fill[i.floorMod(fill.size)]
+                val cand = fill[(stable + i * 5).floorMod(fill.size)]
                 if (cand !in lines) lines += cand
                 i++
                 if (i > fill.size + 8) break
             }
         }
-        // Guarantee classic emoticon appears at least once across picks when failing
-        if (lines.none { "：（" in it } && lines.isNotEmpty()) {
-            lines[0] = lines[0].trimEnd('。', '…') + "：（"
+        // Never blank: guarantee ≥1 human line
+        if (lines.isEmpty()) {
+            lines += pools[Reason.GENERIC]!!.first()
         }
-        // Fixed footer always last (Boss UX after 105 tip bake)
+        // Guarantee classic emoticon appears at least once
+        if (lines.none { "：（" in it }) {
+            lines[0] = lines[0].trimEnd('。', '…', ' ') + "：（"
+        }
+        // Fixed footer always last (Boss UX)
         lines.removeAll { it == FOOTER }
         lines += FOOTER
         return Pick(lines = lines, reasons = reasons)
     }
+
+    /** Reason fingerprint for SessionActivity cache — same fail → same overlay. */
+    fun reasonFingerprint(logText: String): String =
+        detectReasons(logText).joinToString("|") { it.name }
 
     private fun Int.floorMod(m: Int): Int {
         if (m <= 0) return 0

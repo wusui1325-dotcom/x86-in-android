@@ -38,6 +38,21 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.107: P0 A2+BSOD — Dig 106: ladder/dig/status/log OK but A2 REGRESS 14c→0
+# because PRIMARY `start /exec /machine x86` → Wine GetBinaryTypeW("/machine")
+# ( /exec consumes rest as CreateProcess cmdline ) → ShellExecuteEx File not found;
+# 0× MACHINE_TYPE / UpdateProcThreadAttribute; App falls to machine 0; ladder
+# stops at explorer (0× /exec /unix); Boss: blueScreenSalt++ every PRESENT poll
+# rotates BSOD every ~2s; emptyList body → blank blue. Knives:
+# (1) PRIMARY `start /machine x86 /wait /exec C:\App\app.exe` — switches BEFORE
+#   /exec, path AFTER (restore MACHINE_TYPE + machine 14c); stamp cmdline_order;
+# (2) unix rung `start /unix /wait /exec $SEED` same order; faster explorer→unix;
+# (3) dig create_fail=getbinarytype_machine_as_path when GetBinaryTypeW L"/machine";
+# (4) overlay-keep: no guestPresented clear on nonBlackGuest alone (need Loaded);
+# (5) BSOD: delete blueScreenSalt++ rotate; lock lines by reason fingerprint;
+#   never blank — always `：（` + ≥1 human + footer. KEEP 102–106 gates/quiet/
+#   cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/dblslash/phase status/logForceHidden/
+#   BSOD #0000AA/footer/≥50. No hot/soft-continue/Present rewrite/DXVK x32/FF.
 # 0.1.106: P0 Loaded+UX — Dig 105 half-good (machine spawn+14c+dblslash PASS;
 # 0× Loaded/started_pid; ShellExecuteEx after machine 14c; ladder 0×; dig stamps
 # missing; Boss: status tick-rotate + log !running force-open covers Present).
@@ -235,7 +250,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.106
+WINE_LAUNCH_STAMP=0.1.107
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -3327,6 +3342,11 @@ app_load_dump_fail_sigs() {
   fi
   [ -n "${_bt_w:-}" ] && log "APP_LOAD GetBinaryTypeW slice: $_bt_w" || true
   [ -n "${_bt_ret:-}" ] && log "APP_LOAD GetBinaryTypeW_return slice: $_bt_ret" || log "APP_LOAD GetBinaryTypeW_return=[] mode=${APP_LOAD_MODE:-?} (Wine TRACE often omits return; host BinaryType_host is source of truth)"
+  # 0.1.107: Dig 106 root — start treated /machine as path after misplaced /exec
+  if printf '%s\n' "${_bt_w:-}" | grep -qE 'GetBinaryTypeW L"/machine"|GetBinaryTypeW L"/unix"|GetBinaryTypeW L"/wait"|GetBinaryTypeW L"/exec"|L"/machine"|L"/unix"|L"/wait"'; then
+    log "APP_LOAD create_fail=getbinarytype_flag_as_path mode=${APP_LOAD_MODE:-?} hit=${_bt_w} (Wine GetBinaryTypeW saw a start.exe switch as path — cmdline_order broken; expect 0 after 0.1.107 machine-before-exec)"
+    stamp_wine_run "create_fail=getbinarytype_flag_as_path mode=${APP_LOAD_MODE:-?}"
+  fi
   [ -n "${_cp_app:-}" ] && log "APP_LOAD CreateProcessInternalW_app slice: $_cp_app" || true
   [ -n "${_wow64cpu:-}" ] && log "APP_LOAD wow64cpu_init slice: $_wow64cpu" || log "APP_LOAD wow64cpu_init=[] mode=${APP_LOAD_MODE:-?} (no wow64cpu load/init in slice)"
   if [ -n "${_rc_apply:-}" ]; then
@@ -3456,23 +3476,24 @@ app_load_spawn() {
       unset _stub _stub_win _bt
       ;;
     wow64_unix_seed)
-      # 0.1.104: /exec wants Unix path (103 dig: /exec /wait C:/App → ShellExecute
-      # File not found / GetBinaryTypeW L"/wait"). Use /exec /unix $SEED.
-      # KEEP /exec capability; machine 0x014c attribute is wow64_machine_i386.
+      # 0.1.107: same Dig106 /exec-consumes-rest bug — `/exec /unix /wait $SEED`
+      # would GetBinaryTypeW("/unix"). Put /unix+/wait BEFORE /exec; path AFTER.
+      # KEEP /exec CreateProcess; machine attribute is wow64_machine_i386 PRIMARY.
       # NOEXEC kept; never i386 MAIN.
       app_load_seed_gate || log "APP_SEED gate=FAIL mode=start_exec_unix — still try"
       _w64_unix="${SEED:-$APP_UNIX}"
       _w64_win='C:\App\app.exe'
       log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_exec_unix win=$_w64_win unix=$_w64_unix seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
-      log "APP_LOAD cmdline: wine start /exec /unix /wait $_w64_unix (0.1.104 /exec+/unix seed; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
-      stamp_wine_run "APP_LOAD cmdline: wine start /exec /unix /wait $_w64_unix (wow64 start_exec_unix mmap32_creators=cmd,start noexec=kept)"
+      log "APP_LOAD cmdline_order=unix_wait_exec_path (0.1.107 ladder unix rung)"
+      log "APP_LOAD cmdline: wine start /unix /wait /exec $_w64_unix (0.1.107 unix-before-exec; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
+      stamp_wine_run "APP_LOAD cmdline: wine start /unix /wait /exec $_w64_unix (wow64 start_exec_unix mmap32_creators=cmd,start noexec=kept)"
       app_load_mark_slice
       (
         # Keep WINELOADERNOEXEC=1 — do NOT unset (097 SIGILL)
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
         export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /exec /unix /wait "$_w64_unix" >>/mnt/data/wine-run.out 2>&1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix /wait /exec "$_w64_unix" >>/mnt/data/wine-run.out 2>&1
       ) &
       unset _w64_unix
       ;;
@@ -3489,10 +3510,13 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     wow64_machine_i386)
-      # 0.1.106 P0: PRIMARY — start /exec /machine x86 /wait (CreateProcess path +
-      # PROC_THREAD_ATTRIBUTE_MACHINE_TYPE). Dig 105: without /exec still hit
-      # CreateProcess+machine 14c then ShellExecuteEx fatal; keep /exec so start
-      # uses CreateProcess explicitly. Must log cmdline + pid; TRACE machine 14c.
+      # 0.1.107 P0: PRIMARY — Dig 106: `start /exec /machine x86 /wait path` made
+      # Wine treat /exec-rest as CreateProcess cmdline → GetBinaryTypeW("/machine")
+      # → ShellExecuteEx File not found → 0× MACHINE_TYPE → App machine 0.
+      # Fix: ALL switches BEFORE /exec; path AFTER /exec only:
+      #   start /machine x86 /wait /exec C:\App\app.exe
+      # Restores PROC_THREAD_ATTRIBUTE_MACHINE_TYPE (105-level machine 14c) while
+      # keeping /exec CreateProcess path. Must log cmdline_order + pid + 14c.
       app_load_seed_gate || log "APP_SEED gate=FAIL mode=machine_x86 — still try"
       _w64_win='C:\App\app.exe'
       case "${PE_MACH}" in
@@ -3503,15 +3527,16 @@ app_load_spawn() {
       log "APP_LOAD BinaryType_host=$_bt machine=0x${PE_MACH:-?} pe_sub=${PE_SUB:-?} (host PE fingerprint; Wine GetBinaryType should match)"
       stamp_wine_run "APP_LOAD BinaryType_host=$_bt machine=0x${PE_MACH:-?}"
       log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_machine_x86 win=$_w64_win seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
-      log "APP_LOAD cmdline: wine start /exec /machine x86 /wait $_w64_win (0.1.106 PRIMARY /exec+machine-type; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
-      stamp_wine_run "APP_LOAD cmdline: wine start /exec /machine x86 /wait $_w64_win (wow64 machine_x86 PRIMARY mmap32_creators=cmd,start)"
-      log "APP_LOAD spawn_evidence=machine_x86_cmdline_armed mode=wow64_machine_i386 (0.1.106 /exec — must see pid next)"
+      log "APP_LOAD cmdline_order=machine_wait_exec_path (0.1.107: switches before /exec; path after — Dig106 GetBinaryTypeW(/machine) kill)"
+      log "APP_LOAD cmdline: wine start /machine x86 /wait /exec $_w64_win (0.1.107 PRIMARY machine-before-exec; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
+      stamp_wine_run "APP_LOAD cmdline: wine start /machine x86 /wait /exec $_w64_win (wow64 machine_x86 PRIMARY mmap32_creators=cmd,start)"
+      log "APP_LOAD spawn_evidence=machine_x86_cmdline_armed mode=wow64_machine_i386 (0.1.107 machine-before-exec — must see pid + machine 14c next)"
       app_load_mark_slice
       (
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
         export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /exec /machine x86 /wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /machine x86 /wait /exec "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
       unset _bt
       ;;
@@ -3766,7 +3791,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       log "APP_SEED visible=no path=${SEED:-?} win=$APP_WIN — keep wow64=1 (no unix demote); CreateProcess may still fail"
     fi
     ensure_exe_assoc || true
-    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=machine_x86 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} (0.1.106 PRIMARY start /exec /machine x86; ladder machine→direct→explorer→unix→start; fast fail_sig advance; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept; stub_quoted dblslash kill; no i386 MAIN)"
+    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=machine_x86 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} (0.1.107 PRIMARY start /machine x86 /wait /exec; ladder machine→direct→explorer→unix→start; fast fail_sig+unix dwell; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept; stub_quoted dblslash kill; no i386 MAIN)"
     stamp_wine_run "decide=machine_x86 win=$APP_WIN seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
   else
     log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
@@ -4343,10 +4368,12 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
             fi
             ;;
           wow64_explorer)
-            if app_load_fail_sig_present && [ "$_mode_elapsed" -ge 3 ]; then
+            # 0.1.107: Dig 106 session ended at explorer (0× unix). Fail_sig≥2s or
+            # no_loaded≥6s → unix rung (was 3/10 — export often cut before unix).
+            if app_load_fail_sig_present && [ "$_mode_elapsed" -ge 2 ]; then
               _hang_adv=fail_sig
               _to_mode=wow64_unix_seed
-            elif [ "$_mode_elapsed" -ge 10 ]; then
+            elif [ "$_mode_elapsed" -ge 6 ]; then
               _hang_adv=no_loaded_t
               _to_mode=wow64_unix_seed
             fi

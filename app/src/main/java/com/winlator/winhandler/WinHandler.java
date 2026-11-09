@@ -1,6 +1,10 @@
 package com.winlator.winhandler;
 
+import android.util.Log;
+
 import com.winlator.xserver.Pointer;
+import com.winlator.xserver.Window;
+import com.winlator.xserver.WindowManager;
 import com.winlator.xserver.XServer;
 
 /**
@@ -70,8 +74,41 @@ public class WinHandler {
         }
     }
 
+    /**
+     * 0.1.77: no guest winhandler.dll — raise on the in-process X WM instead of no-op.
+     * Closes 075 leftover: MapWindow raises once, but focus/dialog paths still called this.
+     */
     public void bringToFront(String className, long handle) {
-        // 無客體 winhandler：略
+        XServer xs = xServer;
+        if (xs == null) return;
+        try {
+            WindowManager wm = xs.windowManager;
+            Window target = null;
+            if (handle != 0L) {
+                target = wm.findWindowByHandle(handle);
+            }
+            if (target == null && className != null && !className.isEmpty()) {
+                target = wm.findWindowByClassName(className);
+            }
+            if (target == null || target == wm.rootWindow) return;
+            wm.raiseWindow(target);
+            boolean parentIsRoot = target.getParent() == wm.rootWindow;
+            wm.setFocus(
+                    target,
+                    parentIsRoot
+                            ? WindowManager.FocusRevertTo.POINTER_ROOT
+                            : WindowManager.FocusRevertTo.PARENT);
+            Log.i(
+                    "WinHandler",
+                    "bringToFront raise class="
+                            + className
+                            + " hwnd=0x"
+                            + Long.toHexString(handle)
+                            + " id=0x"
+                            + Integer.toHexString(target.id));
+        } catch (Throwable t) {
+            Log.w("WinHandler", "bringToFront: " + t.getMessage());
+        }
     }
 
     public void sendGamepadState() {

@@ -76,6 +76,33 @@ public class WindowManager extends XResourceManager {
         return null;
     }
 
+    /** 0.1.77: locate by Wine {@code _NET_WM_HWND} for bringToFront→raise. */
+    public Window findWindowByHandle(long hwnd) {
+        if (hwnd == 0L) return null;
+        for (int i = 0; i < windows.size(); i++) {
+            Window window = windows.valueAt(i);
+            if (window != null && window.getHandle() == hwnd) return window;
+        }
+        return null;
+    }
+
+    /** 0.1.77: locate by WM_CLASS (exact or contains) for bringToFront fallback. */
+    public Window findWindowByClassName(String className) {
+        if (className == null || className.isEmpty()) return null;
+        Window fallback = null;
+        for (int i = 0; i < windows.size(); i++) {
+            Window window = windows.valueAt(i);
+            if (window == null || window == rootWindow) continue;
+            String cn = window.getClassName();
+            if (cn == null || cn.isEmpty()) continue;
+            if (cn.equals(className) || cn.contains(className) || className.contains(cn)) {
+                if (window.isApplicationWindow() || window.getHandle() != 0L) return window;
+                if (fallback == null) fallback = window;
+            }
+        }
+        return fallback;
+    }
+
     public void destroyWindow(int id) {
         Window window = getWindow(id);
         if (window != null && rootWindow.id != id) {

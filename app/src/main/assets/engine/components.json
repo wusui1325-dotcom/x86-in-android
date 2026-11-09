@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.76-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto",
+  "runtimeId": "wine-gpustack-v0.1.77-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.76: Smart TU_GMEM auto a710/715/720/725; keep 0.1.75 map+raise"
+  "notes": "0.1.77: APP_LOAD fingerprint harden + bringToFront raise; keep 0.1.76 Smart TU_GMEM"
 }

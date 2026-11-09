@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.77: APP_LOAD fingerprint — strict Loaded (no false path_seen); PE subsystem=
+# (2=GUI/3=CUI); APP_HWND_WAIT after load; Loaded-but-no-HWND WARN. Host bringToFront→raise.
+# Keep 076 Smart TU_GMEM / 075 map+raise.
 # 0.1.76: Smart TU_GMEM — auto gmem on Adreno 710/715/720/725 (/sys + X86_ADRENO_MODEL);
 # X86_TU_GMEM=0 force-off / =1 force-on / unset|auto=probe; log TURNIP_GMEM=auto|on|off.
 # Fix: GpuStack no longer hardcodes TU_DEBUG (074 X86_TU_GMEM was dead). Keep 075 map+raise.
@@ -43,7 +46,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.76
+WINE_LAUNCH_STAMP=0.1.77
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -135,7 +138,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.76 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.77 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -2414,7 +2417,32 @@ APP_PID=""
 APP_RELAUNCHED=0
 APP_TARGET=""
 APP_LOAD_MODE=""
+APP_LOADED_STRICT=0
+APP_HWND_SEEN=0
 # 0.1.67: unix CreateProcess ladder — absolute → relative → start /unix. Never C:/App.
+# 0.1.77: strict Loaded = loaddll "Loaded L"…app.exe""; bare path mention is NOT Loaded.
+app_load_has_loaded() {
+  grep -qE 'Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null
+}
+app_load_path_seen() {
+  grep -qE '/mnt/app/app\.exe|App[/\\]+app\.exe' /mnt/data/wine-run.out 2>/dev/null
+}
+app_load_marker_app_hwnd() {
+  # Ready marker body: mapped=1 desk=0|1 app=0|1 hwnd=0x… id=0x…
+  # App HWND ready when app=1 OR (hwnd nonzero AND desk=0).
+  [ -f /mnt/data/.x86-x11-ready ] || return 1
+  _m=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
+  case "$_m" in
+    *" app=1 "*) return 0 ;;
+    *" app=1"*) return 0 ;;
+  esac
+  # hwnd=0x0 or missing → not ready; desk-only with hwnd=0x0 is desktop map
+  case "$_m" in
+    *" desk=0 "*" hwnd=0x"[1-9a-fA-F]*) return 0 ;;
+    *" hwnd=0x"[1-9a-fA-F]*" app=1"*) return 0 ;;
+  esac
+  return 1
+}
 app_load_dump_fail_sigs() {
   if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem' /mnt/data/wine-run.out 2>/dev/null; then
     grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
@@ -2472,17 +2500,31 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   fi
   sleep 3
   APP_TARGET="$APP_UNIX"
-  # PE machine (optional diag): 0x8664=amd64, 0x14c=i386
+  # PE machine + subsystem (0.1.77): 0x8664=amd64, 0x14c=i386; subsystem 2=GUI 3=CUI
   PE_OFF=$(od -An -t u4 -N 4 -j 60 "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo 0)
   PE_OFF=${PE_OFF:-0}
   PE_MACH="?"
+  PE_MAGIC="?"
+  PE_SUB="?"
   if [ "$PE_OFF" -gt 0 ] 2>/dev/null; then
     PE_MACH=$(od -An -t x2 -N 2 -j $((PE_OFF + 4)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
-    log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} (8664=amd64 14c=i386)"
+    PE_MAGIC=$(od -An -t x2 -N 2 -j $((PE_OFF + 24)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
+    # OptionalHeader.Subsystem at +0x44 from optional start (= PE_OFF+24+68 = PE_OFF+92)
+    PE_SUB=$(od -An -t u2 -N 2 -j $((PE_OFF + 92)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
+    case "${PE_SUB}" in
+      2) PE_SUB_NAME=GUI ;;
+      3) PE_SUB_NAME=CUI ;;
+      1) PE_SUB_NAME=NATIVE ;;
+      *) PE_SUB_NAME=other ;;
+    esac
+    log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} magic=0x${PE_MAGIC:-?} subsystem=${PE_SUB:-?} (${PE_SUB_NAME}) (8664=amd64 14c=i386; 2=GUI 3=CUI)"
     case "${PE_MACH}" in
       8664|14c) ;;
       *) log "APP_PE WARN unexpected machine=0x${PE_MACH} — CreateProcess may fail (c000007b)" ;;
     esac
+    if [ "${PE_SUB}" = "3" ]; then
+      log "APP_PE WARN subsystem=3 CUI — no HWND expected (console); Present may stay desktopOnly"
+    fi
   else
     log "APP_PE WARN pe_off invalid path=$APP_TARGET — not a PE?"
   fi
@@ -2535,6 +2577,40 @@ elif [ -n "$APP_WIN" ]; then
   log "APP_LOAD unix failed: APP_UNIX missing or not a file (argv had Windows-only seed)"
 fi
 
+# 0.1.77: after APP_LOAD, wait for app HWND in .x86-x11-ready (Loaded-but-no-HWND fingerprint)
+if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
+  HWND_WAIT_MAX="${X86_HWND_WAIT_MAX:-80}"
+  HWND_WAIT_I=0
+  log "APP_HWND_WAIT marker for app HWND (max ${HWND_WAIT_MAX}x0.1s)"
+  while [ "$HWND_WAIT_I" -lt "$HWND_WAIT_MAX" ]; do
+    if app_load_has_loaded; then
+      APP_LOADED_STRICT=1
+    fi
+    if app_load_marker_app_hwnd; then
+      APP_HWND_SEEN=1
+      log "APP_HWND_WAIT ready t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT} marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+      break
+    fi
+    # App process died early — stop waiting
+    if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+      log "APP_HWND_WAIT abort app dead pid=$APP_PID t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT}"
+      break
+    fi
+    sleep 0.1
+    HWND_WAIT_I=$((HWND_WAIT_I + 1))
+  done
+  if [ "$APP_HWND_SEEN" != "1" ]; then
+    if app_load_has_loaded || [ "$APP_LOADED_STRICT" = "1" ]; then
+      APP_LOADED_STRICT=1
+      log "APP_LOAD WARN Loaded-but-no-HWND t=${HWND_WAIT_I}0ms target=$APP_TARGET (strict Loaded; marker still desk-only or missing)"
+    elif app_load_path_seen; then
+      log "APP_HWND_WAIT timeout t=${HWND_WAIT_I}0ms path_seen=1 loaded=0 (argv echo ≠ Loaded — wait for loaddll)"
+    else
+      log "APP_HWND_WAIT timeout t=${HWND_WAIT_I}0ms loaded=0 path_seen=0"
+    fi
+  fi
+fi
+
 # X window tree diagnostic (best-effort) after a short settle
 sleep 2
 if command -v xwininfo >/dev/null 2>&1; then
@@ -2548,12 +2624,15 @@ elif command -v xdpyinfo >/dev/null 2>&1; then
 else
   log "XWININFO skip (no xwininfo/xdpyinfo in guest)"
 fi
-# Early app-load fingerprint
+# Early app-load fingerprint (0.1.77: strict Loaded; path_seen is soft-only)
 if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
   log "WARN: WINE_START app launch failure signature in wine-run.out"
 fi
-if grep -qE '/mnt/app/app\.exe|Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then
-  log "APP_LOAD fingerprint seen early"
+if app_load_has_loaded; then
+  APP_LOADED_STRICT=1
+  log "APP_LOAD fingerprint seen early (strict Loaded L\"…app.exe\")"
+elif app_load_path_seen; then
+  log "APP_LOAD path_seen early (argv/path echo only — NOT Loaded yet)"
 fi
 if grep -qE 'ShellExecuteEx failed|start\.exe' /mnt/data/wine-run.out 2>/dev/null; then
   log "WARN: APP_LOAD still hit start.exe/ShellExecute — should be unix path"
@@ -2620,18 +2699,27 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     GROW=$((BYTES-LAST_BYTES))
     # LAST_BYTES already caught up above; report absolute size
     APP_ALIVE=0
-    if grep -qE 'Detected running wine with |explorer\.exe|App\\\\app\.exe|App/app\.exe|/mnt/app/app\.exe|\\app\.exe' /mnt/data/wine-run.out 2>/dev/null \
-       || grep -qE 'Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then APP_ALIVE=1; fi
-    # 0.1.64: if app never Loaded by 15s, relaunch once
+    # 0.1.77: app_seen / APP_ALIVE require strict Loaded (or wine "Detected running" with app.exe)
+    if app_load_has_loaded \
+       || grep -qE 'Detected running wine with ".*app\.exe"|Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+      APP_ALIVE=1
+      APP_LOADED_STRICT=1
+    fi
+    # Soft path_seen for DIAG only (does NOT set APP_ALIVE)
+    APP_PATH_SEEN=0
+    if app_load_path_seen; then APP_PATH_SEEN=1; fi
+    if app_load_marker_app_hwnd; then APP_HWND_SEEN=1; fi
+    # 0.1.64/0.1.77: if app never strict-Loaded by 15s, relaunch once (path echo alone ≠ Loaded)
     if [ "${APP_RELAUNCHED:-0}" = "0" ] && [ -n "${APP_TARGET:-}" ] && [ "$HB" -ge 15 ]; then
-      if ! grep -qE 'Loaded L".*(App[/\\]+app\.exe|/mnt/app/app\.exe)"' /mnt/data/wine-run.out 2>/dev/null \
-         && ! grep -qE '/mnt/app/app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
-        # Also bail if ShellExecute path still somehow used
+      if ! app_load_has_loaded; then
         if grep -qE 'ShellExecuteEx failed' /mnt/data/wine-run.out 2>/dev/null; then
           log "APP_RELAUNCH note: ShellExecuteEx still in log — ensure unix path"
         fi
+        if [ "$APP_PATH_SEEN" = "1" ]; then
+          log "APP_RELAUNCH note: path_seen=1 but no strict Loaded — relaunch anyway"
+        fi
         APP_RELAUNCHED=1
-        log "APP_RELAUNCH once target=$APP_TARGET via start /unix (no Loaded fingerprint by t=${HB}s)"
+        log "APP_RELAUNCH once target=$APP_TARGET via start /unix (no strict Loaded by t=${HB}s)"
         log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch start /unix (still no C:/App)"
         log "APP_LOAD retry: wine start /unix $APP_TARGET (APP_RELAUNCH)"
         "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
@@ -2647,22 +2735,28 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         fi
       else
         APP_RELAUNCHED=1
-        log "APP_LOAD confirmed by t=${HB}s — no relaunch"
+        APP_LOADED_STRICT=1
+        log "APP_LOAD confirmed by t=${HB}s (strict Loaded) — no relaunch"
+        if [ "$APP_HWND_SEEN" != "1" ]; then
+          log "APP_LOAD WARN Loaded-but-no-HWND at HB t=${HB}s (strict Loaded; marker desk-only?)"
+        fi
       fi
     fi
     if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
       log "WINE_HB note: ShellExecute/app-start failure still in wine-run.out"
     fi
-    # 0.1.66: Loaded / APP_PE fingerprints — don't rely on absence of ShellExecuteEx alone
+    # 0.1.66/0.1.77: strict Loaded required — path echo alone does NOT clear missing-Loaded
     if [ "$HB" -ge 45 ] && [ -n "${APP_TARGET:-}" ]; then
-      if ! grep -qE 'Loaded L".*app\.exe"|/mnt/app/app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
-        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s target=${APP_TARGET}"
+      if ! app_load_has_loaded; then
+        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s target=${APP_TARGET} path_seen=${APP_PATH_SEEN}"
         log "APP_LOAD_FATAL missing-Loaded t=${HB}s (desktop may paint; guest app content absent)"
+      elif [ "$APP_HWND_SEEN" != "1" ]; then
+        log "APP_LOAD WARN Loaded-but-no-HWND t=${HB}s target=${APP_TARGET} (strict Loaded; no app HWND in marker)"
       fi
     fi
     ERR_N=$(grep -cE '^[0-9a-f]+:err:' /mnt/data/wine-run.out 2>/dev/null || echo 0)
     ERR_N=$(echo "$ERR_N" | tr -d ' \n')
-    log "WINE_HB t=${HB}s pid=$WINE_PID alive=1 wine-run_bytes=$BYTES x0=$X0_NOW app_seen=$APP_ALIVE err_lines=${ERR_N:-0}"
+    log "WINE_HB t=${HB}s pid=$WINE_PID alive=1 wine-run_bytes=$BYTES x0=$X0_NOW app_seen=$APP_ALIVE loaded=${APP_LOADED_STRICT:-0} path_seen=${APP_PATH_SEEN:-0} hwnd=${APP_HWND_SEEN:-0} err_lines=${ERR_N:-0}"
     if [ "$BYTES" -eq 0 ]; then
       log "WINE_HB note: wine-run.out empty — Wine silent (debug light); Present may still be waiting for first drawable"
     fi

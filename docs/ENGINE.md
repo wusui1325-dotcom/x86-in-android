@@ -1,3 +1,20 @@
+## 0.1.77 — APP_LOAD fingerprint harden + bringToFront→raise
+
+**Smoke risk (0.1.76):** Smart TU_GMEM can still leave a black window when APP_LOAD
+false-positives "Loaded" from bare `/mnt/app/app.exe` path echoes (blocking RELAUNCH /
+missing-Loaded FATAL), when PE is CUI (subsystem=3, no HWND), when Loaded never maps
+an app HWND, or when focus/dialog paths call no-op `bringToFront` after MapWindow raise.
+
+**Fix:**
+- Strict Loaded fingerprint = loaddll `Loaded L"…app.exe"`; path echo → soft `path_seen=` only
+- PE `subsystem=` (2=GUI / 3=CUI) + WARN on CUI
+- `APP_HWND_WAIT` after APP_LOAD; `Loaded-but-no-HWND` WARN for Boss KEY_LOG
+- `WinHandler.bringToFront` → host `raiseWindow` + setFocus (075 leftover)
+- Keep 076 Smart TU_GMEM / 075 map+raise / VIEWABLE
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.77`; `APP_PE … subsystem=2`; `APP_LOAD fingerprint seen early (strict Loaded…)`;
+`APP_HWND_WAIT ready … app=1`; Present `desktopOnly=0`; `guestBlack=0`.
+
 ## 0.1.76 — Smart TU_GMEM auto (a710/715/720/725)
 
 **Smoke risk (0.1.75):** map+raise / MAP_WAIT / VIEWABLE / maxFrameLatency can still leave a

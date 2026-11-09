@@ -125,6 +125,9 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.77 APP_LOAD fingerprint：** strict `Loaded L"…app.exe"` (path echo ≠ Loaded);
+  PE `subsystem=` GUI/CUI; `APP_HWND_WAIT` + `Loaded-but-no-HWND` WARN;
+  `bringToFront`→`raiseWindow`. Keep 076 Smart TU_GMEM. No Present CPU-first flip.
 - **0.1.76 Smart TU_GMEM：** wine-launch owns `TU_DEBUG`; auto `gmem` on Adreno 710/715/720/725 via `/sys` + `X86_ADRENO_MODEL`; `X86_TU_GMEM=0/1/auto`; log `TURNIP_GMEM=…`; GpuStack no longer hardcodes `TU_DEBUG=…sysmem` (074 gmem was dead). Keep noubwc. No Present CPU-first flip.
 - **0.1.75 map+raise / CreateSwapChain：** host `raiseWindow` on MapWindow; MAP_WAIT `.x86-x11-ready` before APP_LOAD; Present VIEWABLE + `mapState=`/`mapWait=`; dxvk `maxFrameLatency=1` + `numBackBuffers=3`. No Present CPU-first flip.
 - **0.1.74 winex11 HWND/FS：** X11 `UseXRandR=N`/`UseXVidMode=N`/`DXGrab=N`/`ScreenDepth=32`/`Decorated=N`;

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.76",
-  "versionCode": 77,
-  "notes": "0.1.76: Smart TU_GMEM — auto gmem on Adreno 710/715/720/725 (/sys + X86_ADRENO_MODEL); X86_TU_GMEM=0/1/auto; fix GpuStack TU_DEBUG hardcode (074 gmem was dead)"
+  "versionName": "0.1.77",
+  "versionCode": 78,
+  "notes": "0.1.77: APP_LOAD fingerprint — strict Loaded (no false path_seen); PE subsystem=2/3; APP_HWND_WAIT; Loaded-but-no-HWND WARN; bringToFront→raiseWindow"
 }

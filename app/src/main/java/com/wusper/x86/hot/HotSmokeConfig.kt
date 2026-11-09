@@ -13,7 +13,7 @@ import org.json.JSONObject
  * - manifestUrl, pollIntervalSec, autoLoop
  * - uploadMode: "drive" | "https"
  * - uploadUrl, uploadMethod (PUT|POST), uploadHeadersJson
- * - driveFolderId, driveAccessToken
+ * - driveFolderId, driveAccessToken, driveAccountEmail, driveOAuthClientId
  * - smokeWorkspaceId, smokeWaitSeconds
  */
 object HotSmokeConfig {
@@ -32,9 +32,14 @@ object HotSmokeConfig {
         val uploadHeadersJson: String,
         val driveFolderId: String,
         val driveAccessToken: String,
+        val driveAccountEmail: String,
+        val driveOAuthClientId: String,
         val smokeWorkspaceId: String,
         val smokeWaitSeconds: Int,
-    )
+    ) {
+        fun driveReady(): Boolean = driveAccessToken.isNotBlank() || driveAccountEmail.isNotBlank()
+        fun httpsReady(): Boolean = uploadUrl.isNotBlank()
+    }
 
     fun load(ctx: Context): Snapshot {
         val prefs = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -50,6 +55,8 @@ object HotSmokeConfig {
             driveFolderId = prefs.getString("driveFolderId", DEFAULT_DRIVE_FOLDER_ID)
                 ?: DEFAULT_DRIVE_FOLDER_ID,
             driveAccessToken = prefs.getString("driveAccessToken", "") ?: "",
+            driveAccountEmail = prefs.getString("driveAccountEmail", "") ?: "",
+            driveOAuthClientId = prefs.getString("driveOAuthClientId", "") ?: "",
             smokeWorkspaceId = prefs.getString("smokeWorkspaceId", "") ?: "",
             smokeWaitSeconds = prefs.getInt("smokeWaitSeconds", 90).coerceIn(15, 600),
         )
@@ -97,6 +104,9 @@ object HotSmokeConfig {
                         "driveFolderId",
                         json.optString("driveFolderId", DEFAULT_DRIVE_FOLDER_ID),
                     )
+                }
+                if (!prefs.contains("driveOAuthClientId")) {
+                    putString("driveOAuthClientId", json.optString("driveOAuthClientId", ""))
                 }
                 if (!prefs.contains("smokeWaitSeconds")) {
                     putInt("smokeWaitSeconds", json.optInt("smokeWaitSeconds", 90))

@@ -67,14 +67,43 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wusper.x86.engine.ComponentInstaller
+import com.wusper.x86.hot.DriveGoogleAuth
 import com.wusper.x86.hot.HotSmokeConfig
 import com.wusper.x86.hot.SmokeHotLoop
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.mutableStateOf as mutableStateOfRt
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.wusper.x86.session.SessionActivity
 import com.wusper.x86.ui.theme.X86Theme
 
 class MainActivity : ComponentActivity() {
+    /** Compose-observable gates for smokeHot auth / HTTPS config (set from non-Composable methods). */
+    private val hotAuthGate = mutableStateOfRt<String?>(null)
+    private val hotHttpsGate = mutableStateOfRt(false)
+    private val hotAuthStatusTick = mutableStateOfRt(0)
+    private var pendingSmokeAfterAuth = false
+
+    private val googleSignInLauncher = registerForActivityResult(StartActivityForResult()) { result ->
+        lifecycleScope.launch(Dispatchers.IO) {
+            val outcome = DriveGoogleAuth.handleSignInResult(this@MainActivity, result.data)
+            withContext(Dispatchers.Main) {
+                Toast.makeText(this@MainActivity, outcome.message, Toast.LENGTH_LONG).show()
+                hotAuthStatusTick.value = hotAuthStatusTick.value + 1
+                if (outcome.ok) {
+                    hotAuthGate.value = null
+                    if (pendingSmokeAfterAuth) {
+                        pendingSmokeAfterAuth = false
+                        runHotSmokeRound(skipAuthGate = true)
+                    }
+                }
+            }
+        }
+    }
+
     @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -90,6 +119,11 @@ class MainActivity : ComponentActivity() {
                 var menuExpanded by remember { mutableStateOf(false) }
                 var showClearRuntime by remember { mutableStateOf(false) }
                 var showAbout by remember { mutableStateOf(false) }
+                val authGate by hotAuthGate
+                val httpsGate by hotHttpsGate
+                val authTick by hotAuthStatusTick
+                val googleStatus = remember(authTick, tick) { DriveGoogleAuth.status(this) }
+                var httpsUrlInput by remember { mutableStateOf(HotSmokeConfig.load(this).uploadUrl) }
                 var workspacePendingDelete by remember { mutableStateOf<Workspace?>(null) }
                 var workspacePendingRebuild by remember { mutableStateOf<Workspace?>(null) }
                 var showNewWorkspace by remember { mutableStateOf(false) }
@@ -268,6 +302,89 @@ class MainActivity : ComponentActivity() {
                     )
                 }
 
+                if (BuildConfig.SMOKE_HOT && authGate != null) {
+                    AlertDialog(
+                        onDismissRequest = {
+                            hotAuthGate.value = null
+                            pendingSmokeAfterAuth = false
+                        },
+                        title = { Text(stringResource(R.string.dialog_hot_auth_title)) },
+                        text = {
+                            Text(
+                                stringResource(R.string.dialog_hot_auth_body) +
+                                    "\n\n" + (authGate ?: "") +
+                                    "\n" + googleStatus.summary,
+                            )
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                pendingSmokeAfterAuth = true
+                                googleSignInLauncher.launch(DriveGoogleAuth.signInIntent(this@MainActivity))
+                            }) {
+                                Text(stringResource(R.string.btn_hot_connect_google))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                hotAuthGate.value = null
+                                hotHttpsGate.value = true
+                            }) {
+                                Text(stringResource(R.string.btn_hot_https_upload))
+                            }
+                        },
+                    )
+                }
+
+                if (BuildConfig.SMOKE_HOT && httpsGate) {
+                    AlertDialog(
+                        onDismissRequest = { hotHttpsGate.value = false },
+                        title = { Text(stringResource(R.string.dialog_hot_https_title)) },
+                        text = {
+                            Column {
+                                Text(stringResource(R.string.dialog_hot_https_body))
+                                Spacer(Modifier.height(12.dp))
+                                OutlinedTextField(
+                                    value = httpsUrlInput,
+                                    onValueChange = { httpsUrlInput = it },
+                                    label = { Text(stringResource(R.string.dialog_hot_https_hint)) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val url = httpsUrlInput.trim()
+                                HotSmokeConfig.edit(this@MainActivity) {
+                                    it.putString("uploadMode", "https")
+                                    it.putString("uploadUrl", url)
+                                    it.putString("uploadMethod", "POST")
+                                }
+                                hotHttpsGate.value = false
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    getString(R.string.toast_hot_https_saved),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                if (pendingSmokeAfterAuth && url.isNotBlank()) {
+                                    pendingSmokeAfterAuth = false
+                                    runHotSmokeRound(skipAuthGate = true)
+                                }
+                            }) {
+                                Text(stringResource(R.string.dialog_about_ok))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                hotHttpsGate.value = false
+                                pendingSmokeAfterAuth = false
+                            }) {
+                                Text(stringResource(R.string.dialog_cancel))
+                            }
+                        },
+                    )
+                }
+
                 workspacePendingDelete?.let { ws ->
                     AlertDialog(
                         onDismissRequest = { workspacePendingDelete = null },
@@ -423,6 +540,45 @@ class MainActivity : ComponentActivity() {
                                             },
                                             leadingIcon = {
                                                 Icon(Icons.Default.Science, contentDescription = null)
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = {
+                                                Text(
+                                                    if (googleStatus.connected) {
+                                                        stringResource(
+                                                            R.string.status_hot_google_connected,
+                                                            googleStatus.email.ifBlank { "OK" },
+                                                        )
+                                                    } else {
+                                                        stringResource(R.string.btn_hot_connect_google)
+                                                    },
+                                                )
+                                            },
+                                            onClick = {
+                                                menuExpanded = false
+                                                if (googleStatus.connected) {
+                                                    DriveGoogleAuth.signOut(this@MainActivity) {
+                                                        hotAuthStatusTick.value = hotAuthStatusTick.value + 1
+                                                        Toast.makeText(
+                                                            this@MainActivity,
+                                                            getString(R.string.status_hot_google_none),
+                                                            Toast.LENGTH_SHORT,
+                                                        ).show()
+                                                    }
+                                                } else {
+                                                    googleSignInLauncher.launch(
+                                                        DriveGoogleAuth.signInIntent(this@MainActivity),
+                                                    )
+                                                }
+                                            },
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.btn_hot_https_upload)) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                httpsUrlInput = HotSmokeConfig.load(this@MainActivity).uploadUrl
+                                                hotHttpsGate.value = true
                                             },
                                         )
                                     }
@@ -647,13 +803,24 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    private fun runHotSmokeRound() {
+    private fun runHotSmokeRound(skipAuthGate: Boolean = false) {
         if (!BuildConfig.SMOKE_HOT) return
         if (SmokeHotLoop.isBusy()) {
             Toast.makeText(this, getString(R.string.toast_hot_smoke_busy), Toast.LENGTH_SHORT).show()
             return
         }
-        Toast.makeText(this, getString(R.string.toast_hot_smoke_started), Toast.LENGTH_SHORT).show()
+        val cfg = HotSmokeConfig.load(this)
+        if (!skipAuthGate && cfg.uploadMode == "drive" && !DriveGoogleAuth.hasUsableLogin(this) && !cfg.httpsReady()) {
+            pendingSmokeAfterAuth = true
+            hotAuthGate.value = getString(R.string.toast_hot_need_auth)
+            return
+        }
+        val authSummary = DriveGoogleAuth.status(this).summary
+        Toast.makeText(
+            this,
+            getString(R.string.toast_hot_smoke_started) + " · " + authSummary,
+            Toast.LENGTH_SHORT,
+        ).show()
         lifecycleScope.launch {
             val report = SmokeHotLoop.runOneRound(
                 this@MainActivity,
@@ -665,6 +832,11 @@ class MainActivity : ComponentActivity() {
                     override fun onRoundDone(ok: Boolean, detail: String) { }
                 },
             )
+            val needAuth = report.upload?.needAuth == true || report.detail.contains("NEED_AUTH")
+            if (!report.ok && needAuth) {
+                pendingSmokeAfterAuth = true
+                hotAuthGate.value = report.detail.take(240)
+            }
             Toast.makeText(
                 this@MainActivity,
                 getString(

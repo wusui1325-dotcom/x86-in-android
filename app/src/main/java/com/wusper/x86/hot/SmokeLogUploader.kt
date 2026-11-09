@@ -21,6 +21,8 @@ import java.util.TimeZone
  *
  * After a **successful** Drive upload, trash older `smoke-*.log` siblings in that folder
  * (keep only the just-uploaded file). Never delete on failed upload.
+ *
+ * Drive auth: in-app Google Sign-In via [DriveGoogleAuth] — never require a pasted OAuth token.
  */
 object SmokeLogUploader {
     private const val TAG = "SmokeUpload"
@@ -32,6 +34,7 @@ object SmokeLogUploader {
         val remoteIdOrUrl: String,
         val pruned: Int,
         val message: String,
+        val needAuth: Boolean = false,
     )
 
     fun buildFileName(versionName: String, deviceTag: String): String {
@@ -59,15 +62,51 @@ object SmokeLogUploader {
         require(logFile.isFile && logFile.length() > 0L) { "log missing/empty: ${logFile.absolutePath}" }
         val name = buildFileName(versionName, deviceTag(ctx))
         return when (cfg.uploadMode) {
-            "drive" -> uploadDrive(cfg, logFile, name)
+            "drive" -> {
+                val refreshed = refreshDriveCfg(ctx, cfg)
+                if (refreshed.error != null) {
+                    UploadResult(
+                        false,
+                        "drive",
+                        name,
+                        "",
+                        0,
+                        refreshed.error,
+                        needAuth = true,
+                    )
+                } else {
+                    uploadDrive(ctx, refreshed.cfg, logFile, name)
+                }
+            }
             "https" -> uploadHttps(cfg, logFile, name)
             else -> UploadResult(false, cfg.uploadMode, name, "", 0, "unknown uploadMode=${cfg.uploadMode}")
         }
     }
 
+    private data class Refresh(val cfg: HotSmokeConfig.Snapshot, val error: String? = null)
+
+    /** Pull a fresh access token via Google Sign-In account (no pasted token). */
+    private fun refreshDriveCfg(ctx: Context, cfg: HotSmokeConfig.Snapshot): Refresh {
+        when (val outcome = DriveGoogleAuth.ensureAccessToken(ctx)) {
+            is DriveGoogleAuth.TokenOutcome.Ok -> {
+                val fresh = HotSmokeConfig.load(ctx)
+                return Refresh(fresh.copy(driveAccessToken = outcome.token))
+            }
+            is DriveGoogleAuth.TokenOutcome.NeedInteractive -> {
+                if (cfg.driveAccessToken.isNotBlank()) {
+                    return Refresh(cfg)
+                }
+                return Refresh(
+                    cfg,
+                    error = "NEED_AUTH: ${outcome.message} — 請點選單「連 Google」，勿手貼 token",
+                )
+            }
+        }
+    }
+
     private fun uploadHttps(cfg: HotSmokeConfig.Snapshot, logFile: File, name: String): UploadResult {
         if (cfg.uploadUrl.isBlank()) {
-            return UploadResult(false, "https", name, "", 0, "uploadUrl empty")
+            return UploadResult(false, "https", name, "", 0, "uploadUrl empty — 請設定 HTTPS relay 位址")
         }
         val url = if (cfg.uploadUrl.contains("%s")) {
             cfg.uploadUrl.replace("%s", name)
@@ -91,7 +130,6 @@ object SmokeLogUploader {
             val body = (if (code in 200..299) conn.inputStream else conn.errorStream)
                 ?.readBytes()?.toString(Charsets.UTF_8)?.take(500).orEmpty()
             if (code in 200..299) {
-                // HTTPS relay is expected to prune Drive-side; device cannot list Drive here.
                 UploadResult(true, "https", name, url, pruned = 0, message = "HTTP $code $body")
             } else {
                 UploadResult(false, "https", name, url, 0, "HTTP $code $body")
@@ -104,6 +142,7 @@ object SmokeLogUploader {
     }
 
     private fun uploadDrive(
+        ctx: Context,
         cfg: HotSmokeConfig.Snapshot,
         logFile: File,
         name: String,
@@ -115,8 +154,9 @@ object SmokeLogUploader {
                 name,
                 "",
                 0,
-                "driveAccessToken empty — set prefs x86_hot_smoke.driveAccessToken " +
-                    "(OAuth/service). Folder ${HotSmokeConfig.DEFAULT_DRIVE_FOLDER_NAME}=${cfg.driveFolderId}",
+                "NEED_AUTH: 尚未連 Google — 請點選單「連 Google」授權上傳到 " +
+                    "${HotSmokeConfig.DEFAULT_DRIVE_FOLDER_NAME}（勿手貼 OAuth token）",
+                needAuth = true,
             )
         }
         if (cfg.driveFolderId.isBlank()) {
@@ -158,7 +198,18 @@ object SmokeLogUploader {
                 ?.readBytes() ?: ByteArray(0)
             val resp = respBytes.toString(Charsets.UTF_8)
             if (code !in 200..299) {
-                return UploadResult(false, "drive", name, "", 0, "Drive HTTP $code $resp")
+                if (code == 401 || code == 403) {
+                    DriveGoogleAuth.clearTokenCache(ctx)
+                }
+                return UploadResult(
+                    false,
+                    "drive",
+                    name,
+                    "",
+                    0,
+                    "Drive HTTP $code $resp",
+                    needAuth = code == 401 || code == 403,
+                )
             }
             val id = JSONObject(resp).optString("id", "")
             val link = JSONObject(resp).optString("webViewLink", id)
@@ -210,7 +261,6 @@ object SmokeLogUploader {
                 val mime = f.optString("mimeType")
                 if (id.isBlank() || id == keepId) continue
                 if (mime == "application/vnd.google-apps.folder") continue
-                // Prefer smoke-* logs; also prune any other plain logs in this folder
                 val isSmoke = name.startsWith("smoke-") || name.endsWith(".log")
                 if (!isSmoke) continue
                 if (trashDriveFile(cfg.driveAccessToken, id)) {

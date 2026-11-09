@@ -1,3 +1,30 @@
+## 0.1.56 — wineboot soft-continue + RpcSs/MountMgr service reg
+
+**Bug (0.1.55 smoke):** Soft-kill fixed — `system.reg` grew ~51KB→~850KB over ~75s with
+`winex11.drv` loaded and seed `rpcss=yes mountmgr=yes`. But **wineboot --init never
+natural-exits** (stuck waiting after RpcSs `Failed to open RpcSs service` during early
+init + `MountMgr failed to start: 2`). UI stayed「等待客體畫面」with pid alive — hang
+was wineboot, not Present. Timeout was 180s; Boss exported ~75s in.
+
+**Root cause:** (1) During fresh `wineboot --init`, ole32 `start_rpcss` runs **before**
+SCM has RpcSs keys in the live DB (`system.reg` still 0B) → OpenService fails; wineboot
+later writes a full reg but never exits. (2) MountMgr err 2: kernel driver start needs
+**winedevice.exe** on disk (host for `drivers\mountmgr.sys`); 0.1.54 seeded mountmgr.sys
+but not winedevice.
+
+**Fix:**
+- Soft-continue when `system.reg >=100KB` **and** size stable 20s **and** `.update-timestamp`
+  exists → TERM wineboot, **keep wineserver**, proceed (NOT the 0.1.54 5s early kill).
+- Seed `winedevice.exe` + `ntoskrnl.exe`.
+- `ensure_rpcss_mountmgr_service_reg` (`reg add` RpcSs + MountMgr ImagePath/Type/Start)
+  before `RPCSS_DIAG` / `RPCSS_PRESTART`.
+- PRESTART: best-effort `winedevice MountMgr`, `net start`, `sc start`, then direct `rpcss.exe`.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.56` → `rpcss=yes mountmgr=yes` →
+`WINEBOOT_INIT soft-continue … system.reg=` (large) `stable=` → `RPCSS_REG ensure done` →
+`RPCSS_DIAG … reg_rpcss=yes` → `RPCSS_PRESTART … alive=1` → `WINE_START` → Present or
+next clear err (not endless「等待客體畫面」on wineboot hang).
+
 ## 0.1.55 — wineboot soft-kill / wipe regression (exit=143)
 
 **Bug (0.1.54 smoke):** Seed rpcss/mountmgr OK, but `prefix_is_complete` required RpcSs

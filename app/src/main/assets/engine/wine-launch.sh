@@ -13,14 +13,13 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.55: wineboot --init must NOT soft-kill on markers (0.1.54 exit=143 regression);
-# soften wipe — large system.reg (>100KB) + seeded dlls reused (seed bins + RPCSS_PRESTART /
-# wineboot -u); wipe only true stubs (~1–2KB smoke) or init that never wrote system.reg.
-# Keep 0.1.54 seed rpcss/mountmgr + RPCSS_DIAG/PRESTART; +module off; winex11; NTDLL_ANON_PE.
-# 0.1.54: RpcSs / MountMgr seed + diag (over-aggressive complete→wipe — fixed in 0.1.55).
-# 0.1.53: nodrv — seed winex11.drv + desktop,x11; DRIVER_DIAG; actxprxy.
-# 0.1.52: kernel32 c0000135 — seed-copy (no system32 bind) + NTDLL_ANON_PE.
-WINE_LAUNCH_STAMP=0.1.55
+# 0.1.56: wineboot soft-continue when system.reg large+stable (never waits forever);
+# seed winedevice/ntoskrnl (MountMgr err 2 host); ensure RpcSs/MountMgr service reg keys
+# before RPCSS_PRESTART. Still NO early soft-kill like 0.1.54 (need real system.reg first).
+# 0.1.55: no soft-kill on markers; soften wipe; reuse large prefix.
+# 0.1.54: seed rpcss/mountmgr + RPCSS_DIAG/PRESTART.
+# 0.1.53: winex11.drv + desktop,x11. 0.1.52: seed-copy + NTDLL_ANON_PE.
+WINE_LAUNCH_STAMP=0.1.56
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -523,9 +522,11 @@ ensure_prefix_exec() {
   done
   # Boot + SCM service PE exes (OpenService RpcSs needs rpcss.exe on disk for StartService;
   # MountMgr needs drivers\\mountmgr.sys — GetBinaryTypeW err 2 without it)
+  # winedevice.exe hosts kernel drivers (MountMgr); without it StartService → err 2
   for d in wineboot.exe start.exe services.exe explorer.exe rundll32.exe \
            rpcss.exe svchost.exe plugplay.exe conhost.exe cmd.exe sc.exe \
            msiexec.exe reg.exe regsvr32.exe rundll32.exe lsass.exe \
+           winedevice.exe ntoskrnl.exe \
            winemenubuilder.exe winebrowser.exe; do
     if [ -f "$pe_dir/$d" ]; then
       cp -f "$pe_dir/$d" "$sys32/$d" 2>/dev/null && seeded=$((seeded+1)) || true
@@ -1337,15 +1338,17 @@ wipe_wine_prefix() {
 }
 
 run_wineboot_init() {
-  # 0.1.55: NEVER soft-kill wineboot --init on boot markers / .update-timestamp.
-  # Soft-pass (kill after 5s) was for WINE_PE_SMOKE only — applying it here caused
-  # exit=143 before system.reg was written (0.1.54 regression vs 0.1.53).
-  # Wait for real process exit, OR timeout with system.reg still missing.
+  # 0.1.56: wait for natural exit OR soft-continue when system.reg is large+stable.
+  # 0.1.55: NEVER soft-kill on early markers (that caused exit=143 before system.reg).
+  # Soft-continue here requires system.reg >=100KB, size unchanged for 20s, and
+  # .update-timestamp — then TERM wineboot, keep wineserver, proceed to RPCSS_PRESTART.
+  # Hard timeout still 180s; tiny/missing reg on timeout = FAIL.
   local label="${1:-init}"
   local wb_timeout="${2:-180}"
-  log "WINEBOOT_INIT begin ($label) timeout=${wb_timeout}s (no soft-kill on markers)"
+  local soft_stable_need="${WINEBOOT_SOFT_STABLE_SECS:-20}"
+  local soft_reg_need="${WINEBOOT_SOFT_REG_BYTES:-100000}"
+  log "WINEBOOT_INIT begin ($label) timeout=${wb_timeout}s soft-continue>=${soft_reg_need}B stable=${soft_stable_need}s (no early soft-kill)"
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
-  # Drop any stale .update-timestamp left after wipe so we do not misread progress
   rm -f "$WINEPREFIX/.update-timestamp" 2>/dev/null || true
   : > /mnt/data/wineboot-init.out
   set +e
@@ -1355,6 +1358,9 @@ run_wineboot_init() {
   WB_BYTES=0
   WB_SAW_REG=0
   WB_SAW_TS=0
+  WB_LAST_REG=-1
+  WB_STABLE_SECS=0
+  WB_SOFT=0
   while kill -0 "$WB_PID" 2>/dev/null; do
     WB_T=$((WB_T+1))
     SZ=$(wc -c < /mnt/data/wineboot-init.out 2>/dev/null | tr -d ' \n' || echo 0)
@@ -1366,16 +1372,38 @@ run_wineboot_init() {
     REG_B=$(prefix_reg_bytes "$WINEPREFIX")
     if [ "$REG_B" -ge 400 ] 2>/dev/null; then
       if [ "$WB_SAW_REG" = "0" ]; then
-        log "WINEBOOT_INIT system.reg appeared t=${WB_T}s bytes=$REG_B — waiting for natural exit"
+        log "WINEBOOT_INIT system.reg appeared t=${WB_T}s bytes=$REG_B — waiting for natural exit or soft-continue"
         WB_SAW_REG=1
       fi
     fi
     if [ -f "$WINEPREFIX/.update-timestamp" ] && [ "$WB_SAW_TS" = "0" ]; then
-      log "WINEBOOT_INIT .update-timestamp appeared t=${WB_T}s system.reg=${REG_B}B — waiting for natural exit (NO soft-kill)"
+      log "WINEBOOT_INIT .update-timestamp appeared t=${WB_T}s system.reg=${REG_B}B — NO early soft-kill"
       WB_SAW_TS=1
     fi
+    # Track registry stability for soft-continue
+    if [ "$REG_B" -eq "$WB_LAST_REG" ] 2>/dev/null; then
+      WB_STABLE_SECS=$((WB_STABLE_SECS+1))
+    else
+      WB_STABLE_SECS=0
+      WB_LAST_REG=$REG_B
+    fi
     if [ $((WB_T % 15)) -eq 0 ]; then
-      log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ system.reg=${REG_B}B ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no)"
+      log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ system.reg=${REG_B}B ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no) stable=${WB_STABLE_SECS}s"
+    fi
+    # Soft-continue: large stable reg + ts — wineboot often never natural-exits
+    # (RpcSs OpenService during init / MountMgr). Distinct from 0.1.54 5s kill.
+    if [ "$REG_B" -ge "$soft_reg_need" ] 2>/dev/null \
+       && [ "$WB_STABLE_SECS" -ge "$soft_stable_need" ] \
+       && [ -f "$WINEPREFIX/.update-timestamp" ]; then
+      log "WINEBOOT_INIT soft-continue t=${WB_T}s system.reg=${REG_B}B stable=${WB_STABLE_SECS}s ts=yes — TERM wineboot (keep wineserver, NO wipe)"
+      WB_SOFT=1
+      kill -TERM "$WB_PID" 2>/dev/null || true
+      sleep 3
+      if kill -0 "$WB_PID" 2>/dev/null; then
+        kill -KILL "$WB_PID" 2>/dev/null || true
+      fi
+      # Do NOT wineserver -k — RPCSS_PRESTART needs it
+      break
     fi
     # Early abort on c0000135 — no point waiting full timeout
     if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
@@ -1389,7 +1417,6 @@ run_wineboot_init() {
     if [ "$WB_T" -ge "$wb_timeout" ]; then
       REG_B=$(prefix_reg_bytes "$WINEPREFIX")
       if [ "$REG_B" -ge 20000 ] 2>/dev/null; then
-        # Have a real system.reg — ask politely then accept if still alive
         log "WINEBOOT_INIT TIMEOUT t=${WB_T}s but system.reg=${REG_B}B — TERM then accept if reg survives"
         kill -TERM "$WB_PID" 2>/dev/null || true
         sleep 3
@@ -1411,13 +1438,16 @@ run_wineboot_init() {
   WB_RC=$?
   set -e
   REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  if [ "$WB_SOFT" = "1" ]; then
+    log "WINEBOOT_INIT soft-continue accepted exit=$WB_RC system.reg=${REG_B}B (proceed RPCSS/WINE_START)"
+  fi
   # exit 143 (SIGTERM) is NEVER success unless system.reg already usable
   if [ "$WB_RC" = "143" ] && [ "$REG_B" -lt 20000 ] 2>/dev/null; then
     log "WINEBOOT_INIT exit=143 with tiny/missing system.reg=${REG_B}B — treat as FAIL (soft-kill regression guard)"
   fi
-  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) bytes=$REG_B complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no) ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no)"
+  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) bytes=$REG_B complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no) ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no) soft=$WB_SOFT"
   log "--- WINEBOOT_INIT key lines ---"
-  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image|kernel32' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
+  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image|kernel32|RpcSs|MountMgr' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
   log "--- WINEBOOT_INIT tail ---"
   tail -60 /mnt/data/wineboot-init.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 }
@@ -1560,7 +1590,7 @@ mkdir -p "$WINEPREFIX/drive_c/windows/system32/drivers" 2>/dev/null || true
 if [ -f /opt/wine/lib/wine/x86_64-windows/mountmgr.sys ]; then
   cp -f /opt/wine/lib/wine/x86_64-windows/mountmgr.sys "$WINEPREFIX/drive_c/windows/system32/drivers/mountmgr.sys" 2>/dev/null || true
 fi
-for _svc in svchost.exe plugplay.exe services.exe sc.exe; do
+for _svc in svchost.exe plugplay.exe services.exe sc.exe winedevice.exe ntoskrnl.exe; do
   if [ -f "/opt/wine/lib/wine/x86_64-windows/$_svc" ]; then
     cp -f "/opt/wine/lib/wine/x86_64-windows/$_svc" "$WINEPREFIX/drive_c/windows/system32/$_svc" 2>/dev/null || true
   fi
@@ -1573,7 +1603,53 @@ if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then X0_STATE=ok; fi
 log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu} desktop=${W}x${H}"
 driver_diag
 
-# ---- 0.1.54: RpcSs / MountMgr diagnose + prestart --------------------------------
+# ---- 0.1.56: ensure service registry keys + 0.1.54 diag/prestart ------------------
+ensure_rpcss_mountmgr_service_reg() {
+  # OpenService("RpcSs") needs HKLM\...\Services\RpcSs in the live wineserver DB.
+  # After soft-continue, wineboot may have written system.reg keys but services.exe
+  # may be dead — re-add via `reg add` so net start / StartService can open them.
+  # MountMgr needs Type=1 + ImagePath to drivers\mountmgr.sys; winedevice hosts it.
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local drv="$sys32/drivers"
+  local reg_rpc=no reg_mm=no
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    grep -qE 'Services\\RpcSs\]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_rpc=yes || true
+    grep -qE 'Services\\MountMgr\]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_mm=yes || true
+  fi
+  log "RPCSS_REG precheck file_rpcss=$reg_rpc file_mountmgr=$reg_mm rpcss_bin=$([ -f "$sys32/rpcss.exe" ] && echo yes || echo NO) winedevice=$([ -f "$sys32/winedevice.exe" ] && echo yes || echo NO) mountmgr=$([ -f "$drv/mountmgr.sys" ] && echo yes || echo NO)"
+  set +e
+  # Always (re)assert keys — cheap; fixes half-written or services-not-loaded cases
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v Type /t REG_DWORD /d 32 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v Start /t REG_DWORD /d 3 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v ErrorControl /t REG_DWORD /d 1 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v ImagePath /t REG_EXPAND_SZ /d "%SystemRoot%\\system32\\rpcss.exe" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v ObjectName /t REG_SZ /d "LocalSystem" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\RpcSs" /v DisplayName /t REG_SZ /d "Remote Procedure Call (RPC)" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  # MountMgr: kernel driver hosted by winedevice.exe
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v Type /t REG_DWORD /d 1 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v Start /t REG_DWORD /d 0 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v ErrorControl /t REG_DWORD /d 1 /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v ImagePath /t REG_EXPAND_SZ /d "%SystemRoot%\\system32\\drivers\\mountmgr.sys" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v DisplayName /t REG_SZ /d "Mount Manager" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine reg.exe add "HKLM\System\CurrentControlSet\Services\MountMgr" /v Group /t REG_SZ /d "System Bus Extender" /f >>/mnt/data/wine-rpcss-reg.out 2>&1
+  REG_RC=$?
+  set -e
+  # Re-check file after reg add (wineserver flushes)
+  reg_rpc=no; reg_mm=no
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    grep -qE 'Services\\RpcSs\]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_rpc=yes || true
+    grep -qE 'Services\\MountMgr\]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_mm=yes || true
+  fi
+  log "RPCSS_REG ensure done file_rpcss=$reg_rpc file_mountmgr=$reg_mm reg_rc=$REG_RC out_bytes=$(wc -c </mnt/data/wine-rpcss-reg.out 2>/dev/null | tr -d ' ')"
+  if [ -f /mnt/data/wine-rpcss-reg.out ]; then
+    grep -E 'wine:|err:|fix:|RpcSs|MountMgr|reg:|The operation completed' /mnt/data/wine-rpcss-reg.out 2>/dev/null | head -30 | while read -r line; do
+      log "RPCSS_REG.out: $line"
+    done || true
+  fi
+}
+
 rpcss_diag() {
   local sys32="$WINEPREFIX/drive_c/windows/system32"
   local drv="$sys32/drivers"
@@ -1602,18 +1678,27 @@ rpcss_prestart() {
   # Explorer combase start_rpcss → OpenService("RpcSs") then StartService.
   # Do NOT spawn a second services.exe (wineserver owns SCM). Try net start,
   # then direct rpcss.exe so IRPCSS is up even if SCM OpenService races.
+  # 0.1.56: also try `sc start` and best-effort MountMgr via winedevice.
   local sys32="$WINEPREFIX/drive_c/windows/system32"
   : > /mnt/data/wine-rpcss.out
   if [ ! -f "$sys32/rpcss.exe" ]; then
     log "RPCSS_PRESTART skip (rpcss.exe missing)"
     return 0
   fi
-  log "RPCSS_PRESTART begin (net start RpcSs → rpcss.exe)"
+  log "RPCSS_PRESTART begin (net start RpcSs → sc start → rpcss.exe)"
   set +e
+  # Best-effort MountMgr via winedevice (non-fatal if err 2)
+  if [ -f "$sys32/winedevice.exe" ] && [ -f "$sys32/drivers/mountmgr.sys" ]; then
+    "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine winedevice.exe MountMgr >>/mnt/data/wine-rpcss.out 2>&1 &
+    MM_PID=$!
+    sleep 1
+    kill -0 "$MM_PID" 2>/dev/null && log "RPCSS_PRESTART MountMgr/winedevice alive pid=$MM_PID" || log "RPCSS_PRESTART MountMgr/winedevice exited early"
+  else
+    log "RPCSS_PRESTART MountMgr skip (winedevice or mountmgr.sys missing)"
+  fi
   # net start will autostart services.exe via wineserver if needed
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine net.exe start RpcSs >>/mnt/data/wine-rpcss.out 2>&1 &
   NET_PRE_PID=$!
-  # Wait up to 8s for net start to finish or progress
   NT=0
   while kill -0 "$NET_PRE_PID" 2>/dev/null && [ "$NT" -lt 8 ]; do
     sleep 1
@@ -1626,6 +1711,21 @@ rpcss_prestart() {
   fi
   wait "$NET_PRE_PID" 2>/dev/null
   NET_RC=$?
+  # sc start as second SCM path
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine sc.exe start RpcSs >>/mnt/data/wine-rpcss.out 2>&1 &
+  SC_PID=$!
+  ST=0
+  while kill -0 "$SC_PID" 2>/dev/null && [ "$ST" -lt 5 ]; do
+    sleep 1
+    ST=$((ST+1))
+  done
+  if kill -0 "$SC_PID" 2>/dev/null; then
+    kill -TERM "$SC_PID" 2>/dev/null || true
+    sleep 0.3
+    kill -KILL "$SC_PID" 2>/dev/null || true
+  fi
+  wait "$SC_PID" 2>/dev/null
+  SC_RC=$?
   # Direct rpcss.exe — registers the RPCSS endpoint used by COM
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine rpcss.exe >>/mnt/data/wine-rpcss.out 2>&1 &
   RPCSS_PID=$!
@@ -1633,14 +1733,15 @@ rpcss_prestart() {
   set -e
   local alive=0
   kill -0 "$RPCSS_PID" 2>/dev/null && alive=1 || true
-  log "RPCSS_PRESTART net_rc=$NET_RC rpcss_pid=$RPCSS_PID alive=$alive out_bytes=$(wc -c </mnt/data/wine-rpcss.out 2>/dev/null | tr -d ' ')"
+  log "RPCSS_PRESTART net_rc=$NET_RC sc_rc=$SC_RC rpcss_pid=$RPCSS_PID alive=$alive out_bytes=$(wc -c </mnt/data/wine-rpcss.out 2>/dev/null | tr -d ' ')"
   if [ -f /mnt/data/wine-rpcss.out ]; then
-    grep -E 'wine:|err:|fix:|RpcSs|rpcss|MountMgr|service|c0000|FATAL|started|START' /mnt/data/wine-rpcss.out 2>/dev/null | head -40 | while read -r line; do
+    grep -E 'wine:|err:|fix:|RpcSs|rpcss|MountMgr|service|c0000|FATAL|started|START|OpenService' /mnt/data/wine-rpcss.out 2>/dev/null | head -40 | while read -r line; do
       log "RPCSS_PRESTART.out: $line"
     done || true
   fi
 }
 
+ensure_rpcss_mountmgr_service_reg
 rpcss_diag
 rpcss_prestart
 

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.55",
-  "versionCode": 56,
-  "notes": "0.1.55: fix 0.1.54 regression \u2014 never soft-kill wineboot --init on markers (exit=143); soften wipe (reuse large system.reg>100KB, wipe stubs only); seed rpcss/mountmgr + RPCSS_PRESTART kept; GIT_SHA=commit-then-build"
+  "versionName": "0.1.56",
+  "versionCode": 57,
+  "notes": "0.1.56: wineboot soft-continue when system.reg large+stable; seed winedevice/ntoskrnl; ensure RpcSs/MountMgr service reg before RPCSS_PRESTART; GIT_SHA=commit-then-build"
 }

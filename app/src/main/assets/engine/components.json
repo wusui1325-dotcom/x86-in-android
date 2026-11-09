@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.75-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-mapraise-swapchain",
+  "runtimeId": "wine-gpustack-v0.1.76-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.67: APP_LOAD start /unix ladder; Present prefer-app; desktopOnly DIAG; keep 0.1.66 CPU-first"
+  "notes": "0.1.76: Smart TU_GMEM auto a710/715/720/725; keep 0.1.75 map+raise"
 }

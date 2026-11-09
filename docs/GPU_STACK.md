@@ -107,7 +107,7 @@
 - **最短路**：Winlator 等價 `libvulkan_freedreno.so`（aarch64／glibc／KGSL），非 nihui bionic
 - `VK_ICD_FILENAMES`／`VK_DRIVER_FILES` → `/mnt/gpu/turnip/freedreno_icd.json`（0.1.71: `library_path` 客體絕對 `/mnt/gpu/turnip/libvulkan_freedreno.so`）
 - `ComponentInstaller`：GpuStack 亦拉取 **x11-overlay**（`libvulkan`／drm／xcb）
-- `wine-launch.sh`：記錄 ICD／KGSL／loader；`TU_DEBUG=noconform,noubwc,sysmem`（0.1.73）
+- `wine-launch.sh`：記錄 ICD／KGSL／loader；`TU_DEBUG` via Smart TU_GMEM（0.1.76；073 base noubwc+sysmem）
 - **0.1.68 診斷契約**：`DXVK_LOG_LEVEL=info`／`DXVK_HUD=devinfo,fps`／`DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache`；
   啟動指紋 `DXVK_DIAG icd=… dxvk_dlls=… kgsl=…`；Present `guestBlack=` 拆 HUD 假綠燈。
   二分：`X86_DXWRAPPER=wined3d` 清 d3d* native（預設仍 DXVK）。KGSL 缺＝軟 WARN，不硬擋 Session。
@@ -125,6 +125,7 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.76 Smart TU_GMEM：** wine-launch owns `TU_DEBUG`; auto `gmem` on Adreno 710/715/720/725 via `/sys` + `X86_ADRENO_MODEL`; `X86_TU_GMEM=0/1/auto`; log `TURNIP_GMEM=…`; GpuStack no longer hardcodes `TU_DEBUG=…sysmem` (074 gmem was dead). Keep noubwc. No Present CPU-first flip.
 - **0.1.75 map+raise / CreateSwapChain：** host `raiseWindow` on MapWindow; MAP_WAIT `.x86-x11-ready` before APP_LOAD; Present VIEWABLE + `mapState=`/`mapWait=`; dxvk `maxFrameLatency=1` + `numBackBuffers=3`. No Present CPU-first flip.
 - **0.1.74 winex11 HWND/FS：** X11 `UseXRandR=N`/`UseXVidMode=N`/`DXGrab=N`/`ScreenDepth=32`/`Decorated=N`;
   Present prefer `_NET_WM_HWND`; dxvk `enableDialogMode` + `allowFse=False`; optional

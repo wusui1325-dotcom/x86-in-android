@@ -14,11 +14,14 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.76: Smart TU_GMEM — auto gmem on Adreno 710/715/720/725 (/sys + X86_ADRENO_MODEL);
+# X86_TU_GMEM=0 force-off / =1 force-on / unset|auto=probe; log TURNIP_GMEM=auto|on|off.
+# Fix: GpuStack no longer hardcodes TU_DEBUG (074 X86_TU_GMEM was dead). Keep 075 map+raise.
 # 0.1.75: map+raise before CreateSwapChain — host raiseWindow + MAP_WAIT .x86-x11-ready
 # before APP_LOAD; Present VIEWABLE gate + mapState/mapWait DIAG; dxvk maxFrameLatency=1
-# + numBackBuffers=3. Keep 074 HWND/FS knobs; X86_TU_GMEM stays opt-in.
+# + numBackBuffers=3. Keep 074 HWND/FS knobs.
 # 0.1.74: winex11 HWND/FS — UseXRandR/UseXVidMode/DXGrab=N ScreenDepth=32 Decorated=N;
-# Present prefer _NET_WM_HWND; dxvk dialogMode; optional X86_TU_GMEM=1 (a710/720 bisect).
+# Present prefer _NET_WM_HWND; dxvk dialogMode; optional X86_TU_GMEM (superseded by 076 auto).
 # 0.1.73: Turnip queue — TU_DEBUG noconform,noubwc,sysmem + Mesa shader cache under /mnt/data;
 # soft KGSL/dma_heap bind (LaunchPipeline). Keep 0.1.72 dxvk.conf/ESYNC.
 # 0.1.72: DXGI Present — dxvk.conf deferSurfaceCreation + Direct3D/X11 reg + WINEESYNC.
@@ -40,7 +43,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.75
+WINE_LAUNCH_STAMP=0.1.76
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -132,7 +135,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.75 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.76 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -204,22 +207,77 @@ ICDEOF
   export VK_ICD_FILENAMES="$_turnip_icd"
   export VK_DRIVER_FILES="$_turnip_icd"
   export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  # 0.1.73: noubwc (AHB Present readback/sample) + sysmem (skip GMEM resolve black/hang;
-  # Pipetto 25.1 R2 — not Autotuner). Overridable via TU_DEBUG env.
-  # 0.1.74 MED: X86_TU_GMEM=1 → noconform,noubwc,gmem for a710/720 bisect (default unchanged).
-  if [ -z "${TU_DEBUG:-}" ]; then
-    case "${X86_TU_GMEM:-0}" in
-      1|y|Y|yes|YES|true|TRUE)
-        export TU_DEBUG="noconform,noubwc,gmem"
-        log "TURNIP_GMEM X86_TU_GMEM=1 → TU_DEBUG=$TU_DEBUG (a710/720 bisect)"
-        ;;
-      *)
-        export TU_DEBUG="noconform,noubwc,sysmem"
-        ;;
-    esac
+  # 0.1.76: Smart TU_GMEM — wine-launch owns TU_DEBUG (GpuStack no longer hardcodes).
+  # Keep noubwc+noconform. gmem on Adreno 710/715/720/725; else sysmem (073 default).
+  # Explicit non-default TU_DEBUG from user/session still wins.
+  _tu_default_sys="noconform,noubwc,sysmem"
+  _tu_default_gmem="noconform,noubwc,gmem"
+  _probe_model="${X86_ADRENO_MODEL:-}"
+  if [ -z "$_probe_model" ]; then
+    for _gm in \
+      /sys/class/kgsl/kgsl-3d0/gpu_model \
+      /sys/class/kgsl/kgsl-3d0/gpuinfo \
+      /sys/devices/platform/*/kgsl/kgsl-3d0/gpu_model \
+      /sys/devices/platform/*/kgsl/kgsl-3d0/gpuinfo
+    do
+      [ -r "$_gm" ] || continue
+      _probe_model=$(tr -d '\0\n\r' < "$_gm" 2>/dev/null | head -c 120)
+      [ -n "$_probe_model" ] && break
+    done
+    unset _gm
+  fi
+  _gmem_match=0
+  case "$(printf '%s' "$_probe_model" | tr 'A-Z' 'a-z')" in
+    *adreno*710*|*adreno*715*|*adreno*720*|*adreno*725*|*a710*|*a715*|*a720*|*a725*)
+      _gmem_match=1 ;;
+  esac
+  # Also match bare numeric tokens in gpuinfo lines
+  if [ "$_gmem_match" = "0" ]; then
+    printf '%s' "$_probe_model" | grep -qiE '(^|[^0-9])(710|715|720|725)([^0-9]|$)' && _gmem_match=1 || true
+  fi
+  _gmem_mode="${X86_TU_GMEM:-auto}"
+  _gmem_decision=sysmem
+  _gmem_log=auto
+  case "$_gmem_mode" in
+    1|y|Y|yes|YES|true|TRUE|on|ON)
+      _gmem_decision=gmem
+      _gmem_log=on
+      ;;
+    0|n|N|no|NO|false|FALSE|off|OFF)
+      _gmem_decision=sysmem
+      _gmem_log=off
+      ;;
+    auto|AUTO|"")
+      _gmem_log=auto
+      if [ "$_gmem_match" = "1" ]; then
+        _gmem_decision=gmem
+      else
+        _gmem_decision=sysmem
+      fi
+      ;;
+    *)
+      # unknown value → treat as auto
+      _gmem_log=auto
+      if [ "$_gmem_match" = "1" ]; then
+        _gmem_decision=gmem
+      else
+        _gmem_decision=sysmem
+      fi
+      ;;
+  esac
+  _tu_want="$_tu_default_sys"
+  [ "$_gmem_decision" = "gmem" ] && _tu_want="$_tu_default_gmem"
+  # Rewrite when unset OR still the 073/GpuStack default sysmem (so auto/force can apply).
+  # Any other explicit TU_DEBUG is preserved.
+  if [ -z "${TU_DEBUG:-}" ] || [ "${TU_DEBUG}" = "$_tu_default_sys" ] || [ "${TU_DEBUG}" = "$_tu_default_gmem" ]; then
+    export TU_DEBUG="$_tu_want"
   else
     export TU_DEBUG
+    _gmem_log="keep"
+    _gmem_decision="custom"
   fi
+  log "TURNIP_GMEM=${_gmem_log} model=${_probe_model:-unknown} match=${_gmem_match} decision=${_gmem_decision} X86_TU_GMEM=${_gmem_mode} TU_DEBUG=${TU_DEBUG}"
+  unset _tu_default_sys _tu_default_gmem _probe_model _gmem_match _gmem_mode _gmem_decision _gmem_log _tu_want
   # Writable Mesa shader cache under /mnt/data (Winlator-align; avoid PRoot /tmp noexec)
   export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/mnt/data/mesa_shader_cache}"
   export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-false}"

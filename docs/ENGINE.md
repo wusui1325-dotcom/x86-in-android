@@ -1,3 +1,20 @@
+## 0.1.76 — Smart TU_GMEM auto (a710/715/720/725)
+
+**Smoke risk (0.1.75):** map+raise / MAP_WAIT / VIEWABLE / maxFrameLatency can still leave a
+black window when Turnip stays on `sysmem` on Adreno 710/715/720/725 (Autotuner/Pipetto
+gmem class), or when `X86_TU_GMEM=1` never applied because GpuStack hardcoded `TU_DEBUG=…sysmem`.
+
+**Fix:**
+- wine-launch owns `TU_DEBUG`: probe `/sys` (+ host `X86_ADRENO_MODEL`) → `gmem` on
+  710/715/720/725; else `sysmem`. Keep `noconform,noubwc`.
+- Semantics: unset/`auto`=probe; `X86_TU_GMEM=1` force gmem; `=0` force sysmem
+- Log `TURNIP_GMEM=auto|on|off model=… decision=gmem|sysmem`
+- GpuStack stops hardcoding `TU_DEBUG` (074 MED was dead); exports model + X86_TU_GMEM
+- Keep 075 map+raise / VIEWABLE / maxFrameLatency
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.76`; `TURNIP_GMEM=auto model=Adreno710 decision=gmem`
+(or sysmem on non-match); `guestBlack=0`.
+
 ## 0.1.75 — map+raise / CreateSwapChain timing
 
 **Smoke risk (0.1.74):** HWND prefer + UseXRandR/ScreenDepth can still leave a black window when

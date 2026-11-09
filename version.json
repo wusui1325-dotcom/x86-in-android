@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.75",
-  "versionCode": 76,
-  "notes": "0.1.75: map+raise before CreateSwapChain — host raiseWindow + MAP_WAIT .x86-x11-ready; Present VIEWABLE/mapState; dxvk maxFrameLatency=1 numBackBuffers=3"
+  "versionName": "0.1.76",
+  "versionCode": 77,
+  "notes": "0.1.76: Smart TU_GMEM — auto gmem on Adreno 710/715/720/725 (/sys + X86_ADRENO_MODEL); X86_TU_GMEM=0/1/auto; fix GpuStack TU_DEBUG hardcode (074 gmem was dead)"
 }

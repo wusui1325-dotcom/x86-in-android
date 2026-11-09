@@ -83,6 +83,70 @@ object GpuStack {
     /** 裝置是否具備 KGSL（Adreno 路徑）。無則可能黑屏。 */
     fun hasKgslDevice(): Boolean = File("/dev/kgsl-3d0").exists()
 
+    /**
+     * 0.1.76: best-effort Adreno model from KGSL sysfs (host).
+     * wine-launch also probes guest `/sys` (PRoot-bound); this seeds `X86_ADRENO_MODEL`.
+     */
+    fun detectAdrenoModel(): String? {
+        val candidates = mutableListOf(
+            File("/sys/class/kgsl/kgsl-3d0/gpu_model"),
+            File("/sys/class/kgsl/kgsl-3d0/gpuinfo"),
+        )
+        runCatching {
+            val platform = File("/sys/devices/platform")
+            if (platform.isDirectory) {
+                platform.walkTopDown().maxDepth(4).forEach { f ->
+                    if (f.isFile && (f.name == "gpu_model" || f.name == "gpuinfo") &&
+                        f.path.contains("kgsl")
+                    ) {
+                        candidates += f
+                    }
+                }
+            }
+        }
+        for (f in candidates) {
+            val raw = runCatching {
+                f.takeIf { it.isFile && it.canRead() }?.readText()?.trim()?.take(120)
+            }.getOrNull()
+            if (!raw.isNullOrBlank()) return raw.replace("\u0000", "")
+        }
+        return null
+    }
+
+    /** True when model string looks like Adreno 710/715/720/725 family. */
+    fun isAdreno71xGmemFamily(model: String?): Boolean {
+        if (model.isNullOrBlank()) return false
+        val m = model.lowercase()
+        if (Regex("""adreno[^0-9]*7(10|15|20|25)""").containsMatchIn(m)) return true
+        if (Regex("""(^|[^0-9])a?7(10|15|20|25)([^0-9]|$)""").containsMatchIn(m)) return true
+        return false
+    }
+
+    /**
+     * 0.1.76: resolve X86_TU_GMEM — unset→auto; file/prefs/env may force 0/1/auto.
+     */
+    fun resolveTuGmem(ctx: Context, wsDataAbs: String): String {
+        fun norm(raw: String?): String? {
+            val v = raw?.trim()?.lowercase() ?: return null
+            return when (v) {
+                "1", "y", "yes", "true", "on" -> "1"
+                "0", "n", "no", "false", "off" -> "0"
+                "auto", "" -> "auto"
+                else -> if (v.isEmpty()) null else v
+            }
+        }
+        norm(System.getenv("X86_TU_GMEM"))?.let { return it }
+        runCatching {
+            val f = File(wsDataAbs, "tu_gmem")
+            if (f.isFile) norm(f.readText())?.let { return it }
+        }
+        runCatching {
+            val prefs = ctx.getSharedPreferences("x86", Context.MODE_PRIVATE)
+            norm(prefs.getString("tu_gmem", null))?.let { return it }
+        }
+        return "auto"
+    }
+
     fun canLaunchGpuSession(ctx: Context): Boolean =
         PRESENTATION_READY && componentsInstalled(ctx)
 
@@ -141,13 +205,18 @@ object GpuStack {
             env += "HOST_TURNIP_DIR=${turnipDir(ctx).absolutePath}"
             env += "VK_ICD_FILENAMES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
             env += "VK_DRIVER_FILES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
-            // 0.1.73: noubwc + sysmem with noconform (AHB Present / GMEM black class)
-            env += "TU_DEBUG=noconform,noubwc,sysmem"
+            // 0.1.76: do NOT hardcode TU_DEBUG — wine-launch Smart TU_GMEM owns it
+            // (074 X86_TU_GMEM was dead while GpuStack forced …sysmem). Mesa cache stays.
             env += "MESA_SHADER_CACHE_DIR=/mnt/data/mesa_shader_cache"
             env += "MESA_SHADER_CACHE_DISABLE=false"
             env += "MESA_SHADER_CACHE_MAX_SIZE=512MB"
             env += "XDG_CACHE_HOME=/mnt/data/xdg-cache"
             env += "X86_TURNIP_ICD=glibc_kgsl"
+            val model = detectAdrenoModel()
+            if (!model.isNullOrBlank()) {
+                env += "X86_ADRENO_MODEL=$model"
+            }
+            env += "X86_TU_GMEM=${resolveTuGmem(ctx, wsDataAbs)}"
         }
         val dxvk = dxvkDir(ctx)
         if (dxvk.isDirectory) {

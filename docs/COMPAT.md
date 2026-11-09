@@ -1,3 +1,20 @@
+## 0.1.109 — Wine amd64-wow64 + DROP trampoline (A2 systemic 14c)
+
+**Dig 108:** trampoline put MACHINE_TYPE=i386 on syswow64\cmd — same A2 as App
+(`started_pid_cmd=0`, `wow64cpu_init=[]`, ShellExecuteEx fatal). Root: Kron4ek
+`staging-amd64` ships `i386-unix` → classic wine32 re-exec; under box64 +
+`WINELOADERNOEXEC=1` any 14c CreateProcess aborts before wow64cpu init.
+
+**Knives:** (1) `components.json` Wine → `wine-11.21-staging-amd64-wow64`
+(0× i386-unix; in-process wow64cpu; `ntdll.so` identical → NTDLL_ANON_PE kept);
+stamp `WINE_FLAVOR=amd64_wow64`. (2) DROP trampoline — PRIMARY
+`start /machine x86 /wait /exec C:\App\app.exe` (KEEP 107 machine-before-exec).
+(3) canary + `ntstatus_hex` dig (`c000xxxx` / STATUS_ / not-supported-machine).
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.109`; `WINE_FLAVOR=amd64_wow64`;
+`canary_dig machine_cmd_014c=1 started_pid_cmd=1`; App `machine_014c=1` +
+`started_pid_after_app=1` + `Loaded L"C:\App\app.exe"`; `wow64cpu_init` non-empty.
+
 ## 0.1.108 — App-only post-14c trampoline + NTSTATUS surface
 
 **Dig 107:** PRIMARY `start /machine x86 /wait /exec` restored App NtCreate **machine 14c**,

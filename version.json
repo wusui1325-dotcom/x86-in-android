@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.108",
-  "versionCode": 110,
-  "notes": "0.1.108: P0 App-only. Dig107: PRIMARY machine-before-exec OK→App NtCreate machine 14c recovered but no started pid; FormatMessage failed; wow64cpu_init=[]; direct machine0 creator_detach. Knives: (1) PRIMARY trampoline start /machine x86 /wait /exec syswow64\\cmd /c stub (KEEP argv order; WoW64-create small i386 cmd then 32→32 App); (2) wow64 canary before App; (3) surface NTSTATUS/GLE (formatmessage_failed/gle_suspect=0, err+ntdll, trampoline_dig). KEEP 102-107 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/PRIMARY order/dblslash/phase/log/BSOD. No hot/soft-continue/Present/DXVK x32/FF. vc110.",
-  "tipSha": "0d96ffa"
+  "versionName": "0.1.109",
+  "versionCode": 111,
+  "notes": "0.1.109: P0 App-only. Dig108: trampoline FAIL systemic — ANY MACHINE_TYPE=i386 CreateProcess under staging-amd64+box64+NOEXEC refuses started pid; wow64cpu never inits. Root: classic i386-unix re-exec path. Knives: (1) Wine→staging-amd64-wow64 (0× i386-unix; in-process wow64cpu; ntdll identical→anon-pe kept); (2) DROP trampoline — PRIMARY start /machine x86 /wait /exec C:\\App\\app.exe (KEEP 107 order); canary gate; (3) real NTSTATUS hex dig + fixed canary 14c/started_pid_cmd. KEEP 102-108 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32. No hot/soft-continue/Present/DXVK x32/FF. vc111.",
+  "tipSha": "PENDING"
 }

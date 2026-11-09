@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.88-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu-vulkan-seed-wow64-i386-load-inprocessx-cpuaccess-wow64-direct-first",
+  "runtimeId": "wine-gpustack-v0.1.88-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu-vulkan-seed-wow64-i386-load-inprocessx-cpuaccess-wow64-direct-first-amd64-wow64-pkg",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -12,12 +12,13 @@
     },
     {
       "id": "wine",
-      "filename": "wine-11.21-staging-amd64.tar.xz",
-      "url": "https://github.com/Kron4ek/Wine-Builds/releases/download/11.21/wine-11.21-staging-amd64.tar.xz",
-      "sha256": "d0e685787b1079f12003f60f3f6e029658226bf6c350dce648be07db1f5e3e20",
+      "filename": "wine-11.21-staging-amd64-wow64.tar.xz",
+      "url": "https://github.com/Kron4ek/Wine-Builds/releases/download/11.21/wine-11.21-staging-amd64-wow64.tar.xz",
+      "sha256": "a70a9691c42e35f32bab8a8a2deb8f0321aa3081b393c73575727ca76fa503ab",
       "extract": "rootfs/opt",
-      "renameFrom": "wine-11.21-staging-amd64",
-      "renameTo": "wine"
+      "renameFrom": "wine-11.21-staging-amd64-wow64",
+      "renameTo": "wine",
+      "notes": "0.1.109: amd64-wow64 (no i386-unix) \u2014 in-process WoW64 so MACHINE_TYPE=i386 CreateProcess works under box64+WINELOADERNOEXEC; ntdll.so identical to amd64 (anon-pe patch kept)"
     },
     {
       "id": "box64-glibc",
@@ -68,5 +69,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.90: A1+A3+A2 APP_LOAD (no WOW64 demote; c:+seed; hang-alive ladder; SysWOW64 expand); DXVK x32 defer; keep 089–070"
+  "notes": "0.1.109: Wine\u2192staging-amd64-wow64 (P0 A2: fix systemic MACHINE_TYPE=i386 create under box64+NOEXEC); drop trampoline; NTSTATUS dig; KEEP 102-108 gates"
 }

@@ -13,6 +13,7 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.62: launch PE via explorer/C:\\App (no start.exe); force +ole/+rpcss/+x11drv.
 # 0.1.61: RpcSs ready requires alive process + OLE/sc4 (no false sc READY).
 # 0.1.60: RpcSs SCM-ready before WINE_START; soft-continue >=50KB (or >=30KB+boot markers) stable~15s; keep 0.1.59
 # reg path (never stub pre-create; Wine Version 2 UTF-8).
@@ -21,7 +22,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.61
+WINE_LAUNCH_STAMP=0.1.62
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -1080,7 +1081,7 @@ pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 sleep 0.3
 # 0.1.51: light WINE_RUN debug — err+all,fix+all + BOX64_LOG=1 made explorer glacial
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export BOX64_SHOWSEGV=0
@@ -1202,7 +1203,7 @@ fi
 # 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export WINEARCH=win64
 log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX WINEARCH=$WINEARCH DISPLAY=${DISPLAY:-unset}"
@@ -1965,9 +1966,13 @@ rpcss_prestart() {
       break
     fi
     if [ "$PROC_ALIVE" = "1" ] && [ "$OLE_OK" = "1" ]; then
-      RPC_READY=1
-      RPC_REASON="alive+ole-probe"
-      break
+      # Re-verify process still alive after probe (shell pid may have exited)
+      if rpcss_proc_alive; then
+        RPC_READY=1
+        RPC_REASON="alive+ole-probe"
+        break
+      fi
+      log "RPCSS_PRESTART ole-probe ok but rpcss vanished — not ready"
     fi
 
     if [ "$PROC_ALIVE" = "0" ] && [ "$RPCSS_LAUNCHES" -lt 2 ]; then
@@ -1998,9 +2003,10 @@ rpcss_prestart() {
     log "RPCSS_PRESTART MountMgr deferred (ready=$RPC_READY)"
   fi
 
+  # tracked shell pid may exit while SCM-owned rpcss stays in /proc — proc_alive is authoritative
   kill -0 "${RPCSS_PID:-0}" 2>/dev/null && tracked=1 || tracked=0
   set -e
-  log "RPCSS_PRESTART done ready=$RPC_READY reason=$RPC_REASON proc_alive=$PROC_ALIVE tracked_pid_alive=$tracked rpcss_pid=${RPCSS_PID:-none} launches=$RPCSS_LAUNCHES sc_rc=$SC_RC services_pid=${SERVICES_PID:-none} probe_t=${PT}s out_bytes=$(wc -c </mnt/data/wine-rpcss.out 2>/dev/null | tr -d ' ')"
+  log "RPCSS_PRESTART done ready=$RPC_READY reason=$RPC_REASON proc_alive=$PROC_ALIVE shell_pid_alive=$tracked rpcss_pid=${RPCSS_PID:-none} launches=$RPCSS_LAUNCHES sc_rc=$SC_RC services_pid=${SERVICES_PID:-none} probe_t=${PT}s out_bytes=$(wc -c </mnt/data/wine-rpcss.out 2>/dev/null | tr -d ' ')"
   if [ -f /mnt/data/wine-rpcss.out ]; then
     grep -E 'wine:|err:|fix:|RpcSs|rpcss|MountMgr|service|c0000|FATAL|1053|1056|RUNNING|STATE|OpenService|RPC_S|already' /mnt/data/wine-rpcss.out 2>/dev/null | head -40 | while read -r line; do
       log "RPCSS_PRESTART.out: $line"
@@ -2008,7 +2014,7 @@ rpcss_prestart() {
   fi
   if [ "$RPC_READY" != "1" ]; then
     log "WARN: RPCSS_PRESTART not ready — enabling +ole/+rpcss/+x11drv for WINE_START diag"
-    export WINEDEBUG="err+ole,err+rpcss,err+x11drv${WINEDEBUG:+;$WINEDEBUG}"
+    export WINEDEBUG="err+all,+seh,+loaddll,+ole,+rpcss,+x11drv"
   else
     log "RPCSS_PRESTART RpcSs ready — safe for WINE_START"
   fi
@@ -2039,32 +2045,82 @@ if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-
 fi
 
 # 0.1.53: /desktop=name,WxH,x11 — skip mac/wayland probe; LoadLibrary winex11.drv only
-# 0.1.61: explorer desktop first, then app; light +ole/+rpcss fingerprint
+# 0.1.62: NEVER start.exe /unix (ShellExecuteEx failed). Seed PE into C:\App\app.exe
+# and pass Windows path to explorer /desktop=… (0.1.60 unix argv also kept as fallback).
+# Force +ole/+rpcss/+x11drv until first Present / 60s (overrides earlier WINE_RUN default).
 export WINEARCH=win64
-if [ -z "${WINEDEBUG:-}" ]; then
-  export WINEDEBUG=err+ole,err+rpcss
-fi
-log "WINE_START desktop-first then app (WINEARCH=$WINEARCH WINEDEBUG=$WINEDEBUG)"
+export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+log "WINE_START begin (WINEARCH=$WINEARCH WINEDEBUG=$WINEDEBUG argv=$* )"
 : > /mnt/data/wine-run.out
 set +e
-"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
-WINE_PID=$!
-log "WINE_START explorer pid=$WINE_PID (desktop only)"
-DT=0
-while [ "$DT" -lt 5 ]; do
-  sleep 1
-  DT=$((DT+1))
-  if grep -qE 'RPC_S_SERVER_UNAVAILABLE|start_rpcss Failed|0x6ba|is a 32-bit installation' /mnt/data/wine-run.out 2>/dev/null; then
-    log "WINE_START explorer early-fail signature t=${DT}s — still launching app"
-    break
-  fi
+
+# Ensure Z: -> / so unix paths are visible if needed
+mkdir -p "$WINEPREFIX/dosdevices" 2>/dev/null || true
+ln -sfn / "$WINEPREFIX/dosdevices/z:" 2>/dev/null || true
+
+# Resolve first .exe arg (guest path, typically /mnt/app/app.exe)
+APP_UNIX=""
+for _a in "$@"; do
+  case "$_a" in
+    *.exe|*.EXE|*.com|*.COM|*.bat|*.BAT) APP_UNIX="$_a"; break ;;
+  esac
 done
-if [ "$#" -gt 0 ]; then
-  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start.exe /unix "$@" >>/mnt/data/wine-run.out 2>&1 &
-  APP_PID=$!
-  log "WINE_START app via start.exe pid=$APP_PID args=$*"
+APP_WIN=""
+APP_MODE="none"
+if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
+  mkdir -p "$WINEPREFIX/drive_c/App" 2>/dev/null || true
+  if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
+    APP_WIN='C:\App\app.exe'
+    APP_MODE="seed-copy"
+  elif ln -sfn "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
+    APP_WIN='C:\App\app.exe'
+    APP_MODE="seed-symlink"
+  else
+    APP_WIN=""
+    APP_MODE="unix-fallback"
+  fi
+  log "WINE_START app_map mode=$APP_MODE unix=$APP_UNIX win=${APP_WIN:-none} bytes=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')"
+else
+  log "WINE_START WARN no .exe arg or missing file (argv=$*)"
 fi
-log "WINE_START pid=$WINE_PID (heartbeat on explorer)"
+
+# Single wine cmdline: explorer owns desktop + app (proven app_seen in 0.1.60)
+if [ -n "$APP_WIN" ]; then
+  log "WINE_START cmdline: explorer /desktop=x86,${W}x${H},x11 $APP_WIN"
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$APP_WIN" >>/mnt/data/wine-run.out 2>&1 &
+elif [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
+  log "WINE_START cmdline: explorer /desktop=x86,${W}x${H},x11 $APP_UNIX (unix path)"
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$APP_UNIX" >>/mnt/data/wine-run.out 2>&1 &
+elif [ "$#" -gt 0 ]; then
+  log "WINE_START cmdline: explorer /desktop=x86,${W}x${H},x11 $* (raw argv)"
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$@" >>/mnt/data/wine-run.out 2>&1 &
+else
+  log "WINE_START cmdline: explorer /desktop=x86,${W}x${H},x11 (desktop only)"
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
+fi
+WINE_PID=$!
+log "WINE_START pid=$WINE_PID (explorer+app; no start.exe)"
+
+# X window tree diagnostic (best-effort) after a short settle
+sleep 2
+if command -v xwininfo >/dev/null 2>&1; then
+  xwininfo -root -tree 2>/dev/null | head -40 | while IFS= read -r ln; do
+    log "XWININFO: $ln"
+  done || true
+elif command -v xdpyinfo >/dev/null 2>&1; then
+  xdpyinfo -display :0 2>/dev/null | head -20 | while IFS= read -r ln; do
+    log "XDPYINFO: $ln"
+  done || true
+else
+  log "XWININFO skip (no xwininfo/xdpyinfo in guest)"
+fi
+# Early app-load fingerprint
+if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
+  log "WARN: WINE_START app launch failure signature in wine-run.out"
+fi
+if grep -qE 'App\\app\.exe|App/app\.exe|/mnt/app/app\.exe|app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+  log "WINE_START app Loaded fingerprint seen early"
+fi
 # Early 32-bit detect (2s) — repair once rather than silent WINE_EXIT=1
 sleep 2
 if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-run.out 2>/dev/null; then
@@ -2078,14 +2134,18 @@ if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-
     ensure_graphics_x11_reg
     rpcss_prestart
     : > /mnt/data/wine-run.out
-    "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
-    WINE_PID=$!
-    log "WINE_START retry-after-arch-repair explorer pid=$WINE_PID"
-    sleep 4
-    if [ "$#" -gt 0 ]; then
-      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start.exe /unix "$@" >>/mnt/data/wine-run.out 2>&1 &
-      log "WINE_START retry app via start.exe pid=$!"
+    export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+    if [ -n "${APP_WIN:-}" ]; then
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$APP_WIN" >>/mnt/data/wine-run.out 2>&1 &
+    elif [ -n "${APP_UNIX:-}" ] && [ -f "$APP_UNIX" ]; then
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$APP_UNIX" >>/mnt/data/wine-run.out 2>&1 &
+    elif [ "$#" -gt 0 ]; then
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$@" >>/mnt/data/wine-run.out 2>&1 &
+    else
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
     fi
+    WINE_PID=$!
+    log "WINE_START retry-after-arch-repair pid=$WINE_PID app_win=${APP_WIN:-none}"
     sleep 2
     if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-run.out 2>/dev/null; then
       log "FATAL: WINE_ARCH 32bit-prefix/invalid-reg persists after repair"
@@ -2123,7 +2183,11 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     GROW=$((BYTES-LAST_BYTES))
     # LAST_BYTES already caught up above; report absolute size
     APP_ALIVE=0
-    if grep -qE 'Detected running wine with |explorer\.exe|app\.exe' /mnt/data/wine-run.out 2>/dev/null; then APP_ALIVE=1; fi
+    if grep -qE 'Detected running wine with |explorer\.exe|App\\\\app\.exe|App/app\.exe|/mnt/app/app\.exe|\\app\.exe' /mnt/data/wine-run.out 2>/dev/null \
+       || grep -qE 'Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then APP_ALIVE=1; fi
+    if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
+      log "WINE_HB note: ShellExecute/app-start failure still in wine-run.out"
+    fi
     ERR_N=$(grep -cE '^[0-9a-f]+:err:' /mnt/data/wine-run.out 2>/dev/null || echo 0)
     ERR_N=$(echo "$ERR_N" | tr -d ' \n')
     log "WINE_HB t=${HB}s pid=$WINE_PID alive=1 wine-run_bytes=$BYTES x0=$X0_NOW app_seen=$APP_ALIVE err_lines=${ERR_N:-0}"

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.61",
-  "versionCode": 62,
-  "notes": "0.1.61: RpcSs ready=alive+sc4/OLE (reject false sc READY); max 2 launches; DEMAND_START; desktop-first WINE_START; +ole/+rpcss diag"
+  "versionName": "0.1.62",
+  "versionCode": 63,
+  "notes": "0.1.62: seed PE to C:\\\\App\\\\app.exe + explorer (no start.exe); force +ole/+rpcss/+x11drv; RpcSs proc_alive authoritative"
 }

@@ -1,3 +1,16 @@
+## 0.1.62 — real PE launch (no start.exe) + forced +x11drv
+
+**Smoke (0.1.61):** RpcSs ready=1 alive+ole-probe but `start.exe /unix /mnt/app/app.exe`
+→ ShellExecuteEx failed. wine-run froze after actxprxy; WINEDEBUG stayed err+all,+seh,+loaddll.
+
+**Fix:**
+- Seed `/mnt/app/app.exe` → `C:\App\app.exe`; launch `explorer /desktop=… C:\App\app.exe` (unix fallback). No start.exe.
+- Force WINEDEBUG=…,+ole,+rpcss,+x11drv at WINE_RUN and WINE_START
+- xwininfo -root -tree best-effort after start
+- RpcSs: proc_alive authoritative; re-check after OLE probe
+
+**Expect:** WINE_START app_map mode=seed-copy → Loaded …App\app.exe — no ShellExecuteEx — Present or clear +x11drv/+ole signature.
+
 ## 0.1.61 — reject false RpcSs ready (alive + OLE/sc4)
 
 **Smoke (0.1.60):** `ready=1 reason=sc-query-running` while `rpcss_pid alive=0`.

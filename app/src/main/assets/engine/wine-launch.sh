@@ -283,7 +283,9 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.111
+# 0.1.112: Present retarget App HWND + dig gate kill latch FP; seed crypt32/comdlg32;
+#   APP_HWND_WAIT requires nonzero hwnd (explorer app=1 hwnd=0x0 was false-ready).
+WINE_LAUNCH_STAMP=0.1.112
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -1309,7 +1311,7 @@ ensure_wow64_seed() {
            ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll \
            user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll \
            shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll \
-           actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll \
+           actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll userenv.dll \
            comctl32.dll uxtheme.dll winex11.drv winmm.dll version.dll \
            wsock32.dll iphlpapi.dll netapi32.dll secur32.dll authz.dll \
            msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll \
@@ -1342,6 +1344,38 @@ ensure_wow64_seed() {
   log "APP_WOW64_SEED_PATHS sys32_wow64cpu=$sys32/wow64cpu.dll:${_wsz}B sys32_wow64=$sys32/wow64.dll:${_wsz_dll}B sys32_wow64win=${_wsz_win}B syswow64_ntdll=${_wsz_ntdll}B (0.1.110: Wine maps C:\\windows\\system32\\wow64cpu.dll)"
   stamp_wine_run "wow64_seed wow64cpu=$wcpu:${_wsz} wow64=$w64dll:${_wsz_dll} wow64win=$w64win:${_wsz_win} syswow64_ntdll=$wntdll:${_wsz_ntdll}"
   unset _wsz _wsz_dll _wsz_win _wsz_ntdll
+  return 0
+}
+
+# 0.1.112 P0-C: NSIS StdUtils/nsDialogs need syswow64 crypt32 + comdlg32 (Dig111 c0000135).
+ensure_nsis_seed() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  local n64=0 n32=0
+  local miss=""
+  mkdir -p "$sys32" "$wow64" 2>/dev/null || true
+  for d in crypt32.dll comdlg32.dll; do
+    if [ -f "$pe64/$d" ]; then
+      if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then n64=$((n64+1)); else miss="$miss sys32:$d"; fi
+    else
+      miss="$miss pe64:$d"
+    fi
+    if [ -f "$pe32/$d" ]; then
+      if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then n32=$((n32+1)); else miss="$miss wow64:$d"; fi
+    else
+      miss="$miss pe32:$d"
+    fi
+  done
+  local c32=no cdlg=no
+  [ -f "$wow64/crypt32.dll" ] && c32=yes
+  [ -f "$wow64/comdlg32.dll" ] && cdlg=yes
+  log "APP_NSIS_SEED pe64→sys32=$n64 pe32→syswow64=$n32 crypt32=$c32 comdlg32=$cdlg miss=${miss:-none}"
+  stamp_wine_run "nsis_seed crypt32=$c32 comdlg32=$cdlg miss=${miss:-none}"
+  if [ "$c32" != "yes" ] || [ "$cdlg" != "yes" ]; then
+    log "APP_NSIS_SEED WARN missing syswow64 crypt32/comdlg32 — NSIS StdUtils/nsDialogs will c0000135"
+  fi
   return 0
 }
 
@@ -1420,7 +1454,7 @@ ensure_prefix_exec() {
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
     shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll
-    actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll
+    actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll userenv.dll
     comctl32.dll uxtheme.dll winex11.drv winewayland.drv
     winmm.dll version.dll wsock32.dll iphlpapi.dll netapi32.dll secur32.dll
     authz.dll
@@ -1501,6 +1535,7 @@ ensure_prefix_exec() {
   ensure_vulkan_seed
   # 0.1.87: wow64 thunk + core i386 SysWOW64 (idempotent; needed for 0x014c)
   ensure_wow64_seed
+  ensure_nsis_seed
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no
@@ -3340,17 +3375,15 @@ app_load_creator_hang_ntdll() {
 }
 app_load_marker_app_hwnd() {
   # Ready marker body: mapped=1 desk=0|1 app=0|1 hwnd=0x… id=0x…
-  # App HWND ready when app=1 OR (hwnd nonzero AND desk=0).
+  # 0.1.112: Dig111 APP_HWND_WAIT false-ready on explorer app=1 hwnd=0x0.
+  # Require nonzero hwnd (App X window); desk-only / app=1 hwnd=0x0 is NOT ready.
   [ -f /mnt/data/.x86-x11-ready ] || return 1
   _m=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
   case "$_m" in
-    *" app=1 "*) return 0 ;;
-    *" app=1"*) return 0 ;;
+    *" hwnd=0x0 "*|*" hwnd=0x0"|*" hwnd=0 "*) return 1 ;;
   esac
-  # hwnd=0x0 or missing → not ready; desk-only with hwnd=0x0 is desktop map
   case "$_m" in
-    *" desk=0 "*" hwnd=0x"[1-9a-fA-F]*) return 0 ;;
-    *" hwnd=0x"[1-9a-fA-F]*" app=1"*) return 0 ;;
+    *" hwnd=0x"[1-9a-fA-F]*) return 0 ;;
   esac
   return 1
 }
@@ -4116,6 +4149,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     ensure_d3dcompiler_seed
     ensure_vulkan_seed
     ensure_wow64_seed
+    ensure_nsis_seed
     # Seed repair: always try re-cp if missing or empty
     if [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; then
       if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
@@ -4428,6 +4462,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
         ensure_d3dcompiler_seed
         ensure_vulkan_seed
         ensure_wow64_seed
+        ensure_nsis_seed
         _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
         _scan_none=0
         case "$_scan_body" in
@@ -4482,6 +4517,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           ensure_d3dcompiler_seed
           ensure_vulkan_seed
           ensure_wow64_seed
+          ensure_nsis_seed
           log "APP_CRT_RELAUNCH once reason=${APP_MISS_REASON} sig=${APP_CRT_SIG:-none} scan_none=${_scan_none} pe_mach=0x${PE_MACH:-?}"
           if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
             kill -TERM "$APP_PID" 2>/dev/null || true

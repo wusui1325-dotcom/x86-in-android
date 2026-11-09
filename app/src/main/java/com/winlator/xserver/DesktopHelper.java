@@ -82,6 +82,8 @@ public abstract class DesktopHelper {
             @Override
             public void onModifyWindowProperty(Window window, Property property) {
                 // HWND / WM_CLASS may arrive after first MapWindow — refresh sticky + marker.
+                // 0.1.112: Wine often sets WM_STATE/_NET_WM_HWND without MapWindow — force-map
+                // so Present sees VIEWABLE App (NSIS dialog) instead of empty explorer desk.
                 if (window == null) return;
                 try {
                     long hwnd = window.getHandle();
@@ -90,6 +92,22 @@ public abstract class DesktopHelper {
                     boolean dialog = false;
                     try { dialog = window.isDialogLike(); } catch (Throwable ignored2) {}
                     if (!desk && (app || hwnd != 0L || dialog)) {
+                        try {
+                            if (!window.attributes.isMapped()) {
+                                boolean mapped = xServer.windowManager.forceMapIfNeeded(window);
+                                if (mapped) {
+                                    Log.i(TAG, "MAP_RAISE forceMap-on-prop id=0x"
+                                            + Integer.toHexString(window.id)
+                                            + " hwnd=0x" + Long.toHexString(hwnd)
+                                            + " atom=" + (property != null ? property.nameAsString() : "?")
+                                            + " (0.1.112)");
+                                }
+                            } else {
+                                xServer.windowManager.raiseWindow(window);
+                            }
+                        } catch (Throwable t) {
+                            Log.w(TAG, "forceMap-on-prop: " + t.getMessage());
+                        }
                         rememberSticky(window, app || dialog, hwnd);
                         maybeWriteReadyMarker(window, null);
                         if (dialog) logMsgboxDetect(window, hwnd);

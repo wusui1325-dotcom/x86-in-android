@@ -823,32 +823,62 @@ class SessionActivity : ComponentActivity() {
                                 blueScreenReasonKey = key
                             }
                         }
-                        // 0.1.107: only clear overlay on real Loaded App — NOT nonBlackGuest alone
-                        // (Dig 106: nonBlackGuest=26 loadedHint=0 cleared BSOD → false Present)
+                        // 0.1.112: guestPresented ONLY on live PRESENT_DIAG sample —
+                        // desktopOnly=0 AND (mappedKids≥1 OR App hwnd≠0); forbid latch+Loaded alone.
+                        // Dig111: overlay latch FP (hardcoded desktopOnly=0) while live stream
+                        // stayed desktopOnly=1 mappedKids=0 hwnd=0x0 → Boss 純黑.
+                        val mappedKids = Regex("""\bmappedKids=(\d+)""").find(stats)
+                            ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                        val hwndTok = Regex("""\bhwnd=(0x[0-9a-fA-F]+)""").find(stats)
+                            ?.groupValues?.getOrNull(1) ?: "0x0"
+                        val hwndOk = hwndTok != "0x0" && hwndTok != "0x"
+                        val guestSample = Regex("""\bguestSample=(\w+)""").find(stats)
+                            ?.groupValues?.getOrNull(1) ?: "none"
+                        val wmClass = Regex("""\bwmClass=([^\s]+)""").find(stats)
+                            ?.groupValues?.getOrNull(1) ?: "-"
+                        val loadedHint =
+                            ("APP_LOAD fingerprint seen" in logText) ||
+                                (
+                                    ("Loaded L\"" in logText) &&
+                                        (
+                                            ("App\\app.exe" in logText) ||
+                                                ("App/app.exe" in logText) ||
+                                                Regex("""Loaded L".*[\\/]App[\\/]app\.exe""")
+                                                    .containsMatchIn(logText)
+                                            )
+                                    )
+                        // Sticky desktopOnly=1 after Loaded+App → FAIL present_black (keep BSOD)
+                        if (!guestPresented && ready && deskOnly && loadedHint) {
+                            if ("present_black=1" !in uiStickyLog) {
+                                appendSticky(
+                                    "PRESENT_DIAG present_black=1 desktopOnly=1 mappedKids=$mappedKids " +
+                                        "hwnd=$hwndTok loadedHint=1 sticky_after_Loaded (0.1.112 Dig111)"
+                                )
+                            }
+                        }
                         if (!guestPresented && ready && !deskOnly) {
                             val okMatch = Regex("""\bok=(\d+)""").find(stats)
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                             val nbg = Regex("""\bnonBlackGuest=(\d+)""").find(stats)
                                 ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                            val loadedHint =
-                                ("APP_LOAD fingerprint seen" in logText) ||
-                                    (
-                                        ("Loaded L\"" in logText) &&
-                                            (
-                                                ("App\\app.exe" in logText) ||
-                                                    ("App/app.exe" in logText) ||
-                                                    Regex("""Loaded L".*[\\/]App[\\/]app\.exe""")
-                                                        .containsMatchIn(logText)
-                                                )
-                                        )
-                            if ((presented || ok > 0) && loadedHint) {
+                            val liveApp = mappedKids >= 1 || hwndOk
+                            if ((presented || ok > 0) && loadedHint && liveApp) {
                                 guestPresented = true
                                 appendSticky(
                                     "PRESENT_DIAG guestPresented=true ok=$ok nonBlackGuest=$nbg " +
-                                        "loadedHint=1 desktopOnly=0 overlay_keep=loaded_required (0.1.107)"
+                                        "loadedHint=1 desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok " +
+                                        "wmClass=$wmClass guestSample=$guestSample " +
+                                        "overlay_keep=live_app_required (0.1.112)"
                                 )
+                            } else if ((presented || ok > 0) && loadedHint && !liveApp) {
+                                if ("overlay_keep=Loaded_without_live_app" !in uiStickyLog) {
+                                    appendSticky(
+                                        "PRESENT_DIAG overlay_keep=Loaded_without_live_app " +
+                                            "desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok " +
+                                            "loadedHint=1 (0.1.112 forbid latch FP)"
+                                    )
+                                }
                             } else if (nbg > 0 && !loadedHint) {
-                                // Keep BSOD — explorer noise must not clear overlay
                                 if ("overlay_keep=nonBlackGuest_without_Loaded" !in uiStickyLog) {
                                     appendSticky(
                                         "PRESENT_DIAG overlay_keep=nonBlackGuest_without_Loaded " +

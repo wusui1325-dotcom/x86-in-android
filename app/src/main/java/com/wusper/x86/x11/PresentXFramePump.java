@@ -41,6 +41,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.85: forceGpu also when {@code lastAhbCpuAccess==0} (GPU-only AHB with stale non-null
  * software {@code data} was waiting for guestBlack sticky → ahb_skip/BGRA black). Log once
  * {@code forceGpu=ahb_gpu reason=ahbCpuAccess0}. Not Present CPU-first flip.
+ * 0.1.112: Dig111 black — App HWND/Xid mapped+SET_DRAWABLE but Present stuck on empty
+ * explorer root ({@code child=0x3 mappedKids=0 desktopOnly=1}). Knives: SparseArray scan +
+ * force-map unmapped App HWND; never treat explorer as bestApp; retarget Present to App
+ * drawable (GDI BGRA) so Boss sees installer dialog pixels.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -490,20 +494,29 @@ public final class PresentXFramePump extends Thread {
      * Priority: focused+HWND → focused app → HWND app → any app → dialog HWND →
      * dialog → HWND non-desk → non-desk → desktop/any.
      * 0.1.81: prefer dialog-like (#32770 / Type.DIALOG) over larger explorer chrome.
+     * 0.1.112: SparseArray scan + force-map App HWND (Wine WM_STATE without MapWindow);
+     * explorer never fills bestApp; retarget away from empty desk.
      */
     private static PickResult pickBestContent(Window root, XServer xServer) {
         Hold hold = new Hold();
         walkCollect(root, true, hold);
+        // 0.1.112: tree walk alone missed App (mappedKids=0) — scan all windows + force-map.
+        scanAllAndForceMap(xServer, hold);
 
         // Focused application window wins when it has presentable content.
         try {
             if (xServer != null && xServer.windowManager != null) {
                 Window focused = xServer.windowManager.getFocusedWindow();
                 if (focused != null && focused != root) {
+                    boolean desk = false;
                     boolean app = false;
+                    try { desk = focused.isDesktopWindow(); } catch (Throwable ignored) {}
                     try { app = focused.isApplicationWindow(); } catch (Throwable ignored) {}
-                    if (app || (!focused.isDesktopWindow())) {
+                    if (!desk && (app || (!focused.isDesktopWindow()))) {
                         Pick fp = pickFromWindow(focused);
+                        if (fp == null) {
+                            fp = pickFromWindowAllowUnmapped(focused);
+                        }
                         if (fp != null) {
                             return new PickResult(fp, focused, hold.mappedKids, false, classOf(focused),
                                     hwndOf(focused), mapStateName(focused), hold.pendingHwnd);
@@ -586,6 +599,158 @@ public final class PresentXFramePump extends Thread {
         }
     }
 
+    /**
+     * 0.1.112: Wine often sets WM_STATE/HWND + SET_DRAWABLE without MapWindow on the
+     * in-process X server → tree walk sees mappedKids=0 and Present sticks on root.
+     * Scan every window; force-map presentable non-desk; fill Hold buckets.
+     */
+    private static void scanAllAndForceMap(XServer xServer, Hold hold) {
+        if (xServer == null || xServer.windowManager == null || hold == null) return;
+        final com.winlator.xserver.WindowManager wm = xServer.windowManager;
+        final Window root = wm.rootWindow;
+        try {
+            wm.forEachWindow(node -> {
+                if (node == null || node == root) return;
+                boolean desk = false;
+                boolean app = false;
+                boolean dialog = false;
+                long hwnd = 0L;
+                try {
+                    desk = node.isDesktopWindow();
+                    app = node.isApplicationWindow();
+                    dialog = node.isDialogLike();
+                    hwnd = node.getHandle();
+                } catch (Throwable ignored) {
+                }
+                if (desk) {
+                    // Still count VIEWABLE desk toward mappedKids for DIAG honesty.
+                    try {
+                        if (node.getMapState() == Window.MapState.VIEWABLE) {
+                            // Avoid double-count if walkCollect already saw it: use id set via tag? keep simple — walkCollect already counted tree.
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    return;
+                }
+                boolean interesting = app || dialog || hwnd != 0L;
+                if (!interesting) {
+                    // Still try any non-desk with real content (NSIS may lack HWND early).
+                    Pick probeEarly = pickFromWindowAllowUnmapped(node);
+                    if (probeEarly == null) return;
+                    interesting = true;
+                }
+                boolean wasMapped = false;
+                try { wasMapped = node.attributes.isMapped(); } catch (Throwable ignored) {}
+                if (!wasMapped) {
+                    try {
+                        if (wm.forceMapIfNeeded(node)) {
+                            hold.forceMapped++;
+                            if (!hold.loggedForceMap) {
+                                hold.loggedForceMap = true;
+                                android.util.Log.i(TAG, "PRESENT_DIAG forceMap id=0x"
+                                        + Integer.toHexString(node.id)
+                                        + " hwnd=0x" + Long.toHexString(hwnd)
+                                        + " class=" + classOf(node)
+                                        + " (0.1.112 Wine WM_STATE without MapWindow)");
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                }
+                Window.MapState ms;
+                try {
+                    ms = node.getMapState();
+                } catch (Throwable t) {
+                    ms = node.attributes.isMapped() ? Window.MapState.VIEWABLE : Window.MapState.UNMAPPED;
+                }
+                if (hwnd != 0L) {
+                    boolean presentable = ms == Window.MapState.VIEWABLE;
+                    Pick probe = presentable ? pickFromWindow(node) : null;
+                    if (probe == null) {
+                        probe = pickFromWindowAllowUnmapped(node);
+                    }
+                    if (probe == null) {
+                        hold.pendingHwnd++;
+                        if (hold.pendingWin == null) {
+                            hold.pendingWin = node;
+                            hold.pendingMapState = presentable ? "ZERO_GEOM" : ms.name();
+                        }
+                    }
+                }
+                Pick p = null;
+                // mappedKids: only bump when we force-mapped (tree walk already counted
+                // previously VIEWABLE); avoid double-count Dig111-style.
+                boolean forceMappedHere = !wasMapped && node.attributes.isMapped();
+                if (forceMappedHere && ms == Window.MapState.VIEWABLE) {
+                    hold.mappedKids++;
+                } else if (ms == Window.MapState.VIEWABLE) {
+                    // Off-tree window walkCollect missed — count once.
+                    boolean inTree = false;
+                    try {
+                        Window par = node.getParent();
+                        inTree = par != null;
+                    } catch (Throwable ignored) {
+                    }
+                    // Always safe to re-count off-tree; tree kids already counted.
+                    // Use id heuristic: if parent chain reaches root, walkCollect saw it.
+                    try {
+                        Window cur = node;
+                        while (cur != null && cur != root) cur = cur.getParent();
+                        inTree = (cur == root);
+                    } catch (Throwable ignored) {
+                        inTree = false;
+                    }
+                    if (!inTree) hold.mappedKids++;
+                }
+                p = (ms == Window.MapState.VIEWABLE) ? pickFromWindow(node) : null;
+                if (p == null) {
+                    p = pickFromWindowAllowUnmapped(node);
+                }
+                if (p == null) return;
+                considerPick(hold, node, p, app, dialog, desk, hwnd);
+            });
+        } catch (Throwable t) {
+            android.util.Log.w(TAG, "scanAllAndForceMap: " + t.getMessage());
+        }
+    }
+
+    private static void considerPick(Hold hold, Window node, Pick p, boolean app, boolean dialog,
+                                     boolean desk, long hwnd) {
+        if (hold == null || node == null || p == null || desk) return;
+        if (app && (hold.bestApp == null || p.area > hold.bestApp.area)) {
+            hold.bestApp = p;
+            hold.bestAppWin = node;
+        }
+        if (app && hwnd != 0L
+                && (hold.bestAppHwnd == null || p.area > hold.bestAppHwnd.area)) {
+            hold.bestAppHwnd = p;
+            hold.bestAppHwndWin = node;
+        }
+        if (dialog && (hold.bestDialog == null || p.area > hold.bestDialog.area)) {
+            hold.bestDialog = p;
+            hold.bestDialogWin = node;
+        }
+        if (dialog && hwnd != 0L
+                && (hold.bestDialogHwnd == null || p.area > hold.bestDialogHwnd.area)) {
+            hold.bestDialogHwnd = p;
+            hold.bestDialogHwndWin = node;
+        }
+        // HWND alone (NSIS installer: Type.NORMAL + _NET_WM_HWND, may fail isApplicationWindow)
+        if (hwnd != 0L
+                && (hold.bestNonDeskHwnd == null || p.area > hold.bestNonDeskHwnd.area)) {
+            hold.bestNonDeskHwnd = p;
+            hold.bestNonDeskHwndWin = node;
+        }
+        if (hold.bestNonDesktop == null || p.area > hold.bestNonDesktop.area) {
+            hold.bestNonDesktop = p;
+            hold.bestNonDeskWin = node;
+        }
+        if (hold.bestAny == null || p.area > hold.bestAny.area) {
+            hold.bestAny = p;
+            hold.bestAnyWin = node;
+        }
+    }
+
     private static void walkCollect(Window node, boolean skipSelf, Hold hold) {
         if (node == null) return;
         if (!skipSelf) {
@@ -622,40 +787,14 @@ public final class PresentXFramePump extends Thread {
                 hold.mappedKids++;
                 Pick p = pickFromWindow(node);
                 if (p != null) {
-                    if (app && (hold.bestApp == null || p.area > hold.bestApp.area)) {
-                        hold.bestApp = p;
-                        hold.bestAppWin = node;
-                    }
-                    if (app && hwnd != 0L
-                            && (hold.bestAppHwnd == null || p.area > hold.bestAppHwnd.area)) {
-                        hold.bestAppHwnd = p;
-                        hold.bestAppHwndWin = node;
-                    }
-                    // 0.1.81: dialog bucket — prefer MessageBox over large desk chrome by area
-                    if (dialog && (hold.bestDialog == null || p.area > hold.bestDialog.area)) {
-                        hold.bestDialog = p;
-                        hold.bestDialogWin = node;
-                    }
-                    if (dialog && hwnd != 0L
-                            && (hold.bestDialogHwnd == null || p.area > hold.bestDialogHwnd.area)) {
-                        hold.bestDialogHwnd = p;
-                        hold.bestDialogHwndWin = node;
-                    }
-                    if (!desk && (hold.bestNonDesktop == null || p.area > hold.bestNonDesktop.area)) {
-                        hold.bestNonDesktop = p;
-                        hold.bestNonDeskWin = node;
-                    }
-                    if (!desk && hwnd != 0L
-                            && (hold.bestNonDeskHwnd == null || p.area > hold.bestNonDeskHwnd.area)) {
-                        hold.bestNonDeskHwnd = p;
-                        hold.bestNonDeskHwndWin = node;
-                    }
-                    if (hold.bestAny == null || p.area > hold.bestAny.area) {
+                    // 0.1.112: never put explorer into bestApp / non-desk buckets
+                    if (!desk) {
+                        considerPick(hold, node, p, app, dialog, false, hwnd);
+                    } else if (hold.bestAny == null || p.area > hold.bestAny.area) {
                         hold.bestAny = p;
                         hold.bestAnyWin = node;
                     }
                 }
-                // zero-geom HWND already counted as pending above
             }
         }
         List<Window> children = node.getChildren();
@@ -671,6 +810,24 @@ public final class PresentXFramePump extends Thread {
             if (w.getMapState() != Window.MapState.VIEWABLE) return null;
         } catch (Throwable t) {
             if (!w.attributes.isMapped()) return null;
+        }
+        Drawable d = w.getContent();
+        if (d == null) return null;
+        int ww = d.width & 0xffff;
+        int hh = d.height & 0xffff;
+        if (ww <= 1 || hh <= 1) return null;
+        return new Pick(d, w.id, ww * hh, ww, hh);
+    }
+
+    /**
+     * 0.1.112: allow presenting App drawable even before MapWindow (GDI already
+     * SET_DRAWABLE into content). Prefer after force-map; fallback when still unmapped.
+     */
+    private static Pick pickFromWindowAllowUnmapped(Window w) {
+        if (w == null) return null;
+        try {
+            if (w.isDesktopWindow()) return null;
+        } catch (Throwable ignored) {
         }
         Drawable d = w.getContent();
         if (d == null) return null;
@@ -699,6 +856,9 @@ public final class PresentXFramePump extends Thread {
         int pendingHwnd;
         Window pendingWin;
         String pendingMapState;
+        /** 0.1.112: windows force-mapped this frame (Wine WM_STATE without MapWindow). */
+        int forceMapped;
+        boolean loggedForceMap;
     }
 
     private static final class PickResult {

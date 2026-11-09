@@ -260,6 +260,9 @@ public class Window extends XResource {
     }
 
     public boolean isApplicationWindow() {
+        // 0.1.112: explorer virtual desktop must NOT count as App (was app=1 hwnd=0x0 →
+        // APP_HWND_WAIT false-ready + Present bestApp steal → Boss pure black).
+        if (isDesktopWindow()) return false;
         int windowGroup = getWMHintsValue(WMHints.WINDOW_GROUP);
         return isRenderable() && !getName().isEmpty() && windowGroup == id;
     }

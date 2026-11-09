@@ -59,6 +59,34 @@ public class WindowManager extends XResourceManager {
         return windows.get(id);
     }
 
+    /** 0.1.112: iterate every window (Present retarget / force-map App HWND). */
+    public void forEachWindow(java.util.function.Consumer<Window> consumer) {
+        if (consumer == null) return;
+        for (int i = 0; i < windows.size(); i++) {
+            Window window = windows.valueAt(i);
+            if (window != null) consumer.accept(window);
+        }
+    }
+
+    /**
+     * 0.1.112: if Wine only set WM_STATE/HWND without MapWindow, force-map so
+     * Present walkCollect sees VIEWABLE App (NSIS dialog Xid) instead of empty desk.
+     */
+    public boolean forceMapIfNeeded(Window window) {
+        if (window == null || window == rootWindow) return false;
+        try {
+            if (window.isDesktopWindow()) return false;
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (window.attributes.isMapped()) return false;
+            mapWindow(window);
+            return window.attributes.isMapped();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     public ArrayList<Window> findDialogWindows(int id) {
         ArrayList<Window> result = new ArrayList<>();
         for (int i = 0; i < windows.size(); i++) {

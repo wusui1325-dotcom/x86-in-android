@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.58",
-  "versionCode": 59,
-  "notes": "0.1.58: WINEARCH=win64 + offline #arch=win64 heal (fix 32-bit installation refusal); keep offline RpcSs; GIT_SHA=commit-then-build"
+  "versionName": "0.1.59",
+  "versionCode": 60,
+  "notes": "0.1.59: never pre-create Wine regs; require WINE REGISTRY Version 2 (UTF-8); purge invalid→wineboot; then offline RpcSs; GIT_SHA=commit-then-build"
 }

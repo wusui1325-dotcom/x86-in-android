@@ -1,3 +1,27 @@
+## 0.1.59 — valid Wine Version 2 regs (no UTF-8 stub pre-create)
+
+**Bug (0.1.58 smoke):** After heal+wipe, wineboot still failed with
+`system.reg is not a valid registry file` (bytes=61) and
+`32-bit installation cannot support 64-bit applications`.
+
+**Root cause:** Offline heal **created** stub regs with wrong header
+`WINE REGISTRY File` (must be **`WINE REGISTRY Version 2`**). Wine 11
+(`server/registry.c`) rejects them, then defaults `prefix_type` to
+**PREFIX_32BIT**. (Wine 11 writes UTF-8 text via fprintf — not Windows
+UTF-16LE `.reg`.)
+
+**Fix:**
+- **Never** pre-create system.reg/user.reg/userdef.reg before wineboot.
+- Detect invalid (wrong header / UTF-16 BOM Wine can't fgets) → purge →
+  `WINEARCH=win64` + mkdir syswow64 → wineboot writes real Version 2 regs.
+- Then offline UTF-8 patch `#arch=win64` + RpcSs/MountMgr via `wine-reg-helper.py`.
+- Auto-repair on `not a valid registry file` or `32-bit installation`.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.59` →
+`WINE_REG encoding=utf8 valid=yes` → `WINE_ARCH … #arch=win64` →
+`RPCSS_REG ensure done … file_rpcss=yes` → `RPCSS_PRESTART alive=1` →
+`WINE_START` — **no** `not a valid registry file` / `32-bit installation`.
+
 ## 0.1.58 — win64 prefix heal (32-bit installation refusal)
 
 **Bug (0.1.57 smoke):** Offline RpcSs/MountMgr SUCCESS (`file_rpcss=yes`), GUI_SEED OK, but

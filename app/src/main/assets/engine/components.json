@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.58-box64-wine64k-holefit-anonpe-rpcss-win64",
+  "runtimeId": "wine-gpustack-v0.1.59-box64-wine64k-holefit-anonpe-rpcss-win64",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.58: WINEARCH=win64 + #arch=win64 offline heal; RpcSs offline; direct rpcss; soft-continue; NTDLL_ANON_PE"
+  "notes": "0.1.59: Wine Version 2 UTF-8 regs only (no stub pre-create); offline RpcSs after wineboot; WINEARCH=win64; NTDLL_ANON_PE"
 }

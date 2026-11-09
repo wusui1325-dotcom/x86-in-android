@@ -395,9 +395,20 @@ object ComponentInstaller {
             dest.outputStream().use { output -> input.copyTo(output) }
         }
         ExecBits.force(dest)
-        // 0.1.51: script stamp fingerprint; clear sticky holefit marker when APK script changes
+        // 0.1.59: wine-reg-helper.py beside wine-launch.sh (UTF-8 Version 2 offline patch)
+        val helper = File(rootfs, "usr/local/bin/wine-reg-helper.py")
+        runCatching {
+            if (helper.exists()) helper.delete()
+            ctx.assets.open("engine/wine-reg-helper.py").use { input ->
+                helper.outputStream().use { output -> input.copyTo(output) }
+            }
+            ExecBits.force(helper)
+        }.onFailure {
+            android.util.Log.w("ComponentInstaller", "wine-reg-helper.py install failed: $it")
+        }
+        // script stamp fingerprint; clear sticky holefit marker when APK script changes
         val scriptStamp = File(rootfs, "usr/local/bin/.wine-launch-apk-stamp")
-        val want = "0.1.51"
+        val want = "0.1.59"
         val prev = runCatching { scriptStamp.readText().trim() }.getOrDefault("")
         if (prev != want) {
             File(rootfs, "usr/local/bin/.box64-wine64k-holefit").delete()

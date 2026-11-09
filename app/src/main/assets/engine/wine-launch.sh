@@ -13,13 +13,42 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.58: force WINEARCH=win64 + offline #arch=win64 heal (0.1.57 RpcSs ok but
-# wine refused: "32-bit installation cannot support 64-bit applications").
-# Keep offline RpcSs/MountMgr; direct rpcss; soft-continue; NTDLL_ANON_PE.
-# 0.1.57: offline system.reg RpcSs/MountMgr. 0.1.56: soft-continue + winedevice.
-# 0.1.55: no soft-kill. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.58
+# 0.1.59: NEVER pre-create Wine regs; Wine 11 needs "WINE REGISTRY Version 2"
+# (UTF-8 text). 0.1.58 UTF-8 stubs used wrong header "WINE REGISTRY File" →
+# "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
+# writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
+# 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
+WINE_LAUNCH_STAMP=0.1.59
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
+
+# Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
+WINE_REG_HELPER=""
+for _cand in \
+  "${WINE_REG_HELPER_PATH:-}" \
+  /usr/local/bin/wine-reg-helper.py \
+  "$(dirname "$0")/wine-reg-helper.py" \
+  /mnt/data/engine/wine-reg-helper.py \
+  /home/xuser/wine-reg-helper.py
+ do
+  [ -n "$_cand" ] && [ -f "$_cand" ] && WINE_REG_HELPER="$_cand" && break
+done
+wine_reg_helper() {
+  # usage: wine_reg_helper <cmd>  — always targets $WINEPREFIX
+  # Prefer /usr/local/bin/wine-reg-helper.py (installed with wine-launch.sh)
+  if [ -z "$WINE_REG_HELPER" ] || [ ! -f "$WINE_REG_HELPER" ]; then
+    _self=$(readlink -f "$0" 2>/dev/null || echo "")
+    if [ -n "$_self" ] && [ -f "$(dirname "$_self")/wine-reg-helper.py" ]; then
+      WINE_REG_HELPER="$(dirname "$_self")/wine-reg-helper.py"
+    fi
+    unset _self
+  fi
+  if [ -z "$WINE_REG_HELPER" ] || [ ! -f "$WINE_REG_HELPER" ]; then
+    log "FATAL: wine-reg-helper.py missing"
+    return 127
+  fi
+  python3 "$WINE_REG_HELPER" "$1" "$WINEPREFIX"
+}
+
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
 if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
@@ -1180,48 +1209,21 @@ log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX W
 # explorer load_graphics_driver: LoadLibrary("winex11.drv"); ERROR_MOD_NOT_FOUND →
 # "The graphics driver is missing. Check your build!" (nodrv black screen).
 ensure_graphics_x11_reg() {
-  local ureg="$WINEPREFIX/user.reg"
-  mkdir -p "$WINEPREFIX"
-  if [ ! -f "$ureg" ]; then
-    printf '%s\n' 'WINE REGISTRY Version 2' '' \
-      '[Software\\Wine\\Drivers]' \
-      '"Graphics"="x11"' > "$ureg"
-    log "DRIVER_REG created user.reg Graphics=x11"
+  # 0.1.59: never invent user.reg before wineboot. Patch only valid Wine regs.
+  set +e
+  wine_reg_helper patch-graphics > /mnt/data/wine-gfx.out 2>&1
+  GFX_RC=$?
+  set -e
+  if [ -f /mnt/data/wine-gfx.out ]; then
+    while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-gfx.out || true
+  fi
+  if [ "$GFX_RC" = "0" ]; then
     return 0
   fi
-  if grep -q '"Graphics"="x11"' "$ureg" 2>/dev/null; then
-    log "DRIVER_REG Graphics=x11 already set"
-    return 0
-  fi
-  # Drop any prior Graphics= under Drivers (corrupt/empty/wayland/mac)
-  if command -v sed >/dev/null 2>&1; then
-    sed -i '/^"Graphics"=/d' "$ureg" 2>/dev/null || true
-  fi
-  if grep -q '\[Software\\Wine\\Drivers\]' "$ureg" 2>/dev/null; then
-    # Append value after first Drivers section header via temp rewrite
-    awk '
-      BEGIN{done=0}
-      /^\[Software\\Wine\\Drivers\]/ && !done {
-        print
-        print "\"Graphics\"=\"x11\""
-        done=1
-        next
-      }
-      {print}
-      END{
-        if (!done) {
-          print ""
-          print "[Software\\Wine\\Drivers]"
-          print "\"Graphics\"=\"x11\""
-        }
-      }
-    ' "$ureg" > "$ureg.tmp" 2>/dev/null && mv -f "$ureg.tmp" "$ureg" || \
-      printf '\n[Software\\Wine\\Drivers]\n"Graphics"="x11"\n' >> "$ureg"
-  else
-    printf '\n[Software\\Wine\\Drivers]\n"Graphics"="x11"\n' >> "$ureg"
-  fi
-  log "DRIVER_REG set Graphics=x11"
+  log "DRIVER_REG skip (user.reg not ready rc=$GFX_RC) — wineboot must create regs first"
+  return 0
 }
+
 
 driver_diag() {
   local pe=/opt/wine/lib/wine/x86_64-windows/winex11.drv
@@ -1305,152 +1307,83 @@ prefix_is_complete() {
   return 0
 }
 
-# ---- 0.1.58: force/heal win64 prefix (#arch=win64 + syswow64 + WINEARCH) ----------
+# ---- 0.1.59: win64 via valid Wine regs only (no stub pre-create) ----------------
 ensure_win64_prefix() {
-  # Wine server: if system.reg loads without #arch= → PREFIX_32BIT (registry.c).
-  # 64-bit wine then prints: "'…' is a 32-bit installation, it cannot support 64-bit applications."
-  # Heal offline: set #arch=win64 in system.reg/user.reg/userdef.reg; mkdir syswow64.
-  # Never wine reg. Call before wineboot AND again after any wineserver -k / offline patch.
+  # Wine 11: system.reg must start with "WINE REGISTRY Version 2" (UTF-8).
+  # Invalid/missing → do NOT invent stubs; purge garbage and signal need_wineboot.
   local reason="${1:-heal}"
-  local p="$WINEPREFIX"
   export WINEARCH=win64
-  mkdir -p "$p/drive_c/windows/system32" "$p/drive_c/windows/syswow64" 2>/dev/null || true
-
-  local arch_sys=missing arch_user=missing arch_udef=missing
-  if [ -f "$p/system.reg" ]; then
-    arch_sys=$(grep -m1 '^#arch=' "$p/system.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
-    arch_sys=${arch_sys:-missing}
-  fi
-  if [ -f "$p/user.reg" ]; then
-    arch_user=$(grep -m1 '^#arch=' "$p/user.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
-    arch_user=${arch_user:-missing}
-  fi
-  if [ -f "$p/userdef.reg" ]; then
-    arch_udef=$(grep -m1 '^#arch=' "$p/userdef.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
-    arch_udef=${arch_udef:-missing}
-  fi
-  local wow=no
-  [ -d "$p/drive_c/windows/syswow64" ] && wow=yes
-  log "WINE_ARCH precheck reason=$reason WINEARCH=$WINEARCH sys=#arch=$arch_sys user=#arch=$arch_user udef=#arch=$arch_udef syswow64=$wow"
+  mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64" 2>/dev/null || true
+  mkdir -p /mnt/data 2>/dev/null || true
+  : > /mnt/data/wine-arch.out
 
   set +e
-  python3 - "$p" <<'PY' | tee -a /mnt/data/wine-arch.out
-import os, sys, re
-prefix = sys.argv[1]
-files = ["system.reg", "user.reg", "userdef.reg"]
-changed = []
-results = {}
-
-def heal(path):
-    if not os.path.isfile(path):
-        # Create minimal win64 stub so wineserver won't invent win32
-        body = "WINE REGISTRY File\n;; x86-in-android win64 stub\n\n#arch=win64\n"
-        tmp = path + ".arch-tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(body)
-            f.flush(); os.fsync(f.fileno())
-        os.replace(tmp, path)
-        return "created"
-    raw = open(path, "r", encoding="utf-8", errors="replace").read()
-    orig = raw
-    # Normalize newlines lightly
-    if "#arch=win64" in raw and "#arch=win32" not in raw:
-        # still ensure it's a top-level directive (not only in a comment elsewhere)
-        if re.search(r"(?m)^#arch=win64\s*$", raw):
-            return "ok"
-    # Remove any existing #arch= lines
-    raw2 = re.sub(r"(?m)^#arch=.*\n?", "", raw)
-    # Insert after header line
-    if raw2.lstrip().startswith("WINE REGISTRY"):
-        lines = raw2.splitlines(True)
-        # find first non-empty non-comment-or-header spot after first line
-        insert_at = 1
-        while insert_at < len(lines) and (lines[insert_at].startswith(";;") or lines[insert_at].strip() == ""):
-            insert_at += 1
-        lines.insert(insert_at, "\n#arch=win64\n")
-        raw2 = "".join(lines)
-    else:
-        raw2 = "WINE REGISTRY File\n;; offline-arch-heal\n\n#arch=win64\n\n" + raw2
-    if raw2 != orig:
-        tmp = path + ".arch-tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(raw2)
-            f.flush(); os.fsync(f.fileno())
-        os.replace(tmp, path)
-        return "healed"
-    return "ok"
-
-for name in files:
-    path = os.path.join(prefix, name)
-    try:
-        results[name] = heal(path)
-        if results[name] in ("healed", "created"):
-            changed.append(name)
-    except Exception as e:
-        results[name] = "ERR:%s" % e
-
-# verify
-ver = {}
-for name in files:
-    path = os.path.join(prefix, name)
-    arch = "missing"
-    if os.path.isfile(path):
-        for line in open(path, encoding="utf-8", errors="replace"):
-            if line.startswith("#arch="):
-                arch = line.strip().split("=", 1)[1]
-                break
-    ver[name] = arch
-
-wow_dir = os.path.join(prefix, "drive_c", "windows", "syswow64")
-os.makedirs(wow_dir, exist_ok=True)
-wow = os.path.isdir(wow_dir)
-ok = all(ver.get(n) == "win64" for n in files)
-print("offline arch results=%s ver=%s syswow64=%s ok=%s changed=%s" % (
-    results, ver, wow, ok, changed))
-sys.exit(0 if ok else 2)
-PY
-  ARCH_RC=$?
+  wine_reg_helper check > /mnt/data/wine-arch.out 2>&1
+  CHK_RC=$?
   set -e
-  if [ -f /mnt/data/wine-arch.out ]; then
-    while read -r line; do log "WINE_ARCH.py: $line"; done < /mnt/data/wine-arch.out || true
-    : > /mnt/data/wine-arch.out
+  while read -r line; do log "WINE_REG $line"; done < /mnt/data/wine-arch.out || true
+  log "WINE_ARCH precheck reason=$reason WINEARCH=$WINEARCH check_rc=$CHK_RC"
+
+  # 2 = invalid files present; 3 = system.reg missing; 4 = arch!=win64; 0 = ready
+  if [ "$CHK_RC" = "2" ]; then
+    log "WINE_REG invalid detected — purge (never patch garbage)"
+    set +e
+    wine_reg_helper purge-invalid >> /mnt/data/wine-arch.out 2>&1
+    set -e
+    while read -r line; do log "WINE_REG $line"; done < /mnt/data/wine-arch.out || true
+    log "WINE_ARCH ensure done offline=yes need_wineboot=1 reason=invalid-purged"
+    return 2
   fi
 
-  arch_sys=missing
-  if [ -f "$p/system.reg" ]; then
-    arch_sys=$(grep -m1 '^#arch=' "$p/system.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
+  set +e
+  wine_reg_helper heal-arch > /mnt/data/wine-arch.out 2>&1
+  HEAL_RC=$?
+  set -e
+  while read -r line; do log "WINE_ARCH.py: $line"; done < /mnt/data/wine-arch.out || true
+
+  if [ "$HEAL_RC" = "0" ]; then
+    log "WINE_ARCH ensure done offline=yes #arch=win64 encoding=utf8 need_wineboot=0 py_rc=0 WINEARCH=$WINEARCH"
+    return 0
   fi
-  wow=no
-  [ -d "$p/drive_c/windows/syswow64" ] && wow=yes
-  log "WINE_ARCH ensure done offline=yes #arch=$arch_sys syswow64=$wow py_rc=$ARCH_RC WINEARCH=$WINEARCH"
-  if [ "$arch_sys" != "win64" ]; then
-    log "WARN: WINE_ARCH heal did not stick (#arch=$arch_sys)"
-    return 1
-  fi
-  return 0
+  log "WINE_ARCH ensure done offline=yes need_wineboot=1 heal_rc=$HEAL_RC WINEARCH=$WINEARCH"
+  return 2
 }
 
 wine_arch_auto_repair_once() {
-  # Called when wine still prints 32-bit installation after heal.
-  local marker="$WINEPREFIX/.arch-repair-done"
+  # Wipe → DO NOT create regs → wineboot --init with WINEARCH=win64 → then patch.
+  # Marker lives outside prefix so wipe cannot clear the once-guard.
+  marker="/mnt/data/.wine-arch-repair-done"
   if [ -f "$marker" ]; then
-    log "WINE_ARCH FATAL 32bit-prefix (already repaired once this prefix) — refuse"
+    log "WINE_ARCH FATAL 32bit-prefix (already repaired once this session) — refuse"
     return 1
   fi
-  log "WINE_ARCH FATAL 32bit-prefix — auto-repair wipe+reinit once"
+  log "WINE_ARCH FATAL 32bit-prefix/invalid-reg — auto-repair wipe+wineboot once (no stub regs)"
+  mkdir -p /mnt/data 2>/dev/null || true
   : > "$marker"
-  wipe_wine_prefix "$WINEPREFIX" "arch-32bit-repair"
+  wipe_wine_prefix "$WINEPREFIX" "arch-reg-repair"
   export WINEARCH=win64
-  ensure_win64_prefix "post-wipe"
+  mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64" 2>/dev/null || true
+  # Explicitly ensure no leftover regs after wipe
+  rm -f "$WINEPREFIX/system.reg" "$WINEPREFIX/user.reg" "$WINEPREFIX/userdef.reg" 2>/dev/null || true
   ensure_prefix_exec
+  # wineboot creates valid UTF-8 Version 2 regs
   run_wineboot_init "arch-repair" 180
-  ensure_win64_prefix "post-wineboot"
-  ensure_rpcss_mountmgr_service_reg
-  ensure_win64_prefix "post-rpcss"
+  # Now heal arch + inject services on Wine-written files
+  ensure_win64_prefix "post-wineboot" || true
+  ensure_rpcss_mountmgr_service_reg || true
+  ensure_win64_prefix "post-rpcss" || true
+  # Verify
+  set +e
+  wine_reg_helper check > /mnt/data/wine-arch.out 2>&1
+  CHK_RC=$?
+  set -e
+  while read -r line; do log "WINE_REG $line"; done < /mnt/data/wine-arch.out || true
+  if [ "$CHK_RC" != "0" ]; then
+    log "WINE_ARCH FATAL repair left invalid/missing reg check_rc=$CHK_RC"
+    return 1
+  fi
   return 0
 }
-
-
 
 wipe_wine_prefix() {
   local p="${1:-$WINEPREFIX}"
@@ -1642,16 +1575,39 @@ run_wineboot_update() {
   done || true
 }
 
-# 0.1.58: heal win64 BEFORE wineboot / skip — existing prefixes may lack #arch=win64
+# 0.1.59: validate/purge BEFORE wineboot — never leave invalid stubs in place
 "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
-ensure_win64_prefix "pre-wineboot" || log "WARN: WINE_ARCH pre-wineboot heal soft-fail"
+FORCE_FRESH_WINEBOOT=0
+if ! ensure_win64_prefix "pre-wineboot"; then
+  log "WINE_ARCH/WINE_REG need fresh wineboot — forcing stub wipe path"
+  FORCE_FRESH_WINEBOOT=1
+  rm -f "$WINEPREFIX/system.reg" "$WINEPREFIX/user.reg" "$WINEPREFIX/userdef.reg" \
+    "$WINEPREFIX/.update-timestamp" 2>/dev/null || true
+fi
 
+# Invalid/UTF-8-stub/missing-BOM → full wipe once so wineboot writes real Version 2 regs
+if [ "$FORCE_FRESH_WINEBOOT" = "1" ]; then
+  log "WINEBOOT_INIT force-fresh (invalid reg purged) — wipe+wineboot --init WINEARCH=win64"
+  wipe_wine_prefix "$WINEPREFIX" "force-fresh-invalid-reg"
+  export WINEARCH=win64
+  mkdir -p "$WINEPREFIX/drive_c/windows/system32" "$WINEPREFIX/drive_c/windows/syswow64" 2>/dev/null || true
+  rm -f "$WINEPREFIX/system.reg" "$WINEPREFIX/user.reg" "$WINEPREFIX/userdef.reg" 2>/dev/null || true
+  ensure_prefix_exec
+  run_wineboot_init "force-fresh" 180
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  if [ "$REG_B" -lt 400 ] 2>/dev/null; then
+    log "FATAL: force-fresh wineboot did not create system.reg (bytes=$REG_B)"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit "${WB_RC:-1}"
+  fi
+  ensure_win64_prefix "post-force-fresh" || true
 # 0.1.55 wipe policy:
 # - complete → skip init
 # - large (>=100KB) but not "complete" → REUSE (seed bins + wineboot -u); NEVER wipe for missing RpcSs keys
 # - stub (tiny/missing) → wipe + wineboot --init (no soft-kill)
 # - after init: FATAL only if system.reg still missing/tiny; large prefix proceeds even if complete=no
-if prefix_is_complete "$WINEPREFIX"; then
+elif prefix_is_complete "$WINEPREFIX"; then
   log "WINEBOOT_INIT skip (prefix complete: system.reg=$(prefix_reg_bytes "$WINEPREFIX")B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no))"
   ensure_prefix_exec
 elif prefix_is_large "$WINEPREFIX"; then
@@ -1763,135 +1719,58 @@ if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then X0_STATE=ok; fi
 log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu} desktop=${W}x${H}"
 driver_diag
 
-# ---- 0.1.57: OFFLINE system.reg RpcSs/MountMgr + timed PRESTART --------------
+# ---- 0.1.59: RpcSs/MountMgr offline inject on VALID Wine Version 2 regs only ------
 ensure_rpcss_mountmgr_service_reg() {
-  # 0.1.57: OFFLINE text-patch system.reg — NEVER wine/reg.exe (0.1.56 hung: chicken-egg
-  # OpenService/RpcSs needed by reg.exe itself). Kill wineserver first so next wine start
-  # reloads the patched file. Always heal when file keys missing even if prefix_is_complete.
   local sys32="$WINEPREFIX/drive_c/windows/system32"
   local drv="$sys32/drivers"
-  local regf="$WINEPREFIX/system.reg"
   mkdir -p /mnt/data 2>/dev/null || true
   : > /mnt/data/wine-rpcss-reg.out
 
-  # Drop live wineserver so registry file edits are not overwritten / ignored
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
-  sleep 0.5
+  sleep 0.3
 
-  local reg_rpc=no reg_mm=no
-  if [ -f "$regf" ]; then
-    grep -qF 'Services\\RpcSs]' "$regf" 2>/dev/null && reg_rpc=yes || true
-    grep -qF 'Services\\MountMgr]' "$regf" 2>/dev/null && reg_mm=yes || true
-  fi
-  log "RPCSS_REG precheck file_rpcss=$reg_rpc file_mountmgr=$reg_mm rpcss_bin=$([ -f "$sys32/rpcss.exe" ] && echo yes || echo NO) winedevice=$([ -f "$sys32/winedevice.exe" ] && echo yes || echo NO) mountmgr=$([ -f "$drv/mountmgr.sys" ] && echo yes || echo NO)"
+  log "RPCSS_REG precheck rpcss_bin=$([ -f "$sys32/rpcss.exe" ] && echo yes || echo NO) winedevice=$([ -f "$sys32/winedevice.exe" ] && echo yes || echo NO) mountmgr=$([ -f "$drv/mountmgr.sys" ] && echo yes || echo NO)"
 
-  # Pure-Python offline inject into Wine registry file format (no wine process)
   set +e
-  python3 - "$regf" <<'PY' | tee -a /mnt/data/wine-rpcss-reg.out
-import os, sys, time, re
-path = sys.argv[1]
-os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+  wine_reg_helper check > /mnt/data/wine-rpcss-reg.out 2>&1
+  CHK_RC=$?
+  set -e
+  while read -r line; do log "RPCSS_REG $line"; done < /mnt/data/wine-rpcss-reg.out || true
 
-def block(name_cs, name_cc, typ, start, image, display, group=None, desc=None, obj="LocalSystem"):
-    t = format(int(time.time() * 1e7), "x")
-    lines = []
-    for hive in ("CurrentControlSet", "ControlSet001"):
-        lines.append("[System\\\\%s\\\\Services\\\\%s]" % (hive, name_cs))
-        lines.append("#time=%s" % t)
-        lines.append('"Type"=dword:%08x' % typ)
-        lines.append('"Start"=dword:%08x' % start)
-        lines.append('"ErrorControl"=dword:00000001')
-        lines.append('"ImagePath"=str(2):"%s"' % image)
-        lines.append('"DisplayName"="%s"' % display)
-        if obj:
-            lines.append('"ObjectName"="%s"' % obj)
-        if group:
-            lines.append('"Group"="%s"' % group)
-        if desc:
-            lines.append('"Description"="%s"' % desc)
-        lines.append("")
-    return "\n".join(lines)
+  # 2=invalid 3=missing → cannot inject; 0=ready 4=arch!=win64 → heal then inject
+  if [ "$CHK_RC" = "2" ] || [ "$CHK_RC" = "3" ]; then
+    log "RPCSS_REG ensure done offline=yes skipped=1 reason=reg-not-ready check_rc=$CHK_RC (need valid wineboot regs first)"
+    return 2
+  fi
 
-def has_svc(text, name):
-    return ("Services\\\\" + name + "]") in text
+  set +e
+  wine_reg_helper heal-arch > /mnt/data/wine-rpcss-reg.out 2>&1
+  HEAL_RC=$?
+  set -e
+  while read -r line; do log "RPCSS_REG.heal: $line"; done < /mnt/data/wine-rpcss-reg.out || true
+  if [ "$HEAL_RC" != "0" ]; then
+    log "RPCSS_REG ensure done offline=yes skipped=1 reason=heal-failed heal_rc=$HEAL_RC"
+    return 2
+  fi
 
-def strip_svc_blocks(text, name):
-    pat = re.compile(
-        r"(?ms)^\[System\\\\(?:CurrentControlSet|ControlSet001)\\\\Services\\\\"
-        + re.escape(name)
-        + r"\][^\[]*"
-    )
-    return pat.sub("", text)
-
-if os.path.isfile(path):
-    raw = open(path, "r", encoding="utf-8", errors="replace").read()
-else:
-    raw = "WINE REGISTRY File\n;; offline-created by x86-in-android ensure\n#arch=win64\n\n"
-
-had_rpc = has_svc(raw, "RpcSs")
-had_mm = has_svc(raw, "MountMgr")
-raw2 = strip_svc_blocks(raw, "RpcSs")
-raw2 = strip_svc_blocks(raw2, "MountMgr")
-if not raw2.lstrip().startswith("WINE REGISTRY File"):
-    raw2 = "WINE REGISTRY File\n;; offline-patched\n#arch=win64\n\n" + raw2
-if not raw2.endswith("\n"):
-    raw2 += "\n"
-
-body = []
-body.append(";; --- x86-in-android offline RpcSs/MountMgr inject ---")
-body.append(block(
-    "RpcSs", "RpcSs", 0x20, 0x3,
-    "%SystemRoot%\\\\system32\\\\rpcss.exe",
-    "Remote Procedure Call (RPC)",
-    desc="RPC service",
-))
-body.append(block(
-    "MountMgr", "MountMgr", 0x1, 0x0,
-    "%SystemRoot%\\\\system32\\\\drivers\\\\mountmgr.sys",
-    "Mount Manager",
-    group="System Bus Extender",
-    desc="Device mounting service",
-    obj=None,
-))
-raw2 += "\n" + "\n".join(body) + "\n"
-
-tmp = path + ".rpcss-tmp"
-with open(tmp, "w", encoding="utf-8") as f:
-    f.write(raw2)
-    f.flush()
-    os.fsync(f.fileno())
-os.replace(tmp, path)
-
-final = open(path, encoding="utf-8", errors="replace").read()
-ok_rpc = has_svc(final, "RpcSs")
-ok_mm = has_svc(final, "MountMgr")
-print("offline had_rpc=%s had_mm=%s now_rpc=%s now_mm=%s bytes=%d" % (
-    had_rpc, had_mm, ok_rpc, ok_mm, os.path.getsize(path)))
-sys.exit(0 if ok_rpc and ok_mm else 2)
-PY
+  set +e
+  wine_reg_helper inject-rpcss > /mnt/data/wine-rpcss-reg.out 2>&1
   PY_RC=$?
   set -e
+  while read -r line; do log "RPCSS_REG.py: $line"; done < /mnt/data/wine-rpcss-reg.out || true
 
-  reg_rpc=no; reg_mm=no
-  if [ -f "$regf" ]; then
-    grep -qF 'Services\\RpcSs]' "$regf" 2>/dev/null && reg_rpc=yes || true
-    grep -qF 'Services\\MountMgr]' "$regf" 2>/dev/null && reg_mm=yes || true
-  fi
-  if [ -f /mnt/data/wine-rpcss-reg.out ]; then
-    while read -r line; do log "RPCSS_REG.py: $line"; done < /mnt/data/wine-rpcss-reg.out || true
+  local reg_rpc=no reg_mm=no
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    # grep works on UTF-8 Wine regs
+    grep -qF 'Services\\RpcSs]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_rpc=yes || true
+    grep -qF 'Services\\MountMgr]' "$WINEPREFIX/system.reg" 2>/dev/null && reg_mm=yes || true
   fi
   log "RPCSS_REG ensure done offline=yes file_rpcss=$reg_rpc file_mountmgr=$reg_mm py_rc=$PY_RC"
-  if [ -f "$regf" ]; then
-    grep -F 'Services\\RpcSs]' -A6 "$regf" 2>/dev/null | head -12 | while read -r line; do
-      log "RPCSS_REG.snip: $line"
-    done || true
-    grep -F 'Services\\MountMgr]' -A6 "$regf" 2>/dev/null | head -12 | while read -r line; do
-      log "RPCSS_REG.snip: $line"
-    done || true
-  fi
   if [ "$reg_rpc" != "yes" ]; then
-    log "WARN: RPCSS_REG offline inject failed to materialize RpcSs key — PRESTART may still try direct rpcss.exe"
+    log "WARN: RPCSS_REG inject did not materialize RpcSs"
+    return 2
   fi
+  return 0
 }
 
 rpcss_diag() {
@@ -2023,9 +1902,9 @@ ensure_win64_prefix "pre-prestart" || log "WARN: WINE_ARCH pre-prestart heal sof
 rpcss_diag
 rpcss_prestart
 
-# If PRESTART hit 32-bit wall, auto-repair once then retry PRESTART
-if grep -q "is a 32-bit installation" /mnt/data/wine-rpcss.out 2>/dev/null; then
-  log "WINE_ARCH FATAL 32bit-prefix detected in RPCSS_PRESTART"
+# If PRESTART hit 32-bit wall OR invalid registry, auto-repair once then retry
+if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-rpcss.out /mnt/data/wineboot-init.out 2>/dev/null; then
+  log "WINE_ARCH FATAL 32bit-prefix/invalid-reg detected in RPCSS_PRESTART"
   if wine_arch_auto_repair_once; then
     ensure_prefix_exec
     ensure_graphics_x11_reg
@@ -2049,8 +1928,8 @@ WINE_PID=$!
 log "WINE_START pid=$WINE_PID (heartbeat on)"
 # Early 32-bit detect (2s) — repair once rather than silent WINE_EXIT=1
 sleep 2
-if grep -q "is a 32-bit installation" /mnt/data/wine-run.out 2>/dev/null; then
-  log "WINE_ARCH FATAL 32bit-prefix detected in WINE_START"
+if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-run.out 2>/dev/null; then
+  log "WINE_ARCH FATAL 32bit-prefix/invalid-reg detected in WINE_START"
   kill -TERM "$WINE_PID" 2>/dev/null || true
   sleep 1
   kill -KILL "$WINE_PID" 2>/dev/null || true
@@ -2064,8 +1943,8 @@ if grep -q "is a 32-bit installation" /mnt/data/wine-run.out 2>/dev/null; then
     WINE_PID=$!
     log "WINE_START retry-after-arch-repair pid=$WINE_PID"
     sleep 2
-    if grep -q "is a 32-bit installation" /mnt/data/wine-run.out 2>/dev/null; then
-      log "FATAL: WINE_ARCH 32bit-prefix persists after repair"
+    if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-run.out 2>/dev/null; then
+      log "FATAL: WINE_ARCH 32bit-prefix/invalid-reg persists after repair"
       kill -KILL "$WINE_PID" 2>/dev/null || true
       [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
       [ -n "$XPID" ] && kill $XPID 2>/dev/null || true

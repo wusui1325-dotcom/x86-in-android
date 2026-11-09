@@ -3,5 +3,5 @@
   "versionName": "0.1.108",
   "versionCode": 110,
   "notes": "0.1.108: P0 App-only. Dig107: PRIMARY machine-before-exec OK→App NtCreate machine 14c recovered but no started pid; FormatMessage failed; wow64cpu_init=[]; direct machine0 creator_detach. Knives: (1) PRIMARY trampoline start /machine x86 /wait /exec syswow64\\cmd /c stub (KEEP argv order; WoW64-create small i386 cmd then 32→32 App); (2) wow64 canary before App; (3) surface NTSTATUS/GLE (formatmessage_failed/gle_suspect=0, err+ntdll, trampoline_dig). KEEP 102-107 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/PRIMARY order/dblslash/phase/log/BSOD. No hot/soft-continue/Present/DXVK x32/FF. vc110.",
-  "tipSha": "TBD"
+  "tipSha": "0d96ffa"
 }

@@ -214,6 +214,28 @@ public class Window extends XResource {
         return getType() == Type.DIALOG && getTransientFor() > 0 && hasDecoration(Decoration.TITLE) && !(hasDecoration(Decoration.MINIMIZE) && hasDecoration(Decoration.MAXIMIZE));
     }
 
+    /**
+     * 0.1.81: broader MessageBox / dialog detect for sticky + Present.
+     * Wine {@code #32770} MessageBox may lack full Motif TITLE/MIN/MAX that
+     * {@link #isDialogBox()} requires, or only advertise Type.DIALOG.
+     */
+    public boolean isDialogLike() {
+        try {
+            if (isDialogBox()) return true;
+        } catch (Throwable ignored) {
+        }
+        try {
+            if (getType() == Type.DIALOG) return true;
+        } catch (Throwable ignored) {
+        }
+        try {
+            String cn = getClassName();
+            if (cn != null && cn.contains("#32770")) return true;
+        } catch (Throwable ignored) {
+        }
+        return false;
+    }
+
     public Bitmask getDecorations() {
         Property property = getProperty(Atom._MOTIF_WM_HINTS);
         return new Bitmask(property != null ? property.getInt(2) : 0);

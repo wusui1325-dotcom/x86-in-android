@@ -1,3 +1,20 @@
+## 0.1.81 — MessageBox / title sticky + +msgbox
+
+**Smoke risk (0.1.80):** after VS CRT seed, CREATEWINDOW_MISS may still be a Wine
+MessageBox (error dialog). Default WINEDEBUG lacked `+msgbox` so `reason=messagebox`
+almost never fired; host `isDialogBox()` was too strict for `#32770`; sticky skipped
+dialogs without app/HWND; Present did not prefer dialog over desk chrome.
+
+**Fix:**
+- Add `+msgbox` to WINE_RUN / WINE_START WINEDEBUG defaults (overridable)
+- `Window.isDialogLike()` = isDialogBox || `#32770` || Type.DIALOG → sticky/raise/NOHWND/focus
+- Present prefer dialog HWND / dialog before non-desk / desktop
+- Guest AppActivate title nudge (Error/Warning/錯誤/警告) + `APP_MSGBOX_DETECT source=wine|x11`
+- Keep 080 CRT / 079 CUI / 078 sticky
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.81`; `WINEDEBUG=…,+msgbox`; on MessageBox →
+`APP_MSGBOX_DETECT` → Present `wmClass=#32770` / `desktopOnly=0`.
+
 ## 0.1.80 — VS CRT seed / CREATEWINDOW_MISS missing_dll
 
 **Smoke risk (0.1.79):** `APP_CREATEWINDOW_MISS reason=missing_dll` (or early_exit with

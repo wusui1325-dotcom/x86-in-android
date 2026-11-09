@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.81: MessageBox / title — WINEDEBUG +msgbox; classify msgbox:; host dialog-like
+# sticky (#32770 / Type.DIALOG); Present prefer dialog; AppActivate Error/Warning/錯誤/警告
+# nudge; APP_MSGBOX_DETECT source=wine|x11. Keep 080 CRT / 079 CUI / 078 sticky.
 # 0.1.80: VS CRT seed — msvcp140/vcruntime140/concrt140/msvcp120/… into system32 +
 # SysWOW64; after CREATEWINDOW_MISS missing_dll → APP_CRT_SEED + one relaunch; log
 # APP_CRT_SIG. Keep 079 CUI/classify / 078 sticky/nohwnd / 077 fingerprint / 076 TU_GMEM.
@@ -55,7 +58,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.80
+WINE_LAUNCH_STAMP=0.1.81
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -1411,7 +1414,7 @@ pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 sleep 0.3
 # 0.1.51: light WINE_RUN debug — err+all,fix+all + BOX64_LOG=1 made explorer glacial
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv,+msgbox}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export BOX64_SHOWSEGV=0
@@ -1533,7 +1536,7 @@ fi
 # 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv,+msgbox}"
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export WINEARCH=win64
 log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX WINEARCH=$WINEARCH DISPLAY=${DISPLAY:-unset}"
@@ -2369,7 +2372,7 @@ rpcss_prestart() {
   fi
   if [ "$RPC_READY" != "1" ]; then
     log "WARN: RPCSS_PRESTART not ready — enabling +ole/+rpcss/+x11drv for WINE_START diag"
-    export WINEDEBUG="err+all,+seh,+loaddll,+ole,+rpcss,+x11drv"
+    export WINEDEBUG="err+all,+seh,+loaddll,+ole,+rpcss,+x11drv,+msgbox"
   else
     log "RPCSS_PRESTART RpcSs ready — safe for WINE_START"
   fi
@@ -2405,7 +2408,7 @@ fi
 # 0.1.63: APP_WIN uses forward slashes so log()/echo never emits BEL (\a).
 # Force +ole/+rpcss/+x11drv until first Present / 60s (overrides earlier WINE_RUN default).
 export WINEARCH=win64
-export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv,+msgbox}"
 log "WINE_START begin (WINEARCH=$WINEARCH WINEDEBUG=$WINEDEBUG argv=$* )"
 : > /mnt/data/wine-run.out
 set +e
@@ -2556,6 +2559,7 @@ app_load_spawn() {
 
 # 0.1.79: classify why Loaded never produced CreateWindow / HWND
 # 0.1.80: also capture CRT / missing-DLL signature → APP_CRT_SIG
+# 0.1.81: +msgbox channel → reason=messagebox + APP_MSGBOX_DETECT source=wine
 app_load_classify_nocreate() {
   APP_MISS_REASON=no_createwindow
   APP_CRT_SIG=
@@ -2567,8 +2571,10 @@ app_load_classify_nocreate() {
     fi
   fi
   if [ -f /mnt/data/wine-run.out ]; then
-    if grep -qEi 'MessageBox[AW]?|TaskDialog' /mnt/data/wine-run.out 2>/dev/null; then
+    if grep -qEi 'MessageBox[AW]?|TaskDialog|msgbox:|#32770' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=messagebox
+      _mb_hit=$(grep -oiE 'MessageBox[AW]?|TaskDialog|msgbox:[^ ]+|#32770' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr ' ' '_' || true)
+      log "APP_MSGBOX_DETECT source=wine hit=${_mb_hit:-MessageBox}"
     elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase|concrt' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=missing_dll
       # Prefer a concrete CRT / module name for KEY_LOG
@@ -2713,7 +2719,7 @@ fi
 app_load_nohwnd_request() {
   # $1 = basename hint (PE file name)
   _bn="${1:-app.exe}"
-  printf 'basename=%s\nwant=mapraise\nstamp=0.1.80\n' "$_bn" > /mnt/data/.x86-nohwnd-req
+  printf 'basename=%s\nwant=mapraise\nstamp=0.1.81\n' "$_bn" > /mnt/data/.x86-nohwnd-req
   log "NOHWND_MAP req written basename=$_bn path=/mnt/data/.x86-nohwnd-req"
 }
 app_load_marker_nohwnd_scan() {
@@ -2726,25 +2732,34 @@ app_load_marker_nohwnd_scan() {
 }
 app_load_appactivate_nudge() {
   # Best-effort: WScript AppActivate may trigger winex11 ShowWindow/SetForeground path.
+  # 0.1.81: also try common MessageBox titles (Error/Warning/錯誤/警告).
   _title="${1:-}"
   _bn="${2:-app.exe}"
+  _extra="${3:-}"
   _vbs=/mnt/data/.x86-appactivate.vbs
-  # Title often equals exe stem; also try basename.
+  _stem=$(printf '%s' "$_bn" | sed 's/[.][Ee][Xx][Ee]$//')
   cat > "$_vbs" << VBS
 On Error Resume Next
 Set sh = CreateObject("WScript.Shell")
 ok = sh.AppActivate("${_bn}")
-If Not ok Then ok = sh.AppActivate(Replace("${_bn}", ".exe", ""))
+If Not ok Then ok = sh.AppActivate("${_stem}")
 If Not ok And Len("${_title}") > 0 Then ok = sh.AppActivate("${_title}")
+If Not ok Then ok = sh.AppActivate("Error")
+If Not ok Then ok = sh.AppActivate("Warning")
+If Not ok Then ok = sh.AppActivate("錯誤")
+If Not ok Then ok = sh.AppActivate("警告")
+If Not ok Then ok = sh.AppActivate("Microsoft Visual C++")
+If Not ok And Len("${_extra}") > 0 Then ok = sh.AppActivate("${_extra}")
 WScript.Echo "AppActivate=" & ok
 VBS
-  log "NOHWND_MAP AppActivate nudge basename=$_bn"
+  log "NOHWND_MAP AppActivate nudge basename=$_bn title=${_title:-} extra=${_extra:-}"
   set +e
-  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine cscript //nologo "Z:\\mnt\\data\\.x86-appactivate.vbs" >>/mnt/data/wine-run.out 2>&1
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine cscript //nologo "Z:\mnt\data\.x86-appactivate.vbs" >>/mnt/data/wine-run.out 2>&1
   # Also try unix path form if Z: map differs
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$_vbs" >>/mnt/data/wine-run.out 2>&1
   set -e
 }
+
 if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
   HWND_WAIT_MAX="${X86_HWND_WAIT_MAX:-80}"
   HWND_WAIT_I=0
@@ -2896,7 +2911,53 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
             if [ "$APP_HWND_SEEN" != "1" ]; then
               app_load_classify_nocreate
               log "APP_LOAD WARN Loaded-but-no-HWND after CRT seed relaunch"
+              # 0.1.81: CRT fixed load but MessageBox may still be the only window
+              if [ "${APP_MISS_REASON}" = "messagebox" ] || grep -qEi 'MessageBox[AW]?|TaskDialog|msgbox:|#32770' /mnt/data/wine-run.out 2>/dev/null; then
+                if [ "${APP_MSGBOX_NUDGED:-0}" = "0" ]; then
+                  APP_MSGBOX_NUDGED=1
+                  APP_MISS_REASON=messagebox
+                  log "APP_MSGBOX_DETECT source=wine action=title_nudge_after_crt basename=$APP_BASE_NAME"
+                  app_load_appactivate_nudge "Error" "$APP_BASE_NAME" "Warning"
+                  app_load_nohwnd_request "$APP_BASE_NAME"
+                  sleep 2
+                  if app_load_marker_app_hwnd; then
+                    APP_HWND_SEEN=1
+                    log "APP_HWND_WAIT ready after MSGBOX nudge post-CRT marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+                  fi
+                fi
+              fi
             fi
+          fi
+        elif { [ "${APP_MISS_REASON}" = "messagebox" ] || grep -qEi 'MessageBox[AW]?|TaskDialog|msgbox:|#32770' /mnt/data/wine-run.out 2>/dev/null; } \
+            && [ "${APP_MSGBOX_NUDGED:-0}" = "0" ]; then
+          # 0.1.81: MessageBox still up after CRT/CUI — title AppActivate + host rescan
+          APP_MSGBOX_NUDGED=1
+          APP_MISS_REASON=messagebox
+          log "APP_MSGBOX_DETECT source=wine action=title_nudge basename=$APP_BASE_NAME"
+          app_load_appactivate_nudge "Error" "$APP_BASE_NAME" "Warning"
+          app_load_nohwnd_request "$APP_BASE_NAME"
+          HWND_MB_I=0
+          HWND_MB_MAX="${X86_HWND_MSGBOX_WAIT_MAX:-40}"
+          while [ "$HWND_MB_I" -lt "$HWND_MB_MAX" ]; do
+            if app_load_marker_app_hwnd; then
+              APP_HWND_SEEN=1
+              log "APP_HWND_WAIT ready after MSGBOX title nudge t=${HWND_MB_I}x0.2s marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+              break
+            fi
+            if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+              log "APP_HWND_WAIT MSGBOX abort app dead"
+              break
+            fi
+            if [ $((HWND_MB_I % 10)) -eq 0 ]; then
+              app_load_nohwnd_request "$APP_BASE_NAME"
+              app_load_appactivate_nudge "錯誤" "$APP_BASE_NAME" "警告"
+            fi
+            sleep 0.2
+            HWND_MB_I=$((HWND_MB_I + 1))
+          done
+          if [ "$APP_HWND_SEEN" != "1" ]; then
+            app_load_classify_nocreate
+            log "APP_LOAD WARN Loaded-but-no-HWND after MSGBOX title nudge reason=${APP_MISS_REASON}"
           fi
         elif [ "$_scan_none" = "1" ]; then
           log "APP_CREATEWINDOW_MISS scan=none (no X candidates) — not a Present/Turnip map miss"
@@ -2949,7 +3010,7 @@ if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-
     ensure_graphics_x11_reg
     rpcss_prestart
     : > /mnt/data/wine-run.out
-    export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
+    export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv,+msgbox}"
     "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
     WINE_PID=$!
     log "WINE_START retry-after-arch-repair pid=$WINE_PID (desktop only)"

@@ -125,6 +125,9 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.81 MessageBox / title：** WINEDEBUG `+msgbox`; `isDialogLike` sticky (#32770/Type.DIALOG);
+  Present prefer dialog; AppActivate Error/Warning/錯誤/警告; `APP_MSGBOX_DETECT`;
+  keep 080 CRT / 079 CUI / 078 sticky.
 - **0.1.80 VS CRT seed：** `msvcp140/vcruntime140/…` → system32+SysWOW64 (`APP_CRT_SEED`);
   after `APP_CREATEWINDOW_MISS reason=missing_dll` → `APP_CRT_RELAUNCH` + `APP_CRT_SIG=`;
   keep 079 CUI/classify.

@@ -464,8 +464,9 @@ public final class PresentXFramePump extends Thread {
      * Largest-area desktop (full WxH) previously always beat real app children.
      * 0.1.74: among equals, prefer windows with {@code _NET_WM_HWND} (DXGI/D3D target).
      * 0.1.75: only VIEWABLE + non-zero geom; pending HWND → wait (caller skips desktop).
-     * Priority: focused+HWND → focused app → HWND app → any app → HWND non-desk →
-     * non-desk → desktop/any.
+     * Priority: focused+HWND → focused app → HWND app → any app → dialog HWND →
+     * dialog → HWND non-desk → non-desk → desktop/any.
+     * 0.1.81: prefer dialog-like (#32770 / Type.DIALOG) over larger explorer chrome.
      */
     private static PickResult pickBestContent(Window root, XServer xServer) {
         Hold hold = new Hold();
@@ -499,6 +500,16 @@ public final class PresentXFramePump extends Thread {
             return new PickResult(hold.bestApp, hold.bestAppWin, hold.mappedKids, false,
                     classOf(hold.bestAppWin), hwndOf(hold.bestAppWin),
                     mapStateName(hold.bestAppWin), hold.pendingHwnd);
+        }
+        if (hold.bestDialogHwnd != null) {
+            return new PickResult(hold.bestDialogHwnd, hold.bestDialogHwndWin, hold.mappedKids, false,
+                    classOf(hold.bestDialogHwndWin), hwndOf(hold.bestDialogHwndWin),
+                    mapStateName(hold.bestDialogHwndWin), hold.pendingHwnd);
+        }
+        if (hold.bestDialog != null) {
+            return new PickResult(hold.bestDialog, hold.bestDialogWin, hold.mappedKids, false,
+                    classOf(hold.bestDialogWin), hwndOf(hold.bestDialogWin),
+                    mapStateName(hold.bestDialogWin), hold.pendingHwnd);
         }
         if (hold.bestNonDeskHwnd != null) {
             return new PickResult(hold.bestNonDeskHwnd, hold.bestNonDeskHwndWin, hold.mappedKids, false,
@@ -558,10 +569,12 @@ public final class PresentXFramePump extends Thread {
             long hwnd = 0L;
             boolean desk = false;
             boolean app = false;
+            boolean dialog = false;
             try {
                 hwnd = node.getHandle();
                 desk = node.isDesktopWindow();
                 app = node.isApplicationWindow();
+                dialog = node.isDialogLike();
             } catch (Throwable ignored) {
             }
             Window.MapState ms;
@@ -594,6 +607,16 @@ public final class PresentXFramePump extends Thread {
                             && (hold.bestAppHwnd == null || p.area > hold.bestAppHwnd.area)) {
                         hold.bestAppHwnd = p;
                         hold.bestAppHwndWin = node;
+                    }
+                    // 0.1.81: dialog bucket — prefer MessageBox over large desk chrome by area
+                    if (dialog && (hold.bestDialog == null || p.area > hold.bestDialog.area)) {
+                        hold.bestDialog = p;
+                        hold.bestDialogWin = node;
+                    }
+                    if (dialog && hwnd != 0L
+                            && (hold.bestDialogHwnd == null || p.area > hold.bestDialogHwnd.area)) {
+                        hold.bestDialogHwnd = p;
+                        hold.bestDialogHwndWin = node;
                     }
                     if (!desk && (hold.bestNonDesktop == null || p.area > hold.bestNonDesktop.area)) {
                         hold.bestNonDesktop = p;
@@ -637,11 +660,15 @@ public final class PresentXFramePump extends Thread {
     private static final class Hold {
         Pick bestApp;
         Pick bestAppHwnd;
+        Pick bestDialog;
+        Pick bestDialogHwnd;
         Pick bestNonDesktop;
         Pick bestNonDeskHwnd;
         Pick bestAny;
         Window bestAppWin;
         Window bestAppHwndWin;
+        Window bestDialogWin;
+        Window bestDialogHwndWin;
         Window bestNonDeskWin;
         Window bestNonDeskHwndWin;
         Window bestAnyWin;

@@ -144,8 +144,11 @@ public class WindowManager extends XResourceManager {
                 }
             }
             boolean app = false;
+            boolean dialog = false;
             try { app = window.isApplicationWindow(); } catch (Throwable ignored) {}
-            if (classHit || app) {
+            try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
+            // 0.1.81: #32770 / Type.DIALOG always a candidate (MessageBox may lack HWND early)
+            if (classHit || app || dialog) {
                 matched.add(window);
             } else if (hwnd != 0L) {
                 hwndAny.add(window);

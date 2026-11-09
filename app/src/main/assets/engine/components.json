@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.80-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed",
+  "runtimeId": "wine-gpustack-v0.1.81-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.80: VS CRT seed (msvcp140/vcruntime140/\u2026) + APP_CRT_RELAUNCH on CREATEWINDOW_MISS missing_dll; keep 0.1.79 CUI/classify"
+  "notes": "0.1.81: MessageBox/title +msgbox + dialog-like sticky + Present prefer dialog + APP_MSGBOX_DETECT; keep 0.1.80 CRT/079 CUI"
 }

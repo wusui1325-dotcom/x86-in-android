@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.80",
-  "versionCode": 81,
-  "notes": "0.1.80: VS CRT seed (msvcp140/vcruntime140/concrt140/…) into system32+SysWOW64; CREATEWINDOW_MISS missing_dll → APP_CRT_SEED + one APP_CRT_RELAUNCH + APP_CRT_SIG; keep 079 CUI/classify"
+  "versionName": "0.1.81",
+  "versionCode": 82,
+  "notes": "0.1.81: MessageBox/title — WINEDEBUG +msgbox; dialog-like sticky (#32770/Type.DIALOG); Present prefer dialog; AppActivate Error/Warning/錯誤/警告; APP_MSGBOX_DETECT; keep 080 CRT/079 CUI/078 sticky"
 }

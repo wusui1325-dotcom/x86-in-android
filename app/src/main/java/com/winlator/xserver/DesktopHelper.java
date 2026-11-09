@@ -54,6 +54,7 @@ public abstract class DesktopHelper {
         stickyHwnd = 0L;
         stickyClass = "";
         stickyIsApp = false;
+        lastMsgboxLogId = 0;
     }
 
     public static void attachTo(final XServer xServer) {
@@ -86,9 +87,12 @@ public abstract class DesktopHelper {
                     long hwnd = window.getHandle();
                     boolean desk = window.isDesktopWindow();
                     boolean app = window.isApplicationWindow();
-                    if (!desk && (app || hwnd != 0L)) {
-                        rememberSticky(window, app, hwnd);
+                    boolean dialog = false;
+                    try { dialog = window.isDialogLike(); } catch (Throwable ignored2) {}
+                    if (!desk && (app || hwnd != 0L || dialog)) {
+                        rememberSticky(window, app || dialog, hwnd);
                         maybeWriteReadyMarker(window, null);
+                        if (dialog) logMsgboxDetect(window, hwnd);
                     }
                 } catch (Throwable ignored) {
                 }
@@ -224,8 +228,11 @@ public abstract class DesktopHelper {
             } catch (Throwable ignored) {
             }
             boolean app = false;
+            boolean dialog = false;
             try { app = w.isApplicationWindow(); } catch (Throwable ignored) {}
-            rememberSticky(w, app || hwnd != 0L, hwnd);
+            try { dialog = w.isDialogLike(); } catch (Throwable ignored) {}
+            rememberSticky(w, app || hwnd != 0L || dialog, hwnd);
+            if (dialog) logMsgboxDetect(w, hwnd);
 
             if (scan.length() > 0) scan.append(';');
             scan.append("id=0x").append(Integer.toHexString(w.id))
@@ -234,7 +241,12 @@ public abstract class DesktopHelper {
                     .append(",mapped=").append(wasMapped ? "1" : "0")
                     .append("->").append(mappedNow ? "1" : "0");
 
-            if (best == null || hwnd != 0L && bestHwnd == 0L) {
+            // 0.1.81: prefer dialog-like / HWND over first arbitrary candidate
+            boolean prefer = false;
+            if (best == null) prefer = true;
+            else if (dialog && bestHwnd == 0L) prefer = true;
+            else if (hwnd != 0L && bestHwnd == 0L) prefer = true;
+            if (prefer) {
                 best = w;
                 bestHwnd = hwnd;
             }
@@ -248,12 +260,15 @@ public abstract class DesktopHelper {
     private static void rememberSticky(Window window, boolean app, long hwnd) {
         if (window == null) return;
         boolean desk = false;
+        boolean dialog = false;
         try { desk = window.isDesktopWindow(); } catch (Throwable ignored) {}
+        try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
         if (desk) return;
-        if (!(app || hwnd != 0L)) return;
+        // 0.1.81: dialog-like (#32770 / Type.DIALOG) sticky even without isApplicationWindow
+        if (!(app || hwnd != 0L || dialog)) return;
         stickyAppId = window.id;
         if (hwnd != 0L) stickyHwnd = hwnd;
-        stickyIsApp = app || stickyIsApp;
+        stickyIsApp = app || dialog || stickyIsApp;
         try {
             String cn = window.getClassName();
             if (cn != null && !cn.isEmpty()) stickyClass = cn;
@@ -284,11 +299,14 @@ public abstract class DesktopHelper {
                     return;
                 }
             }
-            if (app || desk || hwnd != 0L || window.isDialogBox()) {
+            boolean dialog = false;
+            try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
+            if (app || desk || hwnd != 0L || dialog) {
                 xServer.windowManager.raiseWindow(window);
             }
-            if (!desk && (app || hwnd != 0L)) {
-                rememberSticky(window, app, hwnd);
+            if (!desk && (app || hwnd != 0L || dialog)) {
+                rememberSticky(window, app || dialog, hwnd);
+                if (dialog) logMsgboxDetect(window, hwnd);
             }
         } catch (Throwable t) {
             Log.w(TAG, "raiseIfNeeded: " + t.getMessage());
@@ -311,17 +329,19 @@ public abstract class DesktopHelper {
                 if (cn == null) cn = "";
             } catch (Throwable ignored) {
             }
-            // Desktop map unlocks APP_LOAD; HWND map refreshes marker for DIAG.
-            if (!(desk || app || hwnd != 0L || (nohwndScan != null && !nohwndScan.isEmpty()))) {
+            boolean dialog = false;
+            try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
+            // Desktop map unlocks APP_LOAD; HWND/dialog map refreshes marker for DIAG.
+            if (!(desk || app || hwnd != 0L || dialog || (nohwndScan != null && !nohwndScan.isEmpty()))) {
                 // Still allow sticky refresh when property updates an already-sticky window.
                 if (stickyAppId == 0 || window.id != stickyAppId) return;
             }
-            if (!desk && (app || hwnd != 0L)) {
-                rememberSticky(window, app, hwnd);
+            if (!desk && (app || hwnd != 0L || dialog)) {
+                rememberSticky(window, app || dialog, hwnd);
             }
 
             // 0.1.78 sticky merge: desk-only write must not wipe app hwnd.
-            boolean outApp = app;
+            boolean outApp = app || dialog;
             long outHwnd = hwnd;
             String outClass = cn;
             boolean outDesk = desk;
@@ -446,8 +466,45 @@ public abstract class DesktopHelper {
                 if (child != null && child.isSurface()) winHandler.bringToFront(window.getClassName(), window.getHandle());
             }
         }
-        else if (window.isDialogBox()) {
+        else if (window.isDialogLike()) {
             winHandler.bringToFront(window.getClassName(), window.getHandle());
+            try {
+                boolean parentIsRoot = window.getParent() == xServer.windowManager.rootWindow;
+                xServer.windowManager.setFocus(
+                        window,
+                        parentIsRoot
+                                ? WindowManager.FocusRevertTo.POINTER_ROOT
+                                : WindowManager.FocusRevertTo.PARENT);
+            } catch (Throwable ignored) {
+            }
+            rememberSticky(window, true, window.getHandle());
+            logMsgboxDetect(window, window.getHandle());
+        }
+    }
+
+    /** 0.1.81: KEY_LOG-friendly detect for Wine MessageBox / #32770. */
+    private static volatile int lastMsgboxLogId;
+
+    private static void logMsgboxDetect(Window window, long hwnd) {
+        if (window == null) return;
+        try {
+            if (window.id == lastMsgboxLogId) return;
+            lastMsgboxLogId = window.id;
+            String cn = "";
+            try {
+                cn = window.getClassName();
+                if (cn == null) cn = "";
+            } catch (Throwable ignored) {
+            }
+            boolean strict = false;
+            try { strict = window.isDialogBox(); } catch (Throwable ignored) {}
+            Log.i(TAG, "APP_MSGBOX_DETECT source=x11 class="
+                    + cn.replace(' ', '_')
+                    + " hwnd=0x" + Long.toHexString(hwnd)
+                    + " id=0x" + Integer.toHexString(window.id)
+                    + " strictDialog=" + (strict ? "1" : "0"));
+        } catch (Throwable t) {
+            Log.w(TAG, "APP_MSGBOX_DETECT: " + t.getMessage());
         }
     }
 

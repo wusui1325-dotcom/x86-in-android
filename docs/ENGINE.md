@@ -1,3 +1,20 @@
+## 0.1.69 — guestBlack HUD harden + wined3d bisect plumbing
+
+**Smoke risk (0.1.68):** `DXVK_HUD` paints into swapchain → `isNearlyBlack` false-green
+(`guestBlack` never sticks); sticky never clears on recover; `X86_DXWRAPPER=wined3d`
+only in wine-launch (Session/guestEnv never exports it).
+
+**Fix:**
+- Present: exclude HUD band (y<64 + BL 180×48) when sampling; sticky clears with
+  `guestBlack=0 recovered`; AHB-no-data → `guestSample=none`; DIAG `nonBlackGuest=` / `guestSample=`
+- GpuStack/LaunchPipeline/Session: resolve + export `X86_DXWRAPPER` from Intent extra /
+  `File(wsData,dxwrapper)` / prefs / env — `echo wined3d > …/dxwrapper`
+- Keep HUD for eye (`devinfo,fps`); `X86_DXVK_HUD=0` to disable; `hud_sample_policy=exclude_top64`
+- Knife #3: `VK_LOADER_DEBUG=error`, `TURNIP_PROBE`, KEY_LOG Adapter/vkCreate/recovered
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.69`; HUD visible but `guestBlack=1` when app empty;
+after paint `guestBlack=0 recovered`; file/env → `DXVK_DIAG wrapper=wined3d`.
+
 ## 0.1.68 — DXVK/Turnip diagnostic knife (guestBlack)
 
 **Smoke risk (0.1.67):** Loaded + mappedKids>0 + Present ok can still be **guest-black**

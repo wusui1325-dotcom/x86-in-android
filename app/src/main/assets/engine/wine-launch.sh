@@ -14,6 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.69: guestBlack HUD-band sample + sticky recover; Session→X86_DXWRAPPER; VK_LOADER_DEBUG/TURNIP_PROBE.
 # 0.1.68: DXVK_LOG/HUD/cache + DXVK_DIAG (ICD/dll/kgsl) + guestBlack Present DIAG;
 # optional X86_DXWRAPPER=wined3d bisect (default stays DXVK). Soft WARN if no KGSL.
 # 0.1.67: APP_LOAD start /unix retry + PE/noexec WARN; Present prefer app over explorer desktop.
@@ -30,7 +31,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.68
+WINE_LAUNCH_STAMP=0.1.69
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -95,11 +96,28 @@ case "${X86_DXWRAPPER:-dxvk}" in
         ;;
     esac
     mkdir -p "${DXVK_STATE_CACHE_PATH:-/mnt/data/dxvk-cache}"
-    export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
-    export DXVK_HUD="${DXVK_HUD:-devinfo,fps}"
+    # X86_DXVK_HUD passthrough: 0/off → unset HUD; else keep/default devinfo,fps (eye);
+    # Present isNearlyBlack excludes top64+BL (hud_sample_policy=exclude_top64).
+    case "${X86_DXVK_HUD:-}" in
+      0|off|OFF|false|FALSE) unset DXVK_HUD 2>/dev/null || true ;;
+      "")
+        export DXVK_HUD="${DXVK_HUD:-devinfo,fps}"
+        ;;
+      *)
+        export DXVK_HUD="$X86_DXVK_HUD"
+        ;;
+    esac
+    case "${X86_DXVK_LOG:-}" in
+      debug|DEBUG) export DXVK_LOG_LEVEL=debug ;;
+      *) export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}" ;;
+    esac
     export DXVK_STATE_CACHE_PATH="${DXVK_STATE_CACHE_PATH:-/mnt/data/dxvk-cache}"
+    log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} (Present skips HUD band)"
     ;;
 esac
+
+# 0.1.69 Knife #3: Vulkan loader fingerprint (Turnip vkCreate / ICD)
+export VK_LOADER_DEBUG="${VK_LOADER_DEBUG:-error}"
 
 # 定案 A：客體 ALSA android_aserver → 宿主 AAudio（由 GpuStack 寫入 asound.conf）
 if [ -n "${ANDROID_ALSA_SERVER:-}" ]; then
@@ -201,7 +219,16 @@ else
   if [ "$_kgsl" = "no" ]; then
     log "WARN: DXVK_DIAG kgsl=no — Turnip almost certainly black on non-Adreno (soft WARN, session still allowed)"
   fi
-  unset _icd_ok _icd_sz _kgsl _dlls _dll_miss _d _f _sz
+  # 0.1.69 TURNIP_PROBE — ICD JSON + so + kgsl node (vkCreate fingerprint aid)
+  _icd_json=/mnt/gpu/turnip/freedreno_icd.json
+  _probe_so=MISSING
+  _probe_json=MISSING
+  [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ] && _probe_so=$(ls -la /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null | awk '{print $5,$NF}')
+  [ -f "$_icd_json" ] && _probe_json=$(head -c 200 "$_icd_json" 2>/dev/null | tr '\n' ' ')
+  _kgsl_ls=$(ls -la /dev/kgsl-3d0 2>/dev/null || echo missing)
+  log "TURNIP_PROBE so=[${_probe_so}] kgsl_node=[${_kgsl_ls}] icd_head=[${_probe_json}] VK_LOADER_DEBUG=${VK_LOADER_DEBUG:-} wrapper=${X86_DXWRAPPER:-dxvk}"
+  log "TURNIP_PROBE note: grep wine-run.out for DXVK: / err:vulkan / vkCreate / Adapter"
+  unset _icd_ok _icd_sz _kgsl _dlls _dll_miss _d _f _sz _icd_json _probe_so _probe_json _kgsl_ls
   # Gladio 客體 libGL（Wine OpenGL → GLX → 宿主 gladiorenderer）
   if [ -f /opt/gladio/lib/libGL.so.1.7.0 ] || [ -f /opt/gladio/lib/libGL.so.1 ]; then
     export LD_LIBRARY_PATH="/opt/gladio/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"

@@ -111,6 +111,11 @@
 - **0.1.68 診斷契約**：`DXVK_LOG_LEVEL=info`／`DXVK_HUD=devinfo,fps`／`DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache`；
   啟動指紋 `DXVK_DIAG icd=… dxvk_dlls=… kgsl=…`；Present `guestBlack=` 拆 HUD 假綠燈。
   二分：`X86_DXWRAPPER=wined3d` 清 d3d* native（預設仍 DXVK）。KGSL 缺＝軟 WARN，不硬擋 Session。
+- **0.1.69 bisect 契約**：Session／`GpuStack.guestEnv` 必須 export `X86_DXWRAPPER`（wine-launch 半邊不夠）。
+  寫入 `echo wined3d > <workspace-data>/dxwrapper`（PRoot bind＝`/mnt/data/dxwrapper`），或 Intent extra
+  `dxwrapper=wined3d`／prefs `x86/dxwrapper`。期望 log：`DXVK_DIAG wrapper=wined3d`＋`hud=off`＋`d3d*=b`。
+  Present 采樣排除 DXVK HUD 帶（`hud_sample_policy=exclude_top64`）；`guestBlack=0 recovered` 可回落。
+  `VK_LOADER_DEBUG=error`＋`TURNIP_PROBE` 助 vkCreate／Adapter 指紋。
 - **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
 
 ### 還缺

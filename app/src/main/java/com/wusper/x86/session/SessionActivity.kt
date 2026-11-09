@@ -114,6 +114,7 @@ class SessionActivity : ComponentActivity() {
         val forceGuestSmoke = intent.getBooleanExtra(EXTRA_FORCE_GUEST_SMOKE, false)
         val preferAndroidGuest = intent.getBooleanExtra(EXTRA_PREFER_ANDROID_GUEST, true)
         val forcePeSmoke = intent.getBooleanExtra(EXTRA_FORCE_PE_SMOKE, false)
+        val dxwrapperExtra = intent.getStringExtra(EXTRA_DXWRAPPER)
         val ws = WorkspaceStore.listWorkspaces(this).firstOrNull { it.id == workspaceId }
 
         setContent {
@@ -370,7 +371,7 @@ class SessionActivity : ComponentActivity() {
                     sessionEpoch++
                 }
 
-                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke, sessionEpoch) {
+                LaunchedEffect(workspaceId, forceSmoke, forceGuestSmoke, preferAndroidGuest, forcePeSmoke, dxwrapperExtra, sessionEpoch) {
                     showErrorCard = false
                     gpuFailed = false
                     launchFailedBeforeStart = false
@@ -391,6 +392,7 @@ class SessionActivity : ComponentActivity() {
                             forceGuestSmoke = forceGuestSmoke,
                             preferAndroidGuest = preferAndroidGuest,
                             forcePeSmoke = forcePeSmoke,
+                            dxwrapper = dxwrapperExtra,
                         )
                     } catch (t: Throwable) {
                         presentFailure(
@@ -1326,12 +1328,21 @@ class SessionActivity : ComponentActivity() {
             "DXVK_DIAG",
             "DXVK_HUD",
             "guestBlack",
+            "guestBlack=0 recovered",
+            "guestSample",
+            "nonBlackGuest",
             "d3d11.dll",
             "freedreno",
             "TURNIP_ICD",
+            "TURNIP_PROBE",
             "KGSL=",
+            "VK_LOADER_DEBUG",
+            "Adapter",
+            "vkCreate",
             "DXVK:",
             "err:vulkan",
+            "wrapper=wined3d",
+            "hud_sample_policy",
             "WINELOADER=",
             "WINEPRELOADRESERVE",
             "could not load ntdll",
@@ -1344,5 +1355,7 @@ class SessionActivity : ComponentActivity() {
         const val EXTRA_FORCE_GUEST_SMOKE = "force_guest_smoke"
         const val EXTRA_PREFER_ANDROID_GUEST = "prefer_android_guest"
         const val EXTRA_FORCE_PE_SMOKE = "force_pe_smoke"
+        /** 0.1.69: "wined3d" or "dxvk" — writes workspace dxwrapper + X86_DXWRAPPER */
+        const val EXTRA_DXWRAPPER = "dxwrapper"
     }
 }

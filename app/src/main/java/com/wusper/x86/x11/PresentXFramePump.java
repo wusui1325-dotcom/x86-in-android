@@ -27,6 +27,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * (largest-area desktop was hiding real app content). DIAG desktopOnly/mappedKids/wmClass.
  * 0.1.68: sticky guestBlack=1 when presentOk rises but guest stays nearly-black / HUD-only
  * for N frames (DXVK/Turnip black-screen observability; not a Present lock fail).
+ * 0.1.69: isNearlyBlack excludes DXVK HUD band (y<64 + BL corner); sticky clears on
+ * guestLit ({@code guestBlack=0 recovered}); AHB-no-data → guestSample=none;
+ * pathStats adds guestSample= / nonBlackGuest=.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -61,6 +64,14 @@ public final class PresentXFramePump extends Thread {
     private int guestBlackSticky;
     private int consecutiveGuestBlack;
     private static final int GUEST_BLACK_FRAMES = 45;
+    /** 0.1.69: lit samples outside DXVK HUD band. */
+    private int nonBlackGuestHits;
+    /** 0.1.69: "bgra" | "ahb" | "none" — last guest-pixel sample source. */
+    private String lastGuestSample = "none";
+    /** DXVK_HUD top band + bottom-left corner to ignore when sampling. */
+    private static final int HUD_EXCLUDE_TOP = 64;
+    private static final int HUD_EXCLUDE_BL_W = 180;
+    private static final int HUD_EXCLUDE_BL_H = 48;
 
     public PresentXFramePump(XServer xServer, FrameSink sink) {
         super("x86-x-present-pump");
@@ -179,7 +190,8 @@ public final class PresentXFramePump extends Thread {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
-                // no virtualData to sample — do not clear guestBlack streak
+                // 0.1.69: no virtualData — unknown guest pixels; do not grow/clear streak
+                lastGuestSample = "none";
                 maybeLog(frameIndex, kids);
                 return;
             }
@@ -194,9 +206,11 @@ public final class PresentXFramePump extends Thread {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
+                lastGuestSample = "ahb";
                 boolean black = isNearlyBlack(data, width, height, strideBytes);
                 if (!black) {
                     nonBlackHits++;
+                    nonBlackGuestHits++;
                     noteGuestContent(true, frameIndex);
                 } else {
                     presentHudBar(width, height, frameIndex);
@@ -214,10 +228,12 @@ public final class PresentXFramePump extends Thread {
         if (data != null && width > 1 && height > 1) {
             ByteBuffer dup = data.duplicate();
             dup.rewind();
+            lastGuestSample = "bgra";
             boolean black = isNearlyBlack(dup, width, height, strideBytes);
             dup.rewind();
             if (!black) {
                 nonBlackHits++;
+                nonBlackGuestHits++;
                 noteGuestContent(true, frameIndex);
             } else {
                 // 0.1.66 P1: NEVER paint HUD into guest SHM (duplicate shares backing).
@@ -357,7 +373,11 @@ public final class PresentXFramePump extends Thread {
         bgra.rewind();
     }
 
-    /** Sample a grid of pixels; true if almost everything is near-black. */
+    /**
+     * Sample a grid of pixels; true if almost everything is near-black.
+     * 0.1.69: exclude DXVK_HUD band (top {@link #HUD_EXCLUDE_TOP}px) and bottom-left
+     * corner so HUD text cannot fake guestLit / block guestBlack sticky.
+     */
     private static boolean isNearlyBlack(ByteBuffer data, int width, int height, int strideBytes) {
         if (data == null || width <= 0 || height <= 0) return true;
         ByteBuffer d = data.duplicate();
@@ -366,8 +386,11 @@ public final class PresentXFramePump extends Thread {
         int samples = 0;
         int stepX = Math.max(1, width / 16);
         int stepY = Math.max(1, height / 12);
-        for (int y = 0; y < height; y += stepY) {
+        int y0 = Math.min(HUD_EXCLUDE_TOP, Math.max(0, height - 1));
+        for (int y = y0; y < height; y += stepY) {
             for (int x = 0; x < width; x += stepX) {
+                // bottom-left DXVK HUD corner
+                if (y >= height - HUD_EXCLUDE_BL_H && x < HUD_EXCLUDE_BL_W) continue;
                 int off = y * stride + x * 4;
                 if (off + 3 >= d.capacity()) continue;
                 d.position(off);
@@ -535,10 +558,16 @@ public final class PresentXFramePump extends Thread {
     }
 
 
-    /** 0.1.68: mark guest-black streak; sticky log when threshold hit. */
+    /** 0.1.68/69: mark guest-black streak; sticky log; clear sticky on recover. */
     private void noteGuestContent(boolean guestLit, int frameIndex) {
         if (guestLit) {
             consecutiveGuestBlack = 0;
+            if (guestBlackSticky != 0) {
+                guestBlackSticky = 0;
+                Log.i(TAG, "PRESENT_DIAG guestBlack=0 recovered frame=" + frameIndex
+                        + " guestSample=" + lastGuestSample
+                        + " nonBlackGuest=" + nonBlackGuestHits);
+            }
             return;
         }
         consecutiveGuestBlack++;
@@ -549,6 +578,8 @@ public final class PresentXFramePump extends Thread {
                     + " desktopOnly=" + lastDesktopOnly
                     + " mappedKids=" + lastMappedKids
                     + " nonBlack=" + nonBlackHits
+                    + " nonBlackGuest=" + nonBlackGuestHits
+                    + " guestSample=" + lastGuestSample
                     + " hud=" + hudHits
                     + " ok=" + presentOk
                     + " frame=" + frameIndex);
@@ -562,6 +593,7 @@ public final class PresentXFramePump extends Thread {
                 + " ok=" + presentOk
                 + " fail=" + presentFail
                 + " nonBlack=" + nonBlackHits
+                + " nonBlackGuest=" + nonBlackGuestHits
                 + " hud=" + hudHits
                 + " waitAttach=" + waitingAttach
                 + " last=" + lastW + "x" + lastH
@@ -575,7 +607,8 @@ public final class PresentXFramePump extends Thread {
                 + " lastRc=" + NativeEngine.nativePresentLastRc()
                 + " lockFail=" + NativeEngine.nativePresentLockFails()
                 + " path=" + NativeEngine.nativePresentLastPath()
-                + " guestBlack=" + guestBlackSticky;
+                + " guestBlack=" + guestBlackSticky
+                + " guestSample=" + lastGuestSample;
     }
 
     public int presentOkCount() {

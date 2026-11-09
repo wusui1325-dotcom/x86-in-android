@@ -100,8 +100,36 @@ object GpuStack {
         return parts.joinToString(" · ")
     }
 
+    /**
+     * 0.1.69: resolve DX wrapper for black-screen bisect.
+     * Order: explicit override → already-exported env → `File(wsData,"dxwrapper")` →
+     * SharedPreferences `x86`/`dxwrapper` → default `dxvk`.
+     * Write `echo wined3d > …/dataDir/dxwrapper` (bound as /mnt/data/dxwrapper) to flip.
+     */
+    fun resolveDxWrapper(ctx: Context, wsDataAbs: String, override: String? = null): String {
+        fun norm(raw: String?): String? {
+            val v = raw?.trim()?.lowercase() ?: return null
+            return when (v) {
+                "wined3d", "wine_d3d", "builtin" -> "wined3d"
+                "dxvk", "d3d" -> "dxvk"
+                else -> if (v.isEmpty()) null else v
+            }
+        }
+        norm(override)?.let { return it }
+        norm(System.getenv("X86_DXWRAPPER"))?.let { return it }
+        runCatching {
+            val f = File(wsDataAbs, "dxwrapper")
+            if (f.isFile) norm(f.readText())?.let { return it }
+        }
+        runCatching {
+            val prefs = ctx.getSharedPreferences("x86", Context.MODE_PRIVATE)
+            norm(prefs.getString("dxwrapper", null))?.let { return it }
+        }
+        return "dxvk"
+    }
+
     /** 寫入客體／啟動腳本的環境（GpuStack 路徑；不含軟渲） */
-    fun guestEnv(ctx: Context, wsDataAbs: String): List<String> {
+    fun guestEnv(ctx: Context, wsDataAbs: String, dxwrapperOverride: String? = null): List<String> {
         val env = mutableListOf(
             "GRAPHICS_BACKEND=gpu",
             "LIBGL_ALWAYS_SOFTWARE=0",
@@ -120,10 +148,35 @@ object GpuStack {
         if (dxvk.isDirectory) {
             env += "HOST_DXVK_DIR=${dxvk.absolutePath}"
         }
-        // 0.1.68: DXVK observability (default stays DXVK; X86_DXWRAPPER=wined3d bisects in wine-launch)
-        env += "DXVK_LOG_LEVEL=info"
-        env += "DXVK_HUD=devinfo,fps"
-        env += "DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache"
+        // 0.1.69: Session→guestEnv must export X86_DXWRAPPER (wine-launch half alone is useless)
+        val wrapper = resolveDxWrapper(ctx, wsDataAbs, dxwrapperOverride)
+        env += "X86_DXWRAPPER=$wrapper"
+        // 0.1.68/69: DXVK observability. Keep HUD for human eye; Present samples exclude
+        // top64/BL corner (hud_sample_policy=exclude_top64). X86_DXVK_HUD passthrough:
+        // "0"/off → HUD off; unset → devinfo,fps; else use value as-is.
+        val hudReq = System.getenv("X86_DXVK_HUD")
+            ?: ctx.getSharedPreferences("x86", Context.MODE_PRIVATE).getString("dxvk_hud", null)
+        val hud = when {
+            wrapper == "wined3d" -> null // wine-launch unsets; skip forcing
+            hudReq == null || hudReq.isBlank() -> "devinfo,fps"
+            hudReq == "0" || hudReq.equals("off", true) || hudReq.equals("false", true) -> null
+            else -> hudReq
+        }
+        val logLevel = when {
+            wrapper == "wined3d" -> null
+            System.getenv("X86_DXVK_LOG")?.equals("debug", true) == true -> "debug"
+            else -> "info"
+        }
+        if (wrapper != "wined3d") {
+            if (logLevel != null) env += "DXVK_LOG_LEVEL=$logLevel"
+            if (hud != null) env += "DXVK_HUD=$hud"
+            env += "DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache"
+        }
+        // Knife #3 cheap: loader warn/error for Turnip/vkCreate fingerprint
+        val vkDbg = System.getenv("VK_LOADER_DEBUG")
+            ?: ctx.getSharedPreferences("x86", Context.MODE_PRIVATE).getString("vk_loader_debug", null)
+            ?: "error"
+        env += "VK_LOADER_DEBUG=$vkDbg"
         env += "X86_GPU_STATUS=${statusMessage(ctx)}"
         env += "X86_WS_DATA=$wsDataAbs"
         env += "PRESENT_SHM=/mnt/data/present.shm"
@@ -136,7 +189,10 @@ object GpuStack {
         }
         // DXVK native overrides always (audio flags merged below). wine-launch may
         // strip d3d* when X86_DXWRAPPER=wined3d for black-screen bisect.
-        val dllOverride = StringBuilder("d3d8,d3d9,d3d10core,d3d11,dxgi=n,b")
+        val dllOverride = StringBuilder(
+            if (wrapper == "wined3d") "d3d8,d3d9,d3d10core,d3d11,dxgi=b"
+            else "d3d8,d3d9,d3d10core,d3d11,dxgi=n,b",
+        )
         if (AAUDIO_READY) {
             env += "ANDROID_ALSA_SERVER=/tmp/.sound/AS0"
             env += "ANDROID_ASERVER_USE_SHM=true"

@@ -61,7 +61,14 @@ object LaunchPipeline {
         forceGuestSmoke: Boolean = false,
         preferAndroidGuest: Boolean = true,
         forcePeSmoke: Boolean = false,
+        /** 0.1.69: wined3d bisect — written to ws.dataDir/dxwrapper + guestEnv X86_DXWRAPPER */
+        dxwrapper: String? = null,
     ): Plan {
+        if (!dxwrapper.isNullOrBlank()) {
+            runCatching {
+                File(ws.dataDir, "dxwrapper").writeText(dxwrapper.trim().lowercase() + "\n")
+            }
+        }
         val logDir = File(ws.dir, "logs").also { it.mkdirs() }
         val logFile = File(logDir, "session.log")
 
@@ -388,6 +395,7 @@ object LaunchPipeline {
         val kindMessage: String
         when (backend) {
             GraphicsBackend.GpuStack -> {
+                // 0.1.69: guestEnv resolves X86_DXWRAPPER from file/prefs/env (prepare may have written dxwrapper)
                 env += GpuStack.guestEnv(ctx, ws.dataDir.absolutePath)
                 kindMessage =
                     "Windows PE · GpuStack＋進程內 X（Winlator）→AHB Present · PRoot→Box64→Wine ${pe.name}"

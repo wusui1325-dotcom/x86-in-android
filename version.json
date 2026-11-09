@@ -3,5 +3,5 @@
   "versionName": "0.1.101",
   "versionCode": 102,
   "notes": "0.1.101: P0-A start ladder /exec /wait /machine x86 (ban //exec,//machine,i386; 100 dig 6× Unknown option); P0-B real create-fail dig (exclude PE Characteristic c0000040/c0000080 scrape; stamp create_fail=no_started_pid / create_fail_near_app); keep mmap32_creators=cmd,start mmap32_parent=0 mmap32_child=1 noexec=kept; never i386 MAIN; no hot bake; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "PENDING"
+  "tipSha": "3e5ddae"
 }

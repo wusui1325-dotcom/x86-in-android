@@ -8,6 +8,7 @@
   "uploadHeaders": {},
   "driveFolderId": "1n2ZPm-GOQV66ikxfnPh6XRLbio5PE6fz",
   "driveFolderName": "x86-a-log",
+  "driveOAuthClientId": "",
   "smokeWaitSeconds": 90,
-  "notes": "Set driveAccessToken via SharedPreferences x86_hot_smoke (not baked). Or switch uploadMode=https and point uploadUrl at a relay that writes into Drive folder x86-a-log."
+  "notes": "Use in-app 「連 Google」 (Drive scope) — do NOT paste OAuth tokens. Optional driveOAuthClientId = Web client id. Or uploadMode=https + uploadUrl → scripts/hot-smoke-drive-relay.py."
 }

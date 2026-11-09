@@ -91,7 +91,20 @@
     <string name="error_insufficient_storage">儲存空間不足：可用約 %1$s，下載約需 %2$s。請腾出空間後再試。</string>
     <string name="abi_min_sdk_note">僅 arm64-v8a · Android 9+</string>
     <string name="btn_hot_smoke_round">跑一輪熱更煙測</string>
+    <string name="btn_hot_connect_google">連 Google</string>
+    <string name="btn_hot_disconnect_google">解除 Google</string>
+    <string name="btn_hot_https_upload">改用 HTTPS 上傳</string>
+    <string name="dialog_hot_auth_title">上傳需要 Google 授權</string>
+    <string name="dialog_hot_auth_body">煙測 log 會上傳到 Drive 資料夾 x86-a-log。請一鍵「連 Google」授權（不要手貼 OAuth token）。若已有 relay，可改用 HTTPS 上傳。</string>
+    <string name="dialog_hot_https_title">設定 HTTPS 上傳</string>
+    <string name="dialog_hot_https_body">裝置只 POST log；relay（scripts/hot-smoke-drive-relay.py）寫入 Drive 並刪舊。範例：http://&lt;host&gt;:8787/upload/%s</string>
+    <string name="dialog_hot_https_hint">uploadUrl</string>
     <string name="toast_hot_smoke_started">熱更煙測開始（背景）…</string>
     <string name="toast_hot_smoke_done">熱更煙測：%1$s</string>
     <string name="toast_hot_smoke_busy">熱更煙測進行中</string>
+    <string name="toast_hot_need_auth">尚未連 Google — 請授權後再跑煙測</string>
+    <string name="toast_hot_google_ok">Google 已連線：%1$s</string>
+    <string name="toast_hot_https_saved">已改為 HTTPS 上傳</string>
+    <string name="status_hot_google_connected">Google：%1$s</string>
+    <string name="status_hot_google_none">Google：未連線</string>
 </resources>

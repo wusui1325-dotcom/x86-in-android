@@ -1,21 +1,26 @@
 #!/usr/bin/env python3
 """
-Minimal HTTPS→Drive relay stub for smokeHot uploads.
+HTTPS→Drive relay for smokeHot uploads.
 
-Device POST/PUT raw log body to this server; we write into Drive folder
-named literally x86-a-log (id configurable), then trash older smoke-*.log.
+Device POST/PUT raw log body here; we write into Drive folder x86-a-log, then
+trash older smoke-*.log (keep latest only).
 
-Credentials: GOOGLE_ACCESS_TOKEN env (OAuth user or service-account access token).
-This is intentionally dumb (stdlib http.server) for MVP / lab use — not production.
+Auth (first match wins):
+  1) GOOGLE_ACCESS_TOKEN env — ready Bearer token
+  2) GOOGLE_SERVICE_ACCOUNT_JSON / GOOGLE_APPLICATION_CREDENTIALS — path to SA JSON
+     (requires: pip install google-auth). Share folder x86-a-log with the SA email
+     as Editor once.
 
 Usage:
   export GOOGLE_ACCESS_TOKEN=ya29....
+  # or: export GOOGLE_SERVICE_ACCOUNT_JSON=/path/to/sa.json
   export DRIVE_FOLDER_ID=1n2ZPm-GOQV66ikxfnPh6XRLbio5PE6fz
   python3 scripts/hot-smoke-drive-relay.py --port 8787
 
-Device prefs:
+Device prefs (smokeHot):
   uploadMode=https
   uploadUrl=http://<host>:8787/upload/%s
+  uploadMethod=POST
 """
 from __future__ import annotations
 
@@ -24,18 +29,52 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 FOLDER_ID = os.environ.get("DRIVE_FOLDER_ID", "1n2ZPm-GOQV66ikxfnPh6XRLbio5PE6fz")
-TOKEN = os.environ.get("GOOGLE_ACCESS_TOKEN", "")
+TOKEN = os.environ.get("GOOGLE_ACCESS_TOKEN", "").strip()
+SA_JSON = (
+    os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
+    or os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+)
+_cached_sa_token: tuple[str, float] | None = None
+
+
+def resolve_token() -> str:
+    global TOKEN, _cached_sa_token
+    if TOKEN:
+        return TOKEN
+    if not SA_JSON:
+        raise RuntimeError(
+            "No credentials: set GOOGLE_ACCESS_TOKEN or GOOGLE_SERVICE_ACCOUNT_JSON"
+        )
+    now = time.time()
+    if _cached_sa_token and _cached_sa_token[1] > now + 60:
+        return _cached_sa_token[0]
+    try:
+        from google.oauth2 import service_account
+        from google.auth.transport.requests import Request
+    except ImportError as e:
+        raise RuntimeError(
+            "Service account JSON set but google-auth missing — pip install google-auth"
+        ) from e
+    scopes = ["https://www.googleapis.com/auth/drive"]
+    creds = service_account.Credentials.from_service_account_file(SA_JSON, scopes=scopes)
+    creds.refresh(Request())
+    token = creds.token
+    # cache ~50 minutes
+    _cached_sa_token = (token, now + 3000)
+    return token
 
 
 def drive_request(method: str, url: str, data: bytes | None = None, content_type: str | None = None):
+    token = resolve_token()
     req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {TOKEN}")
+    req.add_header("Authorization", f"Bearer {token}")
     if content_type:
         req.add_header("Content-Type", content_type)
     with urllib.request.urlopen(req, timeout=120) as resp:
@@ -43,8 +82,6 @@ def drive_request(method: str, url: str, data: bytes | None = None, content_type
 
 
 def upload_and_prune(name: str, body: bytes) -> dict:
-    if not TOKEN:
-        raise RuntimeError("GOOGLE_ACCESS_TOKEN empty")
     boundary = "relay_boundary"
     meta = json.dumps({"name": name, "parents": [FOLDER_ID]})
     parts = (
@@ -90,6 +127,25 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._handle()
 
+    def do_GET(self):
+        if self.path.startswith("/health"):
+            payload = json.dumps(
+                {
+                    "ok": True,
+                    "folder": FOLDER_ID,
+                    "token_env": bool(TOKEN),
+                    "sa_json": bool(SA_JSON),
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(404)
+        self.end_headers()
+
     def _handle(self):
         length = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(length) if length else b""
@@ -122,7 +178,12 @@ def main():
     ap.add_argument("--port", type=int, default=8787)
     ap.add_argument("--bind", default="0.0.0.0")
     args = ap.parse_args()
-    print(f"Drive folder={FOLDER_ID} token_set={bool(TOKEN)} listen={args.bind}:{args.port}")
+    print(
+        f"Drive folder={FOLDER_ID} token_env={bool(TOKEN)} sa_json={bool(SA_JSON)} "
+        f"listen={args.bind}:{args.port}"
+    )
+    if not TOKEN and not SA_JSON:
+        print("WARNING: no credentials yet — /upload will 500 until env is set", file=sys.stderr)
     HTTPServer((args.bind, args.port), Handler).serve_forever()
 
 

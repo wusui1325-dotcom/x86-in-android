@@ -1,3 +1,26 @@
+## 0.1.98 — NOEXEC kept (097 SIGILL root; not MMAP32)
+
+**Smoke (0.1.97 mainline):** `mmap32_parent=0` / `BOX64_MMAP32=0` landed, but
+`wine start //exec //wait` and ladder `wine cmd //c` still **SIGILL rc=132**
+right after Box64 emulated `ntdll.so`, before PE map of start.exe. Differential:
+095 `cmd //c` + **WINELOADERNOEXEC kept** → lived to NtCreate App; 097 explorer
+(NOEXEC kept) lives; only APP_LOAD start/cmd **`unset WINELOADERNOEXEC`** dies.
+Ladder-3 explorer reaches `NtCreateUserProcess(App) machine 0` with no started
+pid / 0× Loaded (residual A2).
+
+**P0 A1:** Delete `unset WINELOADERNOEXEC` in `wow64_direct` / `wow64_unix_seed`;
+inherit global `WINELOADERNOEXEC=1`; stamp `noexec=kept`. Primary =
+`wine cmd //c C:/App/app.exe` (`decide=direct_cmd64`); ladder-2 =
+`start //exec //wait` with NOEXEC kept. Keep `mmap32_parent=0` — never parent
+`export BOX64_MMAP32=1`; never i386 MAIN. Keep BinaryType_host + ntcreate_diag +
+C:/App forward-slash + RPCSS ready=1.
+
+**A2 (follow-up, non-blocking):** child-only MMAP32 (box64rc `[app.exe]` /
+wow64cpu) + Wow64 `machine=0x014c` for started pid / Loaded. DXVK x32 deferred.
+
+**Expect:** no start/cmd rc=132; `NtCreateUserProcess` App again (like 095);
+then A2 for started pid + Loaded; non-blue.
+
 ## 0.1.97 — MMAP32 parent=0 (096 SIGILL rollback)
 
 **Smoke (0.1.96-hot.1 / Path A 0.1.96):** BinaryType_host=SCS_32BIT_BINARY +

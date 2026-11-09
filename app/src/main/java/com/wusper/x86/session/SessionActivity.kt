@@ -272,6 +272,13 @@ class SessionActivity : ComponentActivity() {
                 var guestPresented by remember { mutableStateOf(false) }
                 var presentDiagLines by remember { mutableIntStateOf(0) }
                 var lastPresentDiag by remember { mutableStateOf("") }
+                // 0.1.64: sticky UI lines survive session.log overwrite every 400ms
+                var uiStickyLog by remember { mutableStateOf("") }
+                fun appendSticky(line: String) {
+                    val l = if (line.endsWith("\n")) line else "$line\n"
+                    uiStickyLog += l
+                    logText += l
+                }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
                 val inProcessInputRef = remember { AtomicReference<InProcessXInput?>(null) }
@@ -565,10 +572,11 @@ class SessionActivity : ComponentActivity() {
                         plan.graphicsBackend == GraphicsBackend.GpuStack
                     ) {
                         status = "啟動進程內 X"
-                        logText += "啟動 Winlator Java X → Present…\n"
                         guestPresented = false
                         presentDiagLines = 0
                         lastPresentDiag = ""
+                        uiStickyLog = ""
+                        appendSticky("啟動 Winlator Java X → Present…")
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
                         x.start()
@@ -576,15 +584,15 @@ class SessionActivity : ComponentActivity() {
                         val audio = InProcessAudio(this@SessionActivity)
                         audio.start()
                         inProcessAudio = audio
-                        logText += "音訊：ALSA→AAudio socket=${audio.socketPath()}\n"
+                        appendSticky("音訊：ALSA→AAudio socket=${audio.socketPath()}")
                         val xs = x.xServer
                         if (xs != null) {
                             val xin = InProcessXInput(xs)
                             xin.updateBlitFromSurface(1280, 720)
                             inProcessInputRef.set(xin)
-                            logText += "輸入橋：WinHandler 級（相對滑鼠／雙指右鍵／長按右鍵／滾輪／可選手把）\n"
+                            appendSticky("輸入橋：WinHandler 級（相對滑鼠／雙指右鍵／長按右鍵／滾輪／可選手把）")
                         }
-                        logText += "InProcessX imagefs=${x.imageFsRoot.absolutePath}\n"
+                        appendSticky("InProcessX imagefs=${x.imageFsRoot.absolutePath}")
                     }
                     val result = LaunchPipeline.start(plan)
                     status = when {
@@ -612,18 +620,15 @@ class SessionActivity : ComponentActivity() {
                     if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.GpuStack && surf != null && surf.isValid
                     ) {
+                        // 0.1.64: do NOT create PresentSurfaceBridge here — it is unused
+                        // (never start()) and shutdown() used to detach the live Surface.
                         presentBridge?.shutdown()
+                        presentBridge = null
                         frameBridge?.shutdown()
-                        NativeEngine.nativePresentAttachSurface(surf)
-                        logText += "Present：進程內 X Drawable → AHB → Surface（已 attach） ready=${NativeEngine.nativePresentReady()}\n"
-                        val bridge = PresentSurfaceBridge(
-                            dataDir = ws.dataDir,
-                            surface = surf,
-                            targetFps = 15,
-                            allowXwdFeeder = false,
-                            allowStub = false,
+                        val attachRc = NativeEngine.nativePresentAttachSurface(surf)
+                        appendSticky(
+                            "Present：進程內 X Drawable → AHB → Surface（已 attach） rc=$attachRc ready=${NativeEngine.nativePresentReady()}",
                         )
-                        presentBridge = bridge
                     } else if (result.ok && plan.mode == LaunchPipeline.Mode.WineProot &&
                         plan.graphicsBackend == GraphicsBackend.SoftLegacy && holder != null
                     ) {
@@ -675,10 +680,16 @@ class SessionActivity : ComponentActivity() {
                         if (lf != null && lf.exists()) {
                             val session = lf.readText()
                             val gpuLog = ws?.dataDir?.let { File(it, "gpu-stack.log") }
-                            logText = if (gpuLog != null && gpuLog.exists()) {
+                            val filePart = if (gpuLog != null && gpuLog.exists()) {
                                 session + "\n--- gpu-stack.log ---\n" + gpuLog.readText()
                             } else {
                                 session
+                            }
+                            // Keep Present/UI sticky lines at top so export + on-screen keep them
+                            logText = if (uiStickyLog.isNotBlank()) {
+                                uiStickyLog + "\n--- session.log ---\n" + filePart
+                            } else {
+                                filePart
                             }
                             // Prefer wineboot progress over generic 「執行中」/Present wait
                             val sawWineStart = "WINE_START" in logText
@@ -752,10 +763,11 @@ class SessionActivity : ComponentActivity() {
                         if (line != lastPresentDiag && presentDiagLines < 15) {
                             lastPresentDiag = line
                             presentDiagLines++
-                            logText += line + "\n"
+                            appendSticky(line)
                         } else if (line != lastPresentDiag) {
                             lastPresentDiag = line
                         }
+                        // 0.1.64: ready=true means window_ attached; only then honor presentOk
                         val ready = "ready=true" in stats
                         val presented = try { x.hasPresented() } catch (_: Throwable) { false }
                         if (!guestPresented && ready) {
@@ -763,7 +775,7 @@ class SessionActivity : ComponentActivity() {
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                             if (presented || ok > 0) {
                                 guestPresented = true
-                                logText += "PRESENT_DIAG guestPresented=true ok=$ok (overlay clear)\n"
+                                appendSticky("PRESENT_DIAG guestPresented=true ok=$ok (overlay clear)")
                             }
                         }
                     }
@@ -1294,6 +1306,10 @@ class SessionActivity : ComponentActivity() {
             "PRESENT_DIAG",
             "guestPresented",
             "stub-fallback",
+            "APP_LOAD",
+            "APP_RELAUNCH",
+            "APP_SEED",
+            "nonBlack",
             "WINELOADER=",
             "WINEPRELOADRESERVE",
             "could not load ntdll",

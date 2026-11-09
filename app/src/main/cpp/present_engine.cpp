@@ -429,7 +429,8 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
         width_ = width;
         height_ = height;
     }
-    if (!window_) return 0;
+    // 0.1.64: never fake-success without Surface
+    if (!window_) return -EINVAL;
     if (ensureEgl() == 0) {
         int rc = presentAhbGpu(external, width, height);
         if (rc == 0) return 0;
@@ -443,7 +444,7 @@ int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int s
     width_ = width;
     height_ = height;
     if (!window_) {
-        // stage into AHB as RGBA for later attach
+        // Stage into AHB for later attach, but return 1 so Java does NOT count presentOk
         int rc = ensureAhb(width, height);
         if (rc != 0) return rc;
         void* out = nullptr;
@@ -467,7 +468,7 @@ int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int s
             }
         }
         AHardwareBuffer_unlock(ahb_, nullptr);
-        return 0;
+        return 1; // staged only — not posted to Surface
     }
     // Fast path: one pass into window (no intermediate AHB write)
     return blitBgraToWindow(bgra, width, height, strideBytes);
@@ -497,7 +498,8 @@ int PresentEngine::presentRgba(const uint8_t* rgba, int width, int height, int s
     }
     AHardwareBuffer_unlock(ahb_, nullptr);
 
-    if (!window_) return 0;
+    // 0.1.64: refuse fake success — stub/RGBA must post to Surface
+    if (!window_) return -EINVAL;
     return postAhbToWindow();
 }
 

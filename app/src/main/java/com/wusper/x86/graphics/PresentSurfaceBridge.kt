@@ -32,13 +32,17 @@ class PresentSurfaceBridge(
     private var lastShmSeq = -1
     private var frameIndex = 0
     private var xwdScratch: ByteBuffer? = null
+    /** 0.1.64: only detach if THIS bridge called attach (GpuStack path must not steal) */
+    private val attachedByUs = AtomicBoolean(false)
 
     fun shutdown() {
         running.set(false)
         interrupt()
-        try {
-            NativeEngine.nativePresentDetach()
-        } catch (_: Throwable) {
+        if (attachedByUs.compareAndSet(true, false)) {
+            try {
+                NativeEngine.nativePresentDetach()
+            } catch (_: Throwable) {
+            }
         }
     }
 
@@ -49,6 +53,7 @@ class PresentSurfaceBridge(
             lastInfo = "Present 建立失敗 create=$createRc attach=$attachRc"
             return
         }
+        attachedByUs.set(true)
         lastInfo = "Present AHB→Surface 就緒"
         onBlitRect?.invoke(lastBlitRect)
 
@@ -113,7 +118,9 @@ class PresentSurfaceBridge(
                 }
             }
         }
-        NativeEngine.nativePresentDetach()
+        if (attachedByUs.compareAndSet(true, false)) {
+            NativeEngine.nativePresentDetach()
+        }
     }
 
     private fun bitmapToRgbaDirect(bmp: android.graphics.Bitmap): ByteBuffer? {

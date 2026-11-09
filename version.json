@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.63",
-  "versionCode": 64,
-  "notes": "0.1.63: Present→Surface last mile — overlay guestPresented, PRESENT_DIAG, largest-child+stub-fallback, APP_WIN=C:/App/app.exe (no BEL)"
+  "versionName": "0.1.64",
+  "versionCode": 65,
+  "notes": "0.1.64: ready=window only (no fake presentOk); sticky PRESENT_DIAG; explorer then APP_LOAD; HUD bar on black"
 }

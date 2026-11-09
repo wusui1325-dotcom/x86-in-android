@@ -1,3 +1,21 @@
+## 0.1.64 — real Present (window-ready) + APP_LOAD + sticky diag
+
+**Smoke (0.1.63):** overlay 「等待客體」cleared but Surface pure black. Export had
+**zero** PRESENT_DIAG (logText wiped every 400ms). explorer.exe Loaded; **never**
+`C:/App/app.exe`. Fake presentOk: `ready()` was ahb OR window; presentAhb/stub
+returned 0 without window_.
+
+**Fix:**
+- `ready()` requires `window_`; presentAhb/stub/rgba without window → -EINVAL;
+  presentBgra stages but returns 1 (no presentOk)
+- Sticky `uiStickyLog` keeps Present/PRESENT_DIAG across session.log overwrite
+- Explorer desktop alone → `APP_LOAD C:/App/app.exe`; `APP_RELAUNCH` once at 15s
+- Nearly-black frames get bright 8px HUD bar (`nonBlack`/`hud` in pathStats)
+- GpuStack path no longer assigns dead PresentSurfaceBridge (shutdown used to detach)
+
+**Expect:** PRESENT_DIAG with waitAttach then ready=true after attach; cyan/magenta
+HUD or desktop pixels; APP_LOAD Loaded fingerprint; overlay clears only after real post.
+
 ## 0.1.63 — Present→Surface last mile (overlay + diag + APP_WIN)
 
 **Smoke (0.1.62):** NTDLL_ANON_PE / seed-copy / RpcSs ready / WINE_START explorer+app OK;

@@ -33,7 +33,8 @@ public:
 
     int width() const { return width_; }
     int height() const { return height_; }
-    bool ready() const { return ahb_ != nullptr || window_ != nullptr; }
+    /** 0.1.64: ready = Surface attached (window_). AHB alone is NOT ready. */
+    bool ready() const { return window_ != nullptr; }
     bool hasWindow() const { return window_ != nullptr; }
     bool eglReady() const { return egl_ok_; }
 

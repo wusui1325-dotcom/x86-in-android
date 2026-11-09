@@ -3,5 +3,5 @@
   "versionName": "0.1.102",
   "versionCode": 103,
   "notes": "0.1.102: P0 hard-gate APP_LOAD on RPCSS ready=1 + desktop MAP_WAIT ready (TERM orphan sc on soft-cap; recover/re-prestart; forbid soft-continue ready=0; no MAP_WAIT timeout→APP_LOAD); hang-ladder per-mode dwell ≥10–12s (not absolute HB); dig creator_hang=ntdll_wrap + HOLD; KEEP /exec+/machine x86 + mmap32_creators + P0-B stamps + parent MMAP32=0 + WINELOADERNOEXEC; restore 100 CPIW baseline; no hot bake; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "PENDING"
+  "tipSha": "e9b7da2"
 }

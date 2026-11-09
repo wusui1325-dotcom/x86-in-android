@@ -13,12 +13,12 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.57: OFFLINE patch system.reg for RpcSs/MountMgr (never wine reg — 0.1.56 hung).
-# Direct rpcss.exe + winedevice MountMgr with hard timeouts; re-seed win32u/user32.
-# 0.1.56: soft-continue + winedevice seed (reg-add hung at RPCSS_REG precheck).
-# 0.1.55: no soft-kill on markers; soften wipe. 0.1.54: seed rpcss/mountmgr.
-# 0.1.53: winex11. 0.1.52: seed-copy + NTDLL_ANON_PE.
-WINE_LAUNCH_STAMP=0.1.57
+# 0.1.58: force WINEARCH=win64 + offline #arch=win64 heal (0.1.57 RpcSs ok but
+# wine refused: "32-bit installation cannot support 64-bit applications").
+# Keep offline RpcSs/MountMgr; direct rpcss; soft-continue; NTDLL_ANON_PE.
+# 0.1.57: offline system.reg RpcSs/MountMgr. 0.1.56: soft-continue + winedevice.
+# 0.1.55: no soft-kill. 0.1.52: seed-copy.
+WINE_LAUNCH_STAMP=0.1.58
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -262,6 +262,8 @@ unset WINEPRELOADRESERVE
 # Winlator 同款：關閉 MMAP32，讓 39-bit VA 下 prereserve／mmap 行為較穩
 export BOX64_MMAP32=0
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
+export WINEARCH="${WINEARCH:-win64}"
+log "WINEARCH=$WINEARCH (force win64 for x86_64-unix wine)"
 mkdir -p "$WINEPREFIX"
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
@@ -934,6 +936,7 @@ SMOKE_LOG_SAVE="${BOX64_LOG-}"
 export WINEDEBUG="${WINE_PE_SMOKE_WINEDEBUG:-err+all,fix+all}"
 log "WINE_PE_SMOKE WINEDEBUG=$WINEDEBUG"
 export WINEPREFIX="$SMOKE_PREFIX"
+export WINEARCH=win64
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
 # PE 探測開短暫 LOG 以便抓 LdrInitializeThunk／prereserve
@@ -1169,7 +1172,8 @@ mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
 export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
-log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX DISPLAY=${DISPLAY:-unset}"
+export WINEARCH=win64
+log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX WINEARCH=$WINEARCH DISPLAY=${DISPLAY:-unset}"
 
 
 # ---- 0.1.53: Wine graphics driver (winex11) — registry + probe --------------------
@@ -1300,6 +1304,153 @@ prefix_is_complete() {
   fi
   return 0
 }
+
+# ---- 0.1.58: force/heal win64 prefix (#arch=win64 + syswow64 + WINEARCH) ----------
+ensure_win64_prefix() {
+  # Wine server: if system.reg loads without #arch= → PREFIX_32BIT (registry.c).
+  # 64-bit wine then prints: "'…' is a 32-bit installation, it cannot support 64-bit applications."
+  # Heal offline: set #arch=win64 in system.reg/user.reg/userdef.reg; mkdir syswow64.
+  # Never wine reg. Call before wineboot AND again after any wineserver -k / offline patch.
+  local reason="${1:-heal}"
+  local p="$WINEPREFIX"
+  export WINEARCH=win64
+  mkdir -p "$p/drive_c/windows/system32" "$p/drive_c/windows/syswow64" 2>/dev/null || true
+
+  local arch_sys=missing arch_user=missing arch_udef=missing
+  if [ -f "$p/system.reg" ]; then
+    arch_sys=$(grep -m1 '^#arch=' "$p/system.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
+    arch_sys=${arch_sys:-missing}
+  fi
+  if [ -f "$p/user.reg" ]; then
+    arch_user=$(grep -m1 '^#arch=' "$p/user.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
+    arch_user=${arch_user:-missing}
+  fi
+  if [ -f "$p/userdef.reg" ]; then
+    arch_udef=$(grep -m1 '^#arch=' "$p/userdef.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
+    arch_udef=${arch_udef:-missing}
+  fi
+  local wow=no
+  [ -d "$p/drive_c/windows/syswow64" ] && wow=yes
+  log "WINE_ARCH precheck reason=$reason WINEARCH=$WINEARCH sys=#arch=$arch_sys user=#arch=$arch_user udef=#arch=$arch_udef syswow64=$wow"
+
+  set +e
+  python3 - "$p" <<'PY' | tee -a /mnt/data/wine-arch.out
+import os, sys, re
+prefix = sys.argv[1]
+files = ["system.reg", "user.reg", "userdef.reg"]
+changed = []
+results = {}
+
+def heal(path):
+    if not os.path.isfile(path):
+        # Create minimal win64 stub so wineserver won't invent win32
+        body = "WINE REGISTRY File\n;; x86-in-android win64 stub\n\n#arch=win64\n"
+        tmp = path + ".arch-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(body)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return "created"
+    raw = open(path, "r", encoding="utf-8", errors="replace").read()
+    orig = raw
+    # Normalize newlines lightly
+    if "#arch=win64" in raw and "#arch=win32" not in raw:
+        # still ensure it's a top-level directive (not only in a comment elsewhere)
+        if re.search(r"(?m)^#arch=win64\s*$", raw):
+            return "ok"
+    # Remove any existing #arch= lines
+    raw2 = re.sub(r"(?m)^#arch=.*\n?", "", raw)
+    # Insert after header line
+    if raw2.lstrip().startswith("WINE REGISTRY"):
+        lines = raw2.splitlines(True)
+        # find first non-empty non-comment-or-header spot after first line
+        insert_at = 1
+        while insert_at < len(lines) and (lines[insert_at].startswith(";;") or lines[insert_at].strip() == ""):
+            insert_at += 1
+        lines.insert(insert_at, "\n#arch=win64\n")
+        raw2 = "".join(lines)
+    else:
+        raw2 = "WINE REGISTRY File\n;; offline-arch-heal\n\n#arch=win64\n\n" + raw2
+    if raw2 != orig:
+        tmp = path + ".arch-tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(raw2)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp, path)
+        return "healed"
+    return "ok"
+
+for name in files:
+    path = os.path.join(prefix, name)
+    try:
+        results[name] = heal(path)
+        if results[name] in ("healed", "created"):
+            changed.append(name)
+    except Exception as e:
+        results[name] = "ERR:%s" % e
+
+# verify
+ver = {}
+for name in files:
+    path = os.path.join(prefix, name)
+    arch = "missing"
+    if os.path.isfile(path):
+        for line in open(path, encoding="utf-8", errors="replace"):
+            if line.startswith("#arch="):
+                arch = line.strip().split("=", 1)[1]
+                break
+    ver[name] = arch
+
+wow_dir = os.path.join(prefix, "drive_c", "windows", "syswow64")
+os.makedirs(wow_dir, exist_ok=True)
+wow = os.path.isdir(wow_dir)
+ok = all(ver.get(n) == "win64" for n in files)
+print("offline arch results=%s ver=%s syswow64=%s ok=%s changed=%s" % (
+    results, ver, wow, ok, changed))
+sys.exit(0 if ok else 2)
+PY
+  ARCH_RC=$?
+  set -e
+  if [ -f /mnt/data/wine-arch.out ]; then
+    while read -r line; do log "WINE_ARCH.py: $line"; done < /mnt/data/wine-arch.out || true
+    : > /mnt/data/wine-arch.out
+  fi
+
+  arch_sys=missing
+  if [ -f "$p/system.reg" ]; then
+    arch_sys=$(grep -m1 '^#arch=' "$p/system.reg" 2>/dev/null | sed 's/^#arch=//' | tr -d '\r' || echo missing)
+  fi
+  wow=no
+  [ -d "$p/drive_c/windows/syswow64" ] && wow=yes
+  log "WINE_ARCH ensure done offline=yes #arch=$arch_sys syswow64=$wow py_rc=$ARCH_RC WINEARCH=$WINEARCH"
+  if [ "$arch_sys" != "win64" ]; then
+    log "WARN: WINE_ARCH heal did not stick (#arch=$arch_sys)"
+    return 1
+  fi
+  return 0
+}
+
+wine_arch_auto_repair_once() {
+  # Called when wine still prints 32-bit installation after heal.
+  local marker="$WINEPREFIX/.arch-repair-done"
+  if [ -f "$marker" ]; then
+    log "WINE_ARCH FATAL 32bit-prefix (already repaired once this prefix) — refuse"
+    return 1
+  fi
+  log "WINE_ARCH FATAL 32bit-prefix — auto-repair wipe+reinit once"
+  : > "$marker"
+  wipe_wine_prefix "$WINEPREFIX" "arch-32bit-repair"
+  export WINEARCH=win64
+  ensure_win64_prefix "post-wipe"
+  ensure_prefix_exec
+  run_wineboot_init "arch-repair" 180
+  ensure_win64_prefix "post-wineboot"
+  ensure_rpcss_mountmgr_service_reg
+  ensure_win64_prefix "post-rpcss"
+  return 0
+}
+
+
 
 wipe_wine_prefix() {
   local p="${1:-$WINEPREFIX}"
@@ -1490,6 +1641,10 @@ run_wineboot_update() {
     log "WINEBOOT_UPDATE.out: $line"
   done || true
 }
+
+# 0.1.58: heal win64 BEFORE wineboot / skip — existing prefixes may lack #arch=win64
+"$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+ensure_win64_prefix "pre-wineboot" || log "WARN: WINE_ARCH pre-wineboot heal soft-fail"
 
 # 0.1.55 wipe policy:
 # - complete → skip init
@@ -1863,16 +2018,66 @@ rpcss_prestart() {
 }
 
 ensure_rpcss_mountmgr_service_reg
+# wineserver was killed during offline RpcSs patch — re-assert #arch=win64 before PRESTART
+ensure_win64_prefix "pre-prestart" || log "WARN: WINE_ARCH pre-prestart heal soft-fail"
 rpcss_diag
 rpcss_prestart
 
+# If PRESTART hit 32-bit wall, auto-repair once then retry PRESTART
+if grep -q "is a 32-bit installation" /mnt/data/wine-rpcss.out 2>/dev/null; then
+  log "WINE_ARCH FATAL 32bit-prefix detected in RPCSS_PRESTART"
+  if wine_arch_auto_repair_once; then
+    ensure_prefix_exec
+    ensure_graphics_x11_reg
+    rpcss_diag
+    rpcss_prestart
+  else
+    log "FATAL: WINE_ARCH 32bit-prefix unrepaired — refuse WINE_START"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit 32
+  fi
+fi
+
 # 0.1.53: /desktop=name,WxH,x11 — skip mac/wayland probe; LoadLibrary winex11.drv only
-log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 $*"
+export WINEARCH=win64
+log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 $* (WINEARCH=$WINEARCH)"
 : > /mnt/data/wine-run.out
 set +e
 "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$@" >>/mnt/data/wine-run.out 2>&1 &
 WINE_PID=$!
 log "WINE_START pid=$WINE_PID (heartbeat on)"
+# Early 32-bit detect (2s) — repair once rather than silent WINE_EXIT=1
+sleep 2
+if grep -q "is a 32-bit installation" /mnt/data/wine-run.out 2>/dev/null; then
+  log "WINE_ARCH FATAL 32bit-prefix detected in WINE_START"
+  kill -TERM "$WINE_PID" 2>/dev/null || true
+  sleep 1
+  kill -KILL "$WINE_PID" 2>/dev/null || true
+  wait "$WINE_PID" 2>/dev/null || true
+  if wine_arch_auto_repair_once; then
+    ensure_prefix_exec
+    ensure_graphics_x11_reg
+    rpcss_prestart
+    : > /mnt/data/wine-run.out
+    "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$@" >>/mnt/data/wine-run.out 2>&1 &
+    WINE_PID=$!
+    log "WINE_START retry-after-arch-repair pid=$WINE_PID"
+    sleep 2
+    if grep -q "is a 32-bit installation" /mnt/data/wine-run.out 2>/dev/null; then
+      log "FATAL: WINE_ARCH 32bit-prefix persists after repair"
+      kill -KILL "$WINE_PID" 2>/dev/null || true
+      [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+      [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+      exit 32
+    fi
+  else
+    log "FATAL: WINE_ARCH 32bit-prefix unrepaired — refuse"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit 32
+  fi
+fi
 HB=0
 LAST_BYTES=0
 while kill -0 "$WINE_PID" 2>/dev/null; do

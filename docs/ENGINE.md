@@ -1,3 +1,17 @@
+## 0.1.48 — PREFIX_EXEC plain rootfs scratch (no guest tmpfs)
+
+**Bug (0.1.47 smoke):** `tmpfs mount claimed` on `.wine/.pe-exec` / `.wine-pe-exec` / `/tmp/.wine-pe-exec`
+then immediate `ls: cannot access … No such file` — PRoot guest `mount -t tmpfs` returns 0 but
+the mountpoint **vanishes** (ENOENT). More path candidates cannot fix a broken mount primitive.
+
+**Fix:** Scratch = **plain directory** under rootfs (`/opt/wine-pe-exec`, then `/var/tmp/…`,
+`/home/xuser/…`) — same FS as pe_ok `/opt/wine`. No guest `mount -t tmpfs` except last-resort
+with immediate verify. Copy PE tree → `mount --bind` over system32 / x86_64-windows. Keep
+0.1.47 pe_ok FATAL gate + mid≥`0x1200000`.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.48` → `PREFIX_EXEC scratch ok mode=plain-dir path=/opt/wine-pe-exec`
+→ `PREFIX_EXEC bind system32 ok` → `post-bind probe pe_ok=yes` → `PREFIX_EXEC ok mode=scratch+bind… pe_ok=yes`.
+
 ## 0.1.47 — PREFIX_EXEC pe_ok required (no false green) + scratch re-verify
 
 **Bug (0.1.46 dig):** `PREFIX_EXEC ok mode=tmpfs+bind … pe_ok=no` still returned success —

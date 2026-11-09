@@ -13,9 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.46: PREFIX_EXEC scratch on durable $WINEPREFIX/.pe-exec (not ephemeral /tmp);
-# verify exists+writable+mounted after mount; keep sys32 bind + STACK_HEAD mid>=0x1200000
-WINE_LAUNCH_STAMP=0.1.47
+# 0.1.48: PREFIX_EXEC scratch = plain rootfs dir (NO guest mount -t tmpfs).
+# PRoot mount -t tmpfs claims success then path ENOENT vanishes — never rely on it.
+# Scratch under /opt|/var (same FS as pe_ok /opt/wine); bind over sys32/pe. Keep pe_ok FATAL.
+WINE_LAUNCH_STAMP=0.1.48
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -344,6 +345,7 @@ ensure_prefix_exec() {
 
   scratch_verify() {
     local s="$1"
+    local need_mount="${2:-0}"
     if [ ! -d "$s" ]; then
       log "PREFIX_EXEC verify FAIL not-dir path=$s"
       return 1
@@ -353,37 +355,80 @@ ensure_prefix_exec() {
       return 1
     fi
     rm -f "$s/.writetest" 2>/dev/null || true
-    if ! path_is_mounted "$s"; then
+    if [ "$need_mount" = "1" ] && ! path_is_mounted "$s"; then
       log "PREFIX_EXEC verify FAIL not-in-/proc/mounts path=$s"
       return 1
     fi
-    # mkdir+rm probe on mount root (catches vanished mountpoint)
     if ! mkdir "$s/.verify-mkdir" 2>/dev/null; then
       log "PREFIX_EXEC verify FAIL cannot mkdir under path=$s"
       return 1
     fi
     rmdir "$s/.verify-mkdir" 2>/dev/null || true
-    log "PREFIX_EXEC verify ok path=$s"
+    # Drop a tiny probe file and mmap PROT_EXEC when python available (catches noexec early)
+    if [ -f "$pe_ntdll" ]; then
+      cp -f "$pe_ntdll" "$s/.pe-probe.dll" 2>/dev/null || true
+      if [ -f "$s/.pe-probe.dll" ]; then
+        if ! probe_pe_exec "$s/.pe-probe.dll"; then
+          log "PREFIX_EXEC verify FAIL pe-probe noexec path=$s"
+          rm -f "$s/.pe-probe.dll" 2>/dev/null || true
+          return 1
+        fi
+        rm -f "$s/.pe-probe.dll" 2>/dev/null || true
+      fi
+    fi
+    log "PREFIX_EXEC verify ok path=$s need_mount=$need_mount"
     return 0
   }
 
-  # Prefer durable guest paths; /tmp last (PRoot may claim mount then lose the path)
+  # Prefer plain rootfs dirs (same FS as pe_ok /opt/wine). Guest mount -t tmpfs is broken
+  # under this PRoot (claim success → path ENOENT). Optional: reuse already-live tmpfs.
   prepare_scratch() {
-    local candidates="$p/.pe-exec /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec"
     local c
-    for c in $candidates; do
-      log "PREFIX_EXEC scratch try path=$c"
+    # 1) Reuse an already-mounted + accessible pe-exec/tmpfs if sticky
+    for c in /opt/wine-pe-exec /var/tmp/wine-pe-exec /home/xuser/wine-pe-exec \
+             "$p/.pe-exec" /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec /dev/shm/wine-pe-exec; do
       if path_is_mounted "$c"; then
+        log "PREFIX_EXEC scratch try reuse-mounted path=$c"
         log_diag already-mounted "$c"
-        if scratch_verify "$c"; then
+        if scratch_verify "$c" 1; then
           scratch="$c"
-          log "PREFIX_EXEC tmpfs scratch already mounted path=$scratch"
+          log "PREFIX_EXEC scratch ok mode=reuse-mounted path=$scratch"
           return 0
         fi
-        log "PREFIX_EXEC scratch mount stale/vanished — umount $c"
+        log "PREFIX_EXEC scratch mounted but stale — umount $c"
         umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
       fi
-      # ensure parent exists
+    done
+
+    # 2) Plain durable dirs on rootfs (NO mount -t tmpfs)
+    for c in /opt/wine-pe-exec /var/tmp/wine-pe-exec /home/xuser/wine-pe-exec; do
+      log "PREFIX_EXEC scratch try path=$c mode=plain-dir"
+      case "$c" in
+        */*) mkdir -p "${c%/*}" 2>/dev/null || true ;;
+      esac
+      if [ -e "$c" ] && [ ! -d "$c" ]; then
+        rm -f "$c" 2>/dev/null || true
+      fi
+      if [ ! -d "$c" ]; then
+        mkdir -p "$c" 2>/dev/null || true
+      fi
+      if [ ! -d "$c" ]; then
+        log "PREFIX_EXEC scratch mkdir fail path=$c"
+        log_diag mkdirfail "$c"
+        continue
+      fi
+      log_diag pre-plain "$c"
+      if scratch_verify "$c" 0; then
+        scratch="$c"
+        log "PREFIX_EXEC scratch ok mode=plain-dir path=$scratch"
+        return 0
+      fi
+      log "PREFIX_EXEC scratch plain-dir verify fail path=$c — try next"
+    done
+
+    # 3) Last resort: guest tmpfs (known flaky) — only accept if post-mount verify sticks
+    for c in /var/tmp/.wine-pe-exec-tmpfs /tmp/.wine-pe-exec; do
+      log "PREFIX_EXEC scratch try path=$c mode=tmpfs-lastresort"
       case "$c" in
         */*) mkdir -p "${c%/*}" 2>/dev/null || true ;;
       esac
@@ -395,7 +440,6 @@ ensure_prefix_exec() {
       fi
       if [ ! -d "$c" ]; then
         log "PREFIX_EXEC scratch mkdir mountpoint fail path=$c"
-        log_diag mkdirfail "$c"
         continue
       fi
       log_diag pre-mount "$c"
@@ -406,25 +450,20 @@ ensure_prefix_exec() {
         size_ok=512M
       else
         log "PREFIX_EXEC tmpfs mount syscall failed path=$c"
-        log_diag mountfail "$c"
-        if path_is_mounted "$c" && scratch_verify "$c"; then
-          scratch="$c"
-          log "PREFIX_EXEC tmpfs scratch ok (race-reuse) path=$scratch"
-          return 0
-        fi
         continue
       fi
       log "PREFIX_EXEC tmpfs mount claimed size=$size_ok path=$c"
       log_diag post-mount "$c"
-      if scratch_verify "$c"; then
+      if scratch_verify "$c" 1; then
         scratch="$c"
-        log "PREFIX_EXEC tmpfs scratch ok size=$size_ok path=$scratch"
+        log "PREFIX_EXEC scratch ok mode=tmpfs path=$scratch size=$size_ok"
         return 0
       fi
-      log "PREFIX_EXEC scratch vanished after mount — try next durable path"
+      log "PREFIX_EXEC scratch vanished after tmpfs mount — try next"
       umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
     done
-    log "FATAL: PREFIX_EXEC no durable tmpfs scratch (tried $p/.pe-exec /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec)"
+
+    log "FATAL: PREFIX_EXEC no durable scratch (plain-dir + tmpfs-lastresort all failed)"
     exit 1
   }
 
@@ -472,7 +511,7 @@ ensure_prefix_exec() {
   fi
 
   prepare_scratch
-  if [ -z "$scratch" ] || ! scratch_verify "$scratch"; then
+  if [ -z "$scratch" ] || ! scratch_verify "$scratch" 0; then
     log "FATAL: PREFIX_EXEC scratch not verified after prepare path=${scratch:-unset}"
     log_diag fatal-scratch "${scratch:-/}"
     exit 1
@@ -577,8 +616,8 @@ ensure_prefix_exec() {
   grep -E 'pe-exec|wine-pe|system32|x86_64-windows' /proc/mounts 2>/dev/null | while read -r line; do
     log "PREFIX_EXEC mountgrep[post-bind]: $line"
   done || true
-  if ! scratch_verify "$scratch"; then
-    log "FATAL: PREFIX_EXEC scratch vanished after bind (nested tmpfs not sticky) path=$scratch"
+  if ! scratch_verify "$scratch" 0; then
+    log "FATAL: PREFIX_EXEC scratch vanished after bind path=$scratch"
     log_diag fatal-post-bind "$scratch"
     exit 1
   fi
@@ -589,26 +628,26 @@ ensure_prefix_exec() {
   log "PREFIX_EXEC post-bind probe pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch pe=$pe_ntdll sys32=$sys32/ntdll.dll"
 
   if [ "$pe_state" = "yes" ] && [ "$sys32_state" = "yes" ]; then
-    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=yes scratch=$scratch"
-    echo "mode=tmpfs+bind-sys32 scratch=$scratch pe_ok=yes" > "$ok_marker"
+    log "PREFIX_EXEC ok mode=scratch+bind sys32=$sys32/ntdll.dll pe_ok=yes scratch=$scratch"
+    echo "mode=scratch+bind-sys32 scratch=$scratch pe_ok=yes" > "$ok_marker"
     return 0
   fi
 
   # preseed only if pe truly exec AND sys32 is bound (ntdll may appear after wineboot)
   if [ "$pe_state" = "yes" ] && [ ! -f "$sys32/ntdll.dll" ] && path_is_mounted "$sys32"; then
-    log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch pe_ok=yes (ntdll will land on exec tmpfs)"
-    echo "mode=tmpfs+bind-preseed scratch=$scratch pe_ok=yes" > "$ok_marker"
+    log "PREFIX_EXEC ok mode=scratch+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch pe_ok=yes (ntdll will land on exec scratch)"
+    echo "mode=scratch+bind-preseed scratch=$scratch pe_ok=yes" > "$ok_marker"
     return 0
   fi
 
   if [ "$pe_state" = "no" ]; then
-    log "FATAL: PREFIX_EXEC pe_ok=no after tmpfs+bind — refusing false green (pe=$pe_ntdll scratch=$scratch)"
+    log "FATAL: PREFIX_EXEC pe_ok=no after scratch+bind — refusing false green (pe=$pe_ntdll scratch=$scratch)"
     log_diag final-pe "$pe_dir"
     log_diag final-scratch "$scratch"
     exit 1
   fi
 
-  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32 pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch)"
+  log "FATAL: PREFIX_EXEC probe still fail after scratch+bind — noexec ntdll unresolved (sys32=$sys32 pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch)"
   log_diag final-sys32 "$sys32"
   log_diag final-scratch "$scratch"
   exit 1

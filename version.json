@@ -3,5 +3,5 @@
   "versionName": "0.1.112",
   "versionCode": 114,
   "notes": "0.1.112: Dig111 Boss纯黑 — Present stuck on empty explorer desk (mappedKids=0 desktopOnly=1) despite App HWND/Xid SET_DRAWABLE; guestPresented latch FP. Knives: (A) force-map+SparseArray scan+retarget Present to App drawable; explorer never bestApp; (B) guestPresented requires live desktopOnly=0+(mappedKids>=1|hwnd!=0); sticky present_black; (C) seed syswow64 crypt32+comdlg32; APP_HWND_WAIT requires nonzero hwnd. KEEP 111 GRAN_ALIGN/amd64_wow64/mmap32_guest=0/NOEXEC/cmdline. No trampoline/hot/FF/DXVK x32. vc114.",
-  "tipSha": "PENDING"
+  "tipSha": "fb1e475"
 }

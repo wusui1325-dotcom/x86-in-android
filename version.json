@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.109",
-  "versionCode": 111,
-  "notes": "0.1.109: P0 App-only. Dig108: trampoline FAIL systemic \u2014 ANY MACHINE_TYPE=i386 CreateProcess under staging-amd64+box64+NOEXEC refuses started pid; wow64cpu never inits. Root: classic i386-unix re-exec path. Knives: (1) Wine\u2192staging-amd64-wow64 (0\u00d7 i386-unix; in-process wow64cpu; ntdll identical\u2192anon-pe kept); (2) DROP trampoline \u2014 PRIMARY start /machine x86 /wait /exec C:\\App\\app.exe (KEEP 107 order); canary gate; (3) real NTSTATUS hex dig + fixed canary 14c/started_pid_cmd. KEEP 102-108 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32. No hot/soft-continue/Present/DXVK x32/FF. vc111.",
-  "tipSha": "2df288c"
+  "versionName": "0.1.110",
+  "versionCode": 112,
+  "notes": "0.1.110: P0 App-only. Dig109: amd64_wow64+DROP trampoline PASS flavor/14c, but child wine [app.exe] BOX64_MMAP32=1 → ntdll set_mem_area_state assert → SIGABRT before wow64cpu (wow64cpu_init=[]; started=0; shellex). Knives: (A) amd64_wow64 box64rc guest/host MMAP32=0; (B) dig mmap32_granularity_assert + gle_raw + create_class; (C) canary same argv, dig-before-kill, PASS=14c+started_pid_cmd. KEEP 107 order/NOEXEC/parent_mmap32=0. No trampoline/hot/Present/DXVK x32/FF. vc112.",
+  "tipSha": "PENDING"
 }

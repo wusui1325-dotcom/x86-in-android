@@ -38,20 +38,23 @@ path_is_mounted() {
   return 1
 }
 
-# 0.1.109: P0 App-only — Dig 108: trampoline FAIL systemic. ANY MACHINE_TYPE=i386
-# (14c) CreateProcess under box64+wine64 staging-amd64 refuses started pid;
-# wow64cpu never inits; ShellExecuteEx fatal; canary machine_cmd_014c=0 (started_pid=1
-# was start.exe amd64 only). Root: Kron4ek staging-amd64 ships i386-unix → classic
-# wine32 re-exec path; with WINELOADERNOEXEC=1 + no box86, 14c create aborts.
-# Knives (STOP argv/trampoline skin-swaps):
-# (1) Wine package → staging-amd64-wow64 (0× i386-unix; in-process wow64cpu PE
-#     thunk; ntdll.so identical → NTDLL_ANON_PE kept); stamp wine_flavor=;
-# (2) DROP trampoline — PRIMARY back to start /machine x86 /wait /exec C:\App\app.exe
-#     (KEEP 107 machine-before-exec); canary kept as gate (want 14c+started_pid_cmd);
-# (3) Surface REAL NTSTATUS hex on 14c NtCreate (c000xxxx / returning status /
-#     not-supported-machine / pe_file_info); fix canary dig regex (syswow64\cmd).
-# KEEP 102-108 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/PRIMARY order/
-# dblslash/phase status/log hide/BSOD. No hot/soft-continue/Present/DXVK x32/FF.
+# 0.1.110: P0 App-only — Dig 109: flavor amd64_wow64 PASS + trampoline DROPPED +
+# App NtCreate machine 14c, but child wine for app.exe applies box64rc [app.exe]
+# BOX64_MMAP32=1 → ntdll set_mem_area_state granularity ASSERT → SIGABRT before
+# wow64cpu maps (wow64cpu_init=[]; started_pid_after_app=0; shellex fatal;
+# FormatMessage/GLE empty). Canary timeout-blind 8s (machine_cmd_014c=0).
+# Knives (KEEP 107 argv order; NO trampoline restore):
+# (A) amd64_wow64 → box64rc guest/host MMAP32=0 ([app.exe]/wow64cpu[/syswow64]);
+#     keep parent env MMAP32=0; stamp mmap32_wow64_guest=0; require wow64cpu_init
+#     non-empty after machine-14c create; +wow64,+module WINEDEBUG.
+# (B) Dig real create trail: set_mem_area_state/SIGABRT → create_fail=
+#     mmap32_granularity_assert; separate create-fail vs create-ok-no-start;
+#     raw GLE hex when FormatMessage failed.
+# (C) Canary same argv as App; dig NtCreate/assert/fatal BEFORE kill; PASS iff
+#     machine_cmd_014c=1 + started_pid_cmd=1 (cmd image, never start.exe).
+# (D) deferred — only if A–C still show cpu never maps (NOEXEC child trial).
+# KEEP 102-109 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/parent_mmap32=0/PRIMARY
+# machine_wait_exec_path. No hot/soft-continue/Present/DXVK x32/FF/trampoline.
 # # 0.1.107: P0 A2+BSOD — Dig 106: ladder/dig/status/log OK but A2 REGRESS 14c→0
 # because PRIMARY `start /exec /machine x86` → Wine GetBinaryTypeW("/machine")
 # ( /exec consumes rest as CreateProcess cmdline ) → ShellExecuteEx File not found;
@@ -264,7 +267,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.109
+WINE_LAUNCH_STAMP=0.1.110
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -841,7 +844,7 @@ BOX64RC
 export BOX64_RCFILE="$BOX64_RC_PATH"
 # NORCFILES must be 0 for RCFILE to load (re-asserted with BOX64_FLAGS below).
 export BOX64_NORCFILES=0
-log "BOX64_RCFILE=$BOX64_RCFILE mmap32_child=1 mmap32_creators=cmd,start mmap32_parent=0 (box64rc [cmd.exe]/[start.exe]/[app.exe]; parent BOX64_MMAP32=$BOX64_MMAP32; NORCFILES=0; no [explorer.exe])"
+log "BOX64_RCFILE=$BOX64_RCFILE mmap32_child=1 mmap32_creators=cmd,start mmap32_parent=0 (box64rc initial classic; 0.1.110 may rewrite for amd64_wow64→guest MMAP32=0; parent BOX64_MMAP32=$BOX64_MMAP32; NORCFILES=0; no [explorer.exe])"
 # 0.1.109: detect Wine package flavor — amd64-wow64 has 0× i386-unix (in-process WoW64)
 WINE_FLAVOR=unknown
 if [ -d /opt/wine/lib/wine/i386-unix ]; then
@@ -856,14 +859,55 @@ else
   WINE_FLAVOR=amd64_wow64
 fi
 export WINE_FLAVOR
-log "WINE_FLAVOR=$WINE_FLAVOR (0.1.109: want amd64_wow64 — in-process MACHINE_TYPE=i386; classic i386-unix breaks under box64+NOEXEC)"
+log "WINE_FLAVOR=$WINE_FLAVOR (0.1.110: want amd64_wow64 — in-process MACHINE_TYPE=i386; guest MMAP32=0 under wow64; classic i386-unix breaks under box64+NOEXEC)"
 stamp_wine_run "WINE_FLAVOR=$WINE_FLAVOR"
 if [ -f /opt/wine/lib/wine/x86_64-windows/wow64cpu.dll ]; then
   log "WINE_WOW64CPU seed_pe=yes path=/opt/wine/lib/wine/x86_64-windows/wow64cpu.dll"
 else
   log "WINE_WOW64CPU seed_pe=MISSING — ensure_wow64_seed may still copy from pe64"
 fi
-stamp_wine_run "mmap32_child=1 mmap32_creators=cmd,start mmap32_parent=0 noexec=kept rcfile=$BOX64_RCFILE"
+# 0.1.110 P0-A: Dig109 — under amd64_wow64, [app.exe] BOX64_MMAP32=1 makes the
+# child wine64 (i386 guest host) hit ntdll set_mem_area_state assert → SIGABRT
+# before wow64cpu can map. In-process WoW64 wine64 must keep MMAP32=0 on guest
+# host PE names. Classic i386-unix keeps prior creator+child MMAP32=1.
+MMAP32_WOW64_GUEST=1
+MMAP32_CREATORS=1
+case "${WINE_FLAVOR}" in
+  amd64_wow64|amd64_wow64_empty_i386_unix)
+    MMAP32_WOW64_GUEST=0
+    MMAP32_CREATORS=0
+    cat > "$BOX64_RC_PATH" <<'BOX64RC_WOW64'
+# x86-in-android 0.1.110 — amd64-wow64: guest wine64 host MUST MMAP32=0
+# Dig109: [app.exe] MMAP32=1 → set_mem_area_state assert → SIGABRT pre-wow64cpu.
+# Creators also 0 under wow64 (machine 14c attribute does not need creator MMAP32).
+[cmd.exe]
+BOX64_MMAP32=0
+
+[start.exe]
+BOX64_MMAP32=0
+
+[app.exe]
+BOX64_MMAP32=0
+
+[/wow64cpu.dll]
+BOX64_MMAP32=0
+
+[/syswow64/wow64cpu.dll]
+BOX64_MMAP32=0
+
+[/syswow64/cmd.exe]
+BOX64_MMAP32=0
+BOX64RC_WOW64
+    log "BOX64_RCFILE rewrite flavor=$WINE_FLAVOR mmap32_wow64_guest=0 mmap32_creators=0 (0.1.110 Dig109 set_mem_area_state kill)"
+    stamp_wine_run "mmap32_wow64_guest=0 mmap32_creators=0 mmap32_parent=0 noexec=kept flavor=$WINE_FLAVOR rcfile=$BOX64_RCFILE"
+    ;;
+  *)
+    log "BOX64_RCFILE keep classic mmap32_child=1 mmap32_creators=cmd,start flavor=$WINE_FLAVOR"
+    stamp_wine_run "mmap32_child=1 mmap32_creators=cmd,start mmap32_parent=0 noexec=kept flavor=$WINE_FLAVOR rcfile=$BOX64_RCFILE"
+    ;;
+esac
+export MMAP32_WOW64_GUEST MMAP32_CREATORS
+stamp_wine_run "mmap32_parent=0 noexec=kept rcfile=$BOX64_RCFILE mmap32_wow64_guest=${MMAP32_WOW64_GUEST} mmap32_creators_flag=${MMAP32_CREATORS}"
 export WINEPREFIX="${WINEPREFIX:-/home/xuser/.wine}"
 export WINEARCH="${WINEARCH:-win64}"
 log "WINEARCH=$WINEARCH (force win64 for x86_64-unix wine)"
@@ -1197,11 +1241,22 @@ ensure_wow64_seed() {
       fi
     fi
   done
-  local wcpu=no wntdll=no wk32=no
+  local wcpu=no wntdll=no wk32=no w64dll=no w64win=no
   [ -f "$sys32/wow64cpu.dll" ] && wcpu=yes
+  [ -f "$sys32/wow64.dll" ] && w64dll=yes
+  [ -f "$sys32/wow64win.dll" ] && w64win=yes
   [ -f "$wow64/ntdll.dll" ] && wntdll=yes
   [ -f "$wow64/kernel32.dll" ] && wk32=yes
-  log "APP_WOW64_SEED pe64→sys32=$n64 pe32→syswow64=$n32 wow64cpu=$wcpu syswow64_ntdll=$wntdll syswow64_k32=$wk32 miss=${miss:-none}"
+  # 0.1.110 P0-A: sizes + paths Wine wow64 branch maps (system32, not only pe64 seed)
+  _wsz=0 _wsz_dll=0 _wsz_win=0 _wsz_ntdll=0
+  [ -f "$sys32/wow64cpu.dll" ] && _wsz=$(wc -c < "$sys32/wow64cpu.dll" 2>/dev/null | tr -d ' ' || echo 0)
+  [ -f "$sys32/wow64.dll" ] && _wsz_dll=$(wc -c < "$sys32/wow64.dll" 2>/dev/null | tr -d ' ' || echo 0)
+  [ -f "$sys32/wow64win.dll" ] && _wsz_win=$(wc -c < "$sys32/wow64win.dll" 2>/dev/null | tr -d ' ' || echo 0)
+  [ -f "$wow64/ntdll.dll" ] && _wsz_ntdll=$(wc -c < "$wow64/ntdll.dll" 2>/dev/null | tr -d ' ' || echo 0)
+  log "APP_WOW64_SEED pe64→sys32=$n64 pe32→syswow64=$n32 wow64cpu=$wcpu wow64=$w64dll wow64win=$w64win syswow64_ntdll=$wntdll syswow64_k32=$wk32 miss=${miss:-none}"
+  log "APP_WOW64_SEED_PATHS sys32_wow64cpu=$sys32/wow64cpu.dll:${_wsz}B sys32_wow64=$sys32/wow64.dll:${_wsz_dll}B sys32_wow64win=${_wsz_win}B syswow64_ntdll=${_wsz_ntdll}B (0.1.110: Wine maps C:\\windows\\system32\\wow64cpu.dll)"
+  stamp_wine_run "wow64_seed wow64cpu=$wcpu:${_wsz} wow64=$w64dll:${_wsz_dll} wow64win=$w64win:${_wsz_win} syswow64_ntdll=$wntdll:${_wsz_ntdll}"
+  unset _wsz _wsz_dll _wsz_win _wsz_ntdll
   return 0
 }
 
@@ -3342,18 +3397,41 @@ app_load_dump_fail_sigs() {
     log "APP_LOAD create_fail=cpiw_no_start mode=${APP_LOAD_MODE:-?} (CreateProcessInternalW app seen; started_pid_after_app=0 loaded_app=0)"
   fi
   # 0.1.106: machine 14c NtCreate then ShellExecuteEx fatal (105 A2 evolved fail mode)
+  # 0.1.110 P0-B: Dig109 root — child wine SIGABRT set_mem_area_state under MMAP32=1
+  _mmap_assert=0
+  if printf '%s\n' "$_slice" | grep -qE 'set_mem_area_state: Assertion|set_mem_area_state.*granularity_mask|SIGABRT.*mmap|EmulatedBT:.*set_mem_area_state'; then
+    _mmap_assert=1
+  fi
   if [ "${_mach_014c:-0}" = "1" ] && [ "${_nt_started_after_app:-0}" = "0" ]; then
-    if printf '%s\n' "$_slice" | grep -qE 'ShellExecuteEx failed|Application could not be started|err:start:fatal_error|FormatMessage failed'; then
+    if [ "${_mmap_assert}" = "1" ]; then
+      log "APP_LOAD create_fail=mmap32_granularity_assert mode=${APP_LOAD_MODE:-?} (Dig109/0.1.110: App NtCreate machine 14c → child wine BOX64_MMAP32=1 → ntdll set_mem_area_state assert → SIGABRT before wow64cpu; want mmap32_wow64_guest=0)"
+      log "APP_LOAD ntstatus_hint=CHILD_SIGABRT_SET_MEM_AREA_STATE mode=${APP_LOAD_MODE:-?} (not a Wine NTSTATUS — posix abort; GLE often 0 → FormatMessage failed)"
+      stamp_wine_run "create_fail=mmap32_granularity_assert mode=${APP_LOAD_MODE:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}"
+    elif printf '%s\n' "$_slice" | grep -qE 'ShellExecuteEx failed|Application could not be started|err:start:fatal_error|FormatMessage failed'; then
       log "APP_LOAD create_fail=shellex_after_machine14c mode=${APP_LOAD_MODE:-?} (NtCreate App machine 14c but no started pid — CreateProcess/WoW64 reject; ShellExecuteEx fatal)"
       log "APP_LOAD ntstatus_hint=CREATEPROCESS_FAIL_AFTER_MACHINE_14C mode=${APP_LOAD_MODE:-?} (TRACE omits NTSTATUS; attribute applied; child never started)"
       log "APP_LOAD ladder_hint=advance_to_direct_stub mode=${APP_LOAD_MODE:-?} (0.1.106 fast-fail machine→direct)"
     fi
   fi
+  # 0.1.110 P0-B: classify create-fail vs create-success-but-no-start
+  if [ -n "${_nt_app:-}" ] && [ "${_nt_started_after_app:-0}" = "0" ]; then
+    if [ "${_mmap_assert}" = "1" ]; then
+      log "APP_LOAD create_class=create_fail_child_abort mode=${APP_LOAD_MODE:-?} (NtCreate entry traced; child aborted — not create-success)"
+    elif printf '%s\n' "$_slice" | grep -qE 'CreateProcessInternalW started process pid'; then
+      log "APP_LOAD create_class=create_success_but_no_app_start mode=${APP_LOAD_MODE:-?} (some started pid in slice but not after App CPIW)"
+    else
+      log "APP_LOAD create_class=create_fail_no_started mode=${APP_LOAD_MODE:-?} (App NtCreate seen; zero started pid in slice)"
+    fi
+  fi
   # 0.1.108: FormatMessage failed after CreateProcess = GetLastError unformatable (Dig107)
+  # 0.1.110 P0-B: also scrape raw GetLastError hex / decimal near fatal_error
   if printf '%s\n' "$_slice" | grep -qE 'FormatMessage failed'; then
-    log "APP_LOAD create_fail=formatmessage_failed_after_create mode=${APP_LOAD_MODE:-?} (start.exe fatal_error could not FormatMessage GetLastError — gle_suspect=0_or_invalid)"
-    log "APP_LOAD ntstatus_hint=GLE_UNFORMATTABLE mode=${APP_LOAD_MODE:-?} gle_suspect=0 (real NTSTATUS may be in err:ntdll / warn:ntdll)"
-    stamp_wine_run "create_fail=formatmessage_failed_after_create gle_suspect=0 mode=${APP_LOAD_MODE:-?}"
+    _gle_raw=$(printf '%s\n' "$_slice" | grep -E 'fatal_error|FormatMessage failed|GetLastError|err:start' 2>/dev/null | grep -oE 'GetLastError[=: ]+(0x)?[0-9a-fA-F]+|error[=: ]+(0x)?[0-9a-fA-F]+|GLE[=: ]+(0x)?[0-9a-fA-F]+' 2>/dev/null | head -6 | tr '\n' '|' || true)
+    [ -z "${_gle_raw:-}" ] && _gle_raw="none_scraped_suspect_0"
+    log "APP_LOAD create_fail=formatmessage_failed_after_create mode=${APP_LOAD_MODE:-?} gle_raw=[${_gle_raw}] (start.exe fatal_error could not FormatMessage — Dig109 often GLE=0 after child SIGABRT)"
+    log "APP_LOAD ntstatus_hint=GLE_UNFORMATTABLE mode=${APP_LOAD_MODE:-?} gle_raw=${_gle_raw} mmap_assert=${_mmap_assert:-0} (prefer err:ntdll / set_mem_area_state / warn:ntdll)"
+    stamp_wine_run "create_fail=formatmessage_failed_after_create gle_raw=${_gle_raw} mmap_assert=${_mmap_assert:-0} mode=${APP_LOAD_MODE:-?}"
+    unset _gle_raw
   fi
   # 0.1.108: Wine ntdll ERR for unsupported machine / invalid image
   _ntdll_err=$(printf '%s\n' "$_slice" | grep -E 'err:ntdll:|warn:ntdll:|not supported on this installation|STATUS_INVALID_IMAGE' 2>/dev/null | grep -vE 'map_image_into_view|flags c00000' | head -8 | tr '\n' '|' || true)
@@ -3370,12 +3448,12 @@ app_load_dump_fail_sigs() {
   _started_cmd=$(printf '%s\n' "$_slice" | awk '/CreateProcessInternalW app .*cmd\.exe|CreateProcessInternalW app L".*cmd\.exe|CreateProcessInternalW app L".*syswow64/{a=1} a&&/started process pid/{c++;a=0} END{print c+0}' 2>/dev/null || echo 0)
   _upta=$(printf '%s\n' "$_slice" | grep -cE 'UpdateProcThreadAttribute' 2>/dev/null || echo 0)
   # Real NTSTATUS hex tokens (exclude PE section Characteristic c0000040/c0000080)
-  _nth_hex=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)|NtCreateUserProcess.*\) = [cC0-9a-fx]+' 2>/dev/null | head -8 | tr '\n' '|' || true)
-  log "APP_LOAD wow64_create_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} wine_flavor=${WINE_FLAVOR:-?} mode=${APP_LOAD_MODE:-?} (0.1.109: want canary 14c+started_pid_cmd then App Loaded)"
+  _nth_hex=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)|NtCreateUserProcess.*\) = [cC0-9a-fx]+|set_mem_area_state|granularity_mask|SIGABRT' 2>/dev/null | head -10 | tr '\n' '|' || true)
+  log "APP_LOAD wow64_create_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} wine_flavor=${WINE_FLAVOR:-?} mmap_assert=${_mmap_assert:-0} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} mode=${APP_LOAD_MODE:-?} (0.1.110: want canary 14c+started_pid_cmd then App Loaded + wow64cpu_init)"
   # KEEP legacy stamp name for dig greps that still look for trampoline_dig
   log "APP_LOAD trampoline_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} mode=${APP_LOAD_MODE:-?} (alias of wow64_create_dig; trampoline DROPPED 0.1.109)"
-  log "APP_LOAD ntstatus_hex=[${_nth_hex:-}] mode=${APP_LOAD_MODE:-?} (0.1.109 real NTSTATUS/c000/STATUS_/not-supported-machine; PE flags filtered)"
-  stamp_wine_run "ntstatus_hex=${_nth_hex:-none} machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} wine_flavor=${WINE_FLAVOR:-?} mode=${APP_LOAD_MODE:-?}"
+  log "APP_LOAD ntstatus_hex=[${_nth_hex:-}] mode=${APP_LOAD_MODE:-?} mmap_assert=${_mmap_assert:-0} (0.1.110 real NTSTATUS/c000/STATUS_/set_mem_area_state/SIGABRT; PE flags filtered)"
+  stamp_wine_run "ntstatus_hex=${_nth_hex:-none} machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} mmap_assert=${_mmap_assert:-0} wine_flavor=${WINE_FLAVOR:-?} mode=${APP_LOAD_MODE:-?}"
   [ -n "${_nt_cmd:-}" ] && log "APP_LOAD ntcreate_cmd slice: $_nt_cmd" || log "APP_LOAD ntcreate_cmd=[] mode=${APP_LOAD_MODE:-?}"
   # 0.1.104: mscoree skip + LdrShutdown after App NtCreate machine 0 = creator DETACH
   # (Wine fell through to .NET probe; often STATUS_INVALID_IMAGE_FORMAT / Wow64 miss).
@@ -3411,7 +3489,20 @@ app_load_dump_fail_sigs() {
     stamp_wine_run "create_fail=getbinarytype_flag_as_path mode=${APP_LOAD_MODE:-?}"
   fi
   [ -n "${_cp_app:-}" ] && log "APP_LOAD CreateProcessInternalW_app slice: $_cp_app" || true
-  [ -n "${_wow64cpu:-}" ] && log "APP_LOAD wow64cpu_init slice: $_wow64cpu" || log "APP_LOAD wow64cpu_init=[] mode=${APP_LOAD_MODE:-?} (no wow64cpu load/init in slice)"
+  if [ -n "${_wow64cpu:-}" ]; then
+    log "APP_LOAD wow64cpu_init slice: $_wow64cpu"
+    stamp_wine_run "wow64cpu_init=nonempty mode=${APP_LOAD_MODE:-?}"
+  else
+    log "APP_LOAD wow64cpu_init=[] mode=${APP_LOAD_MODE:-?} machine_014c=${_mach_014c:-0} mmap_assert=${_mmap_assert:-0} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} (0.1.110: want nonempty after machine-14c; Dig109 empty because child SIGABRT)"
+    stamp_wine_run "wow64cpu_init=[] machine_014c=${_mach_014c:-0} mmap_assert=${_mmap_assert:-0} mode=${APP_LOAD_MODE:-?}"
+  fi
+  # Also scrape Loaded L"…wow64cpu.dll" / loaddll lines explicitly
+  _wow_load=$(printf '%s\n' "$_slice" | grep -iE 'Loaded L".*wow64|load_dll.*wow64|LdrLoadDll.*wow64|warn:module:.*wow64|err:module:.*wow64' 2>/dev/null | head -8 | tr '\n' '|' || true)
+  if [ -n "${_wow_load:-}" ]; then
+    log "APP_LOAD wow64_loaddll slice: $_wow_load"
+  else
+    log "APP_LOAD wow64_loaddll=[] mode=${APP_LOAD_MODE:-?} (no Loaded/LdrLoadDll wow64* in slice)"
+  fi
   if [ -n "${_rc_apply:-}" ]; then
     log "APP_LOAD box64_rcfile slice: $_rc_apply"
   else
@@ -3422,11 +3513,13 @@ app_load_dump_fail_sigs() {
   [ -n "${_nst:-}" ] && log "APP_LOAD ntstatus_slice: $_nst" || log "APP_LOAD ntstatus_slice=[] mode=${APP_LOAD_MODE:-?}"
   # 0.1.101: always stamp GetLastError + NTSTATUS tokens (PE-flag-filtered; may still be empty)
   log "APP_LOAD GetLastError_tokens=[${_gle:-}] NTSTATUS_tokens=[${_ntstatus_raw:-}] mode=${APP_LOAD_MODE:-?} loaded_app=${_loaded_app} started_pid_after_app=${_nt_started_after_app} create_fail_near_app=$([ -n "${_cp_fail:-}" ] && echo 1 || echo 0)"
-  unset _hr _slice _first_pe _nt_app _nt_started _nt_started_app _nt_started_after_app _nt_mach _bt_w _bt_ret _msc _dbl _nst _wow64cpu _rc_apply _cp_app _mach_014c _mach_zero _loaded_app _gle _ntstatus_raw _cp_fail _ntdll_err _nt_cmd _mach_cmd_014c _started_cmd _upta _nth_hex
+  unset _hr _slice _first_pe _nt_app _nt_started _nt_started_app _nt_started_after_app _nt_mach _bt_w _bt_ret _msc _dbl _nst _wow64cpu _rc_apply _cp_app _mach_014c _mach_zero _loaded_app _gle _ntstatus_raw _cp_fail _ntdll_err _nt_cmd _mach_cmd_014c _started_cmd _upta _nth_hex _mmap_assert _wow_load
 }
 # 0.1.108: WoW64 canary — try MACHINE_TYPE create of SMALL i386 PE before App.
-# Dig107: App NtCreate machine 14c then no started pid. Canary separates systemic
-# WoW64-create fail vs App-specific (size/deps) fail. Non-blocking; stamp only.
+# 0.1.110 P0-C: Dig109 canary timeout-blind 8s (machine_cmd_014c=0) — start.exe
+# still loading when killed. Same argv shape as App; dig NtCreate/assert/fatal
+# EACH second and break early; capture slice BEFORE kill; PASS only
+# machine_cmd_014c=1 + started_pid_cmd=1 (cmd image — never start.exe pid).
 app_load_wow64_canary() {
   if [ "${APP_WOW64_CANARY_DONE:-0}" = "1" ]; then
     return 0
@@ -3440,34 +3533,73 @@ app_load_wow64_canary() {
   fi
   local _off=0
   [ -f /mnt/data/wine-run.out ] && _off=$(wc -c < /mnt/data/wine-run.out 2>/dev/null | tr -d ' ' || echo 0)
-  log "APP_LOAD canary=start syswow64/cmd /c exit (MACHINE_TYPE x86; dig: want started_pid_cmd + machine 14c)"
-  stamp_wine_run "canary=start syswow64_cmd"
+  log "APP_LOAD canary=start /machine x86 /wait /exec C:\\windows\\syswow64\\cmd.exe /c exit (0.1.110 same argv shape as App; dig want machine_cmd_014c=1 + started_pid_cmd=1)"
+  stamp_wine_run "canary=start machine_wait_exec_syswow64_cmd mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}"
   (
-    export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,warn+ntdll,err+ntdll,+seh,+loaddll,+process,+module}"
+    # 0.1.110: +wow64,+module for wow64cpu_init dig; warn+ntdll for NTSTATUS
+    export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,warn+ntdll,err+ntdll,+seh,+loaddll,+process,+module,+wow64}"
     "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /machine x86 /wait /exec "C:\\windows\\syswow64\\cmd.exe" /c exit >>/mnt/data/wine-run.out 2>&1
   ) &
   local _cpid=$!
-  local _i=0
-  while [ "$_i" -lt 8 ]; do
+  local _i=0 _early="" _max=20
+  # Poll: break early once NtCreate cmd 14c OR assert OR fatal OR process exited
+  while [ "$_i" -lt "$_max" ]; do
     if ! kill -0 "$_cpid" 2>/dev/null; then
+      _early="exited"
+      break
+    fi
+    # Dig current canary slice without killing — raise timeout only after NtCreate seen
+    _slice_poll=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 400000 || true)
+    if printf '%s\n' "$_slice_poll" | grep -qE 'NtCreateUserProcess .*syswow64.*cmd.* machine (0x0*14c|0?14c|14c)\b|NtCreateUserProcess .*cmd\.exe.* machine (0x0*14c|0?14c|14c)\b'; then
+      _early="ntcreate_cmd_14c"
+      # Give a few more seconds after NtCreate for started_pid_cmd
+      _j=0
+      while [ "$_j" -lt 6 ]; do
+        if ! kill -0 "$_cpid" 2>/dev/null; then
+          _early="ntcreate_cmd_14c_exited"
+          break
+        fi
+        _slice_poll=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 400000 || true)
+        if printf '%s\n' "$_slice_poll" | awk '/CreateProcessInternalW app .*cmd\.exe|CreateProcessInternalW app L".*cmd\.exe|CreateProcessInternalW app L".*syswow64/{a=1} a&&/started process pid/{found=1} END{exit !found}' 2>/dev/null; then
+          _early="started_pid_cmd"
+          break
+        fi
+        if printf '%s\n' "$_slice_poll" | grep -qE 'set_mem_area_state: Assertion|FormatMessage failed|err:start:fatal_error|Application could not be started'; then
+          _early="fail_after_14c"
+          break
+        fi
+        sleep 1
+        _j=$((_j+1))
+        _i=$((_i+1))
+      done
+      break
+    fi
+    if printf '%s\n' "$_slice_poll" | grep -qE 'set_mem_area_state: Assertion|FormatMessage failed|err:start:fatal_error|Application could not be started'; then
+      _early="fail_sig"
       break
     fi
     sleep 1
     _i=$((_i+1))
   done
+  unset _slice_poll
+  # Capture wine-run.out BEFORE kill (P0-C)
+  local _slice
+  _slice=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 500000 || true)
   if kill -0 "$_cpid" 2>/dev/null; then
     kill "$_cpid" 2>/dev/null || true
     wait "$_cpid" 2>/dev/null || true
-    log "APP_LOAD canary=timeout killed pid=$_cpid after ${_i}s"
-    stamp_wine_run "canary=timeout"
+    # Re-capture after short drain
+    sleep 1
+    _slice=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 500000 || true)
+    log "APP_LOAD canary=timeout_or_early_kill pid=$_cpid after ${_i}s early=${_early:-none}"
+    stamp_wine_run "canary=timeout_or_early_kill early=${_early:-none} waited=${_i}"
   else
     wait "$_cpid" 2>/dev/null || true
-    log "APP_LOAD canary=done pid=$_cpid waited=${_i}s"
+    _slice=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 500000 || true)
+    log "APP_LOAD canary=done pid=$_cpid waited=${_i}s early=${_early:-exited}"
   fi
-  # Dig stamps from canary slice (0.1.109: robust 14c + cmd-only started + ntstatus hex)
-  local _slice
-  _slice=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 400000 || true)
-  local _m14=0 _st=0 _st_cmd=0 _fm=0 _nth=''
+  # Dig stamps — PASS iff machine_cmd_014c=1 AND started_pid_cmd=1 (cmd image)
+  local _m14=0 _st=0 _st_cmd=0 _fm=0 _nth='' _mmap_a=0 _wow=''
   printf '%s\n' "$_slice" | grep -qE 'NtCreateUserProcess .*syswow64.*cmd.* machine (0x0*14c|0?14c|14c)\b|NtCreateUserProcess .*cmd\.exe.* machine (0x0*14c|0?14c|14c)\b' && _m14=1 || true
   printf '%s\n' "$_slice" | grep -qE 'CreateProcessInternalW started process pid' && _st=1 || true
   _st_cmd=$(printf '%s\n' "$_slice" | awk '
@@ -3476,10 +3608,27 @@ app_load_wow64_canary() {
     END {print c+0}
   ' 2>/dev/null || echo 0)
   printf '%s\n' "$_slice" | grep -qE 'FormatMessage failed|Application could not be started|err:start:fatal_error|not supported on this installation' && _fm=1 || true
-  _nth=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)' 2>/dev/null | head -6 | tr '\n' '|' || true)
-  log "APP_LOAD canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} ntstatus_hex=[${_nth:-}] wine_flavor=${WINE_FLAVOR:-?} (0.1.109: PASS=14c+started_pid_cmd fail_sig=0)"
-  stamp_wine_run "canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} ntstatus_hex=${_nth:-none} wine_flavor=${WINE_FLAVOR:-?}"
-  unset _c _off _cpid _i _slice _m14 _st _st_cmd _fm _nth
+  printf '%s\n' "$_slice" | grep -qE 'set_mem_area_state: Assertion|granularity_mask|SIGABRT' && _mmap_a=1 || true
+  _nth=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)|set_mem_area_state|SIGABRT' 2>/dev/null | head -8 | tr '\n' '|' || true)
+  _wow=$(printf '%s\n' "$_slice" | grep -iE 'wow64cpu|Wow64Transition|load_wow64|L"wow64' 2>/dev/null | head -4 | tr '\n' '|' || true)
+  # create class for canary
+  local _cclass=unknown
+  if [ "$_m14" = "1" ] && [ "${_st_cmd:-0}" != "0" ] && [ "$_fm" = "0" ] && [ "$_mmap_a" = "0" ]; then
+    _cclass=create_ok_started_cmd
+  elif [ "$_mmap_a" = "1" ]; then
+    _cclass=create_fail_mmap32_assert
+  elif [ "$_m14" = "1" ] && [ "${_st_cmd:-0}" = "0" ]; then
+    _cclass=create_fail_14c_no_started_cmd
+  elif [ "$_fm" = "1" ]; then
+    _cclass=create_fail_fatal
+  elif [ "$_st" = "1" ] && [ "${_st_cmd:-0}" = "0" ]; then
+    _cclass=create_start_exe_fp_only
+  else
+    _cclass=create_no_ntcreate_cmd
+  fi
+  log "APP_LOAD canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} mmap_assert=${_mmap_a} create_class=${_cclass} ntstatus_hex=[${_nth:-}] wow64cpu_init=[${_wow:-}] wine_flavor=${WINE_FLAVOR:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} early=${_early:-?} (0.1.110 PASS=14c+started_pid_cmd; NEVER start.exe pid alone)"
+  stamp_wine_run "canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} mmap_assert=${_mmap_a} create_class=${_cclass} ntstatus_hex=${_nth:-none} wine_flavor=${WINE_FLAVOR:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}"
+  unset _c _off _cpid _i _slice _m14 _st _st_cmd _fm _nth _mmap_a _wow _early _max _cclass _j
   return 0
 }
 
@@ -3632,12 +3781,11 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     wow64_machine_i386)
-      # 0.1.109 P0: DROP trampoline (Dig108: syswow64\cmd MACHINE_TYPE also
-      # started=0 — systemic under staging-amd64 + box64 + NOEXEC). PRIMARY back
-      # to App path with KEEP 107 order: ALL switches BEFORE /exec; path AFTER.
+      # 0.1.110 P0: KEEP DROP trampoline + KEEP 107 order. Dig109: machine 14c
+      # reached but child wine [app.exe] MMAP32=1 → set_mem_area_state SIGABRT.
+      # box64rc already rewritten for amd64_wow64 (mmap32_wow64_guest=0).
       #   start /machine x86 /wait /exec C:\App\app.exe
-      # Wine package is now staging-amd64-wow64 (in-process wow64cpu; 0× i386-unix)
-      # so MACHINE_TYPE=i386 CreateProcess can complete without wine32 re-exec.
+      # Expect: wow64cpu_init nonempty + started_pid_after_app=1 + Loaded.
       app_load_seed_gate || log "APP_SEED gate=FAIL mode=machine_x86 — still try"
       _w64_win='C:\App\app.exe'
       case "${PE_MACH}" in
@@ -3649,15 +3797,15 @@ app_load_spawn() {
       stamp_wine_run "APP_LOAD BinaryType_host=$_bt machine=0x${PE_MACH:-?}"
       log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_machine_x86 win=$_w64_win seed=${SEED:-} wine_flavor=${WINE_FLAVOR:-?} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
       log "APP_LOAD cmdline_order=machine_wait_exec_path (0.1.107 KEEP: switches before /exec; path after — Dig106 GetBinaryTypeW(/machine) kill)"
-      log "APP_LOAD cmdline: wine start /machine x86 /wait /exec $_w64_win (0.1.109 PRIMARY App; DROP trampoline; wine_flavor=${WINE_FLAVOR:-?}; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
+      log "APP_LOAD cmdline: wine start /machine x86 /wait /exec $_w64_win (0.1.110 PRIMARY App; DROP trampoline; wine_flavor=${WINE_FLAVOR:-?}; mmap32_parent=0; mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}; mmap32_creators_flag=${MMAP32_CREATORS:-?}; WINELOADERNOEXEC kept)"
       stamp_wine_run "APP_LOAD cmdline: wine start /machine x86 /wait /exec $_w64_win (wow64 machine_x86 PRIMARY App no_trampoline mmap32_creators=cmd,start wine_flavor=${WINE_FLAVOR:-?})"
-      log "APP_LOAD spawn_evidence=machine_x86_app_armed mode=wow64_machine_i386 (0.1.109 — expect MACHINE_TYPE on App + started_pid_after_app + Loaded; canary gate first)"
+      log "APP_LOAD spawn_evidence=machine_x86_app_armed mode=wow64_machine_i386 (0.1.110 — expect machine 14c + wow64cpu_init + started_pid_after_app + Loaded; mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}; canary gate first)"
       app_load_mark_slice
       (
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
-        # 0.1.109: +warn+ntdll,+err+ntdll keep; add pid for NTSTATUS correlation
-        export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,warn+ntdll,err+ntdll,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
+        # 0.1.110: +wow64,+module for wow64cpu_init; warn+ntdll for NTSTATUS/GLE
+        export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,warn+ntdll,err+ntdll,+seh,+loaddll,+process,+module,+wow64,+ole,+rpcss,+x11drv,+msgbox}"
         "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /machine x86 /wait /exec "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
       unset _bt
@@ -3913,7 +4061,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       log "APP_SEED visible=no path=${SEED:-?} win=$APP_WIN — keep wow64=1 (no unix demote); CreateProcess may still fail"
     fi
     ensure_exe_assoc || true
-    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=machine_x86 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} wine_flavor=${WINE_FLAVOR:-?} (0.1.109 PRIMARY start /machine x86 /wait /exec C:\\App\\app.exe; DROP trampoline; KEEP machine-before-exec; ladder machine→direct→explorer→unix→start; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept; no i386 MAIN)"
+    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=machine_x86 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} wine_flavor=${WINE_FLAVOR:-?} (0.1.110 PRIMARY start /machine x86 /wait /exec C:\\App\\app.exe; DROP trampoline; KEEP machine-before-exec; mmap32_parent=0; mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}; WINELOADERNOEXEC kept; no i386 MAIN)"
     stamp_wine_run "decide=machine_x86 win=$APP_WIN seed=${SEED:-} wine_flavor=${WINE_FLAVOR:-?} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
   else
     log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
@@ -4576,7 +4724,7 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
           # 0.1.105: relaunch prefers machine_x86; spawn before dig; stub_quoted direct next
           set +e
           log "APP_RELAUNCH once target=$APP_WIN via wow64_machine_i386 (no strict Loaded by t=${HB}s; machine=0x${PE_MACH}; 0.1.105)"
-          log "APP_LOAD wow64=1 relaunch: wine start /machine x86 /wait /exec C:\\App\\app.exe (APP_RELAUNCH machine_x86 PRIMARY App 0.1.109 DROP trampoline; wine_flavor=${WINE_FLAVOR:-?}; mmap32_creators=cmd,start; noexec=kept)"
+          log "APP_LOAD wow64=1 relaunch: wine start /machine x86 /wait /exec C:\\App\\app.exe (APP_RELAUNCH machine_x86 PRIMARY App 0.1.110; wine_flavor=${WINE_FLAVOR:-?}; mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}; noexec=kept)"
           app_load_kill_app "APP_RELAUNCH"
           app_load_spawn wow64_machine_i386
           sleep 2

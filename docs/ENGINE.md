@@ -1,3 +1,24 @@
+## 0.1.110 — wow64 guest MMAP32=0 (Dig109 set_mem_area_state)
+
+**Dig 109:** `WINE_FLAVOR=amd64_wow64` ✅ trampoline DROPPED ✅ App NtCreate
+**machine 14c** ✅ — but child wine for `app.exe` applied box64rc `[app.exe]
+BOX64_MMAP32=1` → `ntdll set_mem_area_state: Assertion !(size & granularity_mask)`
+→ **SIGABRT** before wow64cpu maps (`wow64cpu_init=[]`, `started_pid_after_app=0`,
+ShellExecuteEx fatal / FormatMessage failed). Canary timeout-blind 8s
+(`machine_cmd_014c=0`).
+
+**Knives:** (A) under `amd64_wow64`, rewrite box64rc so `[app.exe]` / wow64cpu /
+syswow64 guests / creators use `BOX64_MMAP32=0` (parent env stays 0); stamp
+`mmap32_wow64_guest=0`; `+wow64` WINEDEBUG; seed path sizes. (B) dig
+`create_fail=mmap32_granularity_assert` + `gle_raw` + create_class
+(fail vs success-no-start). (C) canary same argv as App; dig NtCreate/assert
+before kill; PASS iff `machine_cmd_014c=1` + `started_pid_cmd=1`. KEEP 107
+`/machine x86 /wait /exec` order; NO trampoline; NOEXEC kept; no i386 MAIN.
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.110`; `WINE_FLAVOR=amd64_wow64`;
+`mmap32_wow64_guest=0`; canary `machine_cmd_014c=1`+`started_pid_cmd=1`;
+`wow64cpu_init` non-empty; `started_pid_after_app=1`; `Loaded L"C:\App\app.exe"`.
+
 ## 0.1.109 — Wine amd64-wow64 + DROP trampoline (A2 systemic 14c)
 
 **Dig 108:** trampoline put MACHINE_TYPE=i386 on syswow64\cmd — same A2 as App

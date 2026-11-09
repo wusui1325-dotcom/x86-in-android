@@ -3,5 +3,5 @@
   "versionName": "0.1.106",
   "versionCode": 108,
   "notes": "0.1.106: P0 A2+UX. Dig105: machine spawn+14c+dblslash PASS but 0×Loaded/started_pid; ShellExecuteEx after machine14c; ladder0×; dig stamps missing; Boss status tick-rotate + log !running force-open. Knives: slice_file kill dd bs=1; machine_014c match bare 14c; PRIMARY start /exec /machine x86; fast ladder on fail_sig/inner fatal; create_fail=shellex_after_machine14c; status phase-bound (no tick rotate); log hideable (user hide wins, never !running force). KEEP 102-105 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/BSOD#0000AA/footer/：（/≥50. No hot/soft-continue/Present rewrite/DXVK x32/FF. vc108.",
-  "tipSha": "PENDING"
+  "tipSha": "76c61fe"
 }

@@ -2,6 +2,7 @@ package com.winlator.xserver.extensions;
 
 import static com.winlator.xserver.XClientRequestHandler.RESPONSE_CODE_SUCCESS;
 
+import android.util.Log;
 import android.util.SparseArray;
 
 import com.winlator.core.GPUHelper;
@@ -207,7 +208,18 @@ public class PresentExtension extends Extension implements WindowManager.OnWindo
         if (window == null) throw new BadWindow(windowId);
 
         window.removeTag("lastIdleTime");
-        GPUImage.createOrObtain(xServer, window.getContent(), true, true);
+        // 0.1.83: match DRI3 bufferFromPixmap — GPU-only AHB (cpuAccess=false).
+        // createOrObtain keeps the first GPUImage forever; Present selectInput often
+        // runs before DRI3, so cpuAccess=true locked empty virtualData → guestBlack
+        // (see PresentXFramePump 0.1.70: NEVER promote with cpuAccess=true).
+        Drawable content = window.getContent();
+        Texture prevTex = content.getTexture();
+        boolean creating = !(prevTex instanceof GPUImage);
+        GPUImage.createOrObtain(xServer, content, false, true);
+        if (creating) {
+            Log.i("PresentExtension", "PresentExtension GPUImage cpuAccess=false window=0x"
+                    + Integer.toHexString(windowId) + " DIAG");
+        }
 
         if (eventId > 0) {
             synchronized (events) {

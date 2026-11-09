@@ -14,6 +14,10 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.83: PresentExtension GPUImage cpuAccess=false (match DRI3 bufferFromPixmap).
+# First-attach race: Present selectInput often before DRI3; createOrObtain keeps first
+# GPUImage — cpuAccess=true empty AHB → guestBlack (0.1.70 pump warning). Host Java fix;
+# stamp for KEY_LOG. Keep 082 syncInterval / 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM.
 # 0.1.82: DXGI syncInterval — seed dxgi.syncInterval=0 + d3d9.presentInterval=0
 # (DXVK 2.7.1 dxvk.conf; unused before). Default VSync=1 can stall forever on virtual/
 # mobile WSI → HWND mapped + Present ok but guest black. X86_DXGI_SYNC=n (default 0);
@@ -62,7 +66,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.82
+WINE_LAUNCH_STAMP=0.1.83
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs

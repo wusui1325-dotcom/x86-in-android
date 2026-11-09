@@ -1,3 +1,20 @@
+## 0.1.83 — PresentExtension GPUImage cpuAccess=false
+
+**Smoke risk (0.1.82):** HWND + DXGI syncInterval=0 still black possible when Present
+`selectInput` attaches `GPUImage.createOrObtain(..., cpuAccess=true)` **before** DRI3
+`bufferFromPixmap` (`cpuAccess=false`). `createOrObtain` keeps the first GPUImage forever
+→ empty CPU-access AHB / locked virtualData → guestBlack (0.1.70 pump: NEVER promote with
+cpuAccess=true). 070 forceGpu sticky mitigates late; first attach was wrong.
+
+**Fix:**
+- `PresentExtension.selectInput` → `createOrObtain(..., false, true)` (match DRI3)
+- Log once `PresentExtension GPUImage cpuAccess=false … DIAG` on create
+- Present DIAG `ahbCpuAccess=` (virtualData!=null ⇒ 1)
+- Keep 082 syncInterval / 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM / 070 ahb_gpu
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.83`; `PresentExtension GPUImage cpuAccess=false`;
+`PRESENT_DIAG … ahbCpuAccess=0` on AHB path; guestBlack↓ when HWND+Present.
+
 ## 0.1.82 — DXGI syncInterval (Present fence / VSync stall)
 
 **Smoke risk (0.1.81):** HWND path saturated (077–081). Guest can stay black with

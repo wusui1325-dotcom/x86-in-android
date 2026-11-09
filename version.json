@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.82",
-  "versionCode": 83,
-  "notes": "0.1.82: DXGI syncInterval=0 + d3d9.presentInterval=0 (DXVK 2.7.1; VSync stall on mobile WSI); X86_DXGI_SYNC=n; keep 081 msgbox/080 CRT/079 CUI/078 sticky/076 TU_GMEM"
+  "versionName": "0.1.83",
+  "versionCode": 84,
+  "notes": "0.1.83: PresentExtension GPUImage cpuAccess=false (match DRI3; fix first-attach empty AHB race); ahbCpuAccess DIAG; keep 082 syncInterval/081 msgbox/080 CRT/079 CUI/078 sticky/076 TU_GMEM/070 ahb_gpu"
 }

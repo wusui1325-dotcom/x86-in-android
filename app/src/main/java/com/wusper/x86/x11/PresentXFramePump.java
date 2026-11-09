@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * app children so Present tracks the DXGI swapchain window; DIAG {@code hwnd=}.
  * 0.1.75: require {@code MapState.VIEWABLE}; if HWND exists but not viewable/zero-geom,
  * wait (no desktop steal) before first present; DIAG {@code mapState=} {@code mapWait=}.
+ * 0.1.83: DIAG {@code ahbCpuAccess=} from GPUImage.getVirtualData()!=null (PresentExtension
+ * now attaches cpuAccess=false to match DRI3; first-attach race fixed).
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -81,6 +83,8 @@ public final class PresentXFramePump extends Thread {
     private int nonBlackGuestHits;
     /** 0.1.69: "bgra" | "ahb" | "none" — last guest-pixel sample source. */
     private String lastGuestSample = "none";
+    /** 0.1.83: 1 if GPUImage has CPU virtualData (cpuAccess=true); 0 if GPU-only; -1 if no AHB. */
+    private int lastAhbCpuAccess = -1;
     /** DXVK_HUD top band + bottom-left corner to ignore when sampling. */
     private static final int HUD_EXCLUDE_TOP = 64;
     private static final int HUD_EXCLUDE_BL_W = 180;
@@ -144,6 +148,7 @@ public final class PresentXFramePump extends Thread {
         int width = DesktopLayout.WIDTH;
         int height = DesktopLayout.HEIGHT;
         long ahbPtr = 0;
+        lastAhbCpuAccess = -1;
         ByteBuffer data = null;
         int strideBytes = width * 4;
         int childId = 0;
@@ -193,9 +198,13 @@ public final class PresentXFramePump extends Thread {
                 if (tex instanceof GPUImage) {
                     GPUImage gpu = (GPUImage) tex;
                     ahbPtr = gpu.getHardwareBufferPtr();
+                    // 0.1.83: cheap DIAG — virtualData non-null ⇒ created with cpuAccess=true
+                    lastAhbCpuAccess = gpu.getVirtualData() != null ? 1 : 0;
                     if (gpu.getStride() > 0) {
                         strideBytes = gpu.getStride() * 4;
                     }
+                } else {
+                    lastAhbCpuAccess = -1;
                 }
                 data = drawable.getData();
             }
@@ -777,7 +786,8 @@ public final class PresentXFramePump extends Thread {
                 + " lockFail=" + NativeEngine.nativePresentLockFails()
                 + " path=" + NativeEngine.nativePresentLastPath()
                 + " guestBlack=" + guestBlackSticky
-                + " guestSample=" + lastGuestSample;
+                + " guestSample=" + lastGuestSample
+                + " ahbCpuAccess=" + lastAhbCpuAccess;
     }
 
     public int presentOkCount() {

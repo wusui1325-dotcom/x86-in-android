@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.80: VS CRT seed — msvcp140/vcruntime140/concrt140/msvcp120/… into system32 +
+# SysWOW64; after CREATEWINDOW_MISS missing_dll → APP_CRT_SEED + one relaunch; log
+# APP_CRT_SIG. Keep 079 CUI/classify / 078 sticky/nohwnd / 077 fingerprint / 076 TU_GMEM.
 # 0.1.79: CUI / CreateWindow — seed wineconsole.exe; PE subsystem=3 →
 # wineconsole --backend=user (HWND); after nohwnd scan=none classify + one CUI relaunch;
 # APP_CREATEWINDOW_MISS reason=. Keep 078 sticky/nohwnd / 077 fingerprint / 076 TU_GMEM.
@@ -52,7 +55,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.79
+WINE_LAUNCH_STAMP=0.1.80
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -144,7 +147,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.79 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.80 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -745,6 +748,44 @@ parallel_dir_copy() {
   cp -a "$src"/. "$dst"/
 }
 
+# 0.1.80: seed Visual C++ redistributable PE DLLs into system32 + SysWOW64.
+# pe_dir (x86_64-windows) already ships them; 079 seed_list omitted them → GUI
+# CREATEWINDOW_MISS reason=missing_dll (msvcp/vcruntime) with no HWND.
+ensure_vs_crt_seed() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  local crt_list="msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll
+    concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll
+    msvcp100.dll msvcr100.dll ucrtbase.dll msvcrt.dll"
+  mkdir -p "$sys32" 2>/dev/null || true
+  mkdir -p "$wow64" 2>/dev/null || true
+  local n64=0 n32=0 miss="" d
+  for d in $crt_list; do
+    if [ -f "$pe64/$d" ]; then
+      if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then
+        n64=$((n64+1))
+      else
+        miss="$miss $d"
+      fi
+    fi
+    if [ -f "$pe32/$d" ]; then
+      if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then
+        n32=$((n32+1))
+      fi
+    fi
+  done
+  # Also mirror 64-bit CRT into sys32 if pe64 missing a name but pe32 has it (rare)
+  local v140=no v140_1=no m140=no c140=no
+  [ -f "$sys32/vcruntime140.dll" ] && v140=yes
+  [ -f "$sys32/vcruntime140_1.dll" ] && v140_1=yes
+  [ -f "$sys32/msvcp140.dll" ] && m140=yes
+  [ -f "$sys32/concrt140.dll" ] && c140=yes
+  log "APP_CRT_SEED pe64→sys32=$n64 pe32→syswow64=$n32 vcruntime140=$v140 vcruntime140_1=$v140_1 msvcp140=$m140 concrt140=$c140 miss=${miss:-none}"
+  return 0
+}
+
 ensure_prefix_exec() {
   # 0.1.52: NTDLL_ANON_PE already bypasses Android W^X (anon/pread). Binding a
   # scratch tree OVER $WINEPREFIX/.../system32 HIDES wineboot-created DLLs and
@@ -814,6 +855,8 @@ ensure_prefix_exec() {
   # under C:\windows\system32 (builtin-only was flaky after half-init + bind).
   # 0.1.53: + winex11.drv (explorer LoadLibrary) + actxprxy/oleaut32/comctl32/uxtheme
   # 0.1.54: + service PE (rpcss/svchost/plugplay) + drivers/mountmgr.sys (MountMgr err 2)
+  # 0.1.80: + VS CRT redistributables (msvcp140/vcruntime140/…) — pe_dir has them;
+  # 079 seed only ucrtbase/msvcrt → GUI CREATEWINDOW_MISS missing_dll.
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
@@ -821,7 +864,10 @@ ensure_prefix_exec() {
     actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll
     comctl32.dll uxtheme.dll winex11.drv winewayland.drv
     winmm.dll version.dll wsock32.dll iphlpapi.dll netapi32.dll secur32.dll
-    authz.dll"
+    authz.dll
+    msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll
+    concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll
+    msvcp100.dll msvcr100.dll"
   local seeded=0
   local skipped=0
   local d
@@ -884,6 +930,9 @@ ensure_prefix_exec() {
     log "FATAL: PREFIX_EXEC seed missing kernel32/ntdll after copy (k32=$k32 ntdll=$n32 pe_dir=$pe_dir)"
     exit 1
   fi
+
+  # 0.1.80: also seed VS CRT into sys32 + SysWOW64 (idempotent)
+  ensure_vs_crt_seed
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no
@@ -2506,8 +2555,10 @@ app_load_spawn() {
 }
 
 # 0.1.79: classify why Loaded never produced CreateWindow / HWND
+# 0.1.80: also capture CRT / missing-DLL signature → APP_CRT_SIG
 app_load_classify_nocreate() {
   APP_MISS_REASON=no_createwindow
+  APP_CRT_SIG=
   if [ "${PE_SUB:-}" = "3" ] || [ "${PE_SUB_NAME:-}" = "CUI" ]; then
     if [ "${APP_CUI_WRAPPED:-0}" = "1" ]; then
       APP_MISS_REASON=cui_wrapped_no_hwnd
@@ -2518,8 +2569,14 @@ app_load_classify_nocreate() {
   if [ -f /mnt/data/wine-run.out ]; then
     if grep -qEi 'MessageBox[AW]?|TaskDialog' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=messagebox
-    elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase' /mnt/data/wine-run.out 2>/dev/null; then
+    elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase|concrt' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=missing_dll
+      # Prefer a concrete CRT / module name for KEY_LOG
+      APP_CRT_SIG=$(grep -oiE 'msvcp[0-9_]+(\.[Dd][Ll][Ll])?|vcruntime[0-9_]+(\.[Dd][Ll][Ll])?|concrt[0-9_]+(\.[Dd][Ll][Ll])?|ucrtbase(\.[Dd][Ll][Ll])?|msvcr[0-9_]+(\.[Dd][Ll][Ll])?' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr 'A-Z' 'a-z' || true)
+      if [ -z "${APP_CRT_SIG:-}" ]; then
+        APP_CRT_SIG=$(grep -oiE 'err:module:[^:]+:[^ ]+|STATUS_DLL_NOT_FOUND|c0000135' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr ' ' '_' || true)
+      fi
+      [ -n "${APP_CRT_SIG:-}" ] && log "APP_CRT_SIG=$APP_CRT_SIG"
     elif grep -qEi 'Application could not be started|ShellExecuteEx failed|entry point' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=launch_fail
     fi
@@ -2532,7 +2589,7 @@ app_load_classify_nocreate() {
   fi
   _alive=0
   if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then _alive=1; fi
-  log "APP_CREATEWINDOW_MISS reason=$APP_MISS_REASON pe_sub=${PE_SUB:-?} (${PE_SUB_NAME:-?}) cui_wrapped=${APP_CUI_WRAPPED:-0} alive=${_alive} target=${APP_TARGET:-}"
+  log "APP_CREATEWINDOW_MISS reason=$APP_MISS_REASON pe_sub=${PE_SUB:-?} (${PE_SUB_NAME:-?}) cui_wrapped=${APP_CUI_WRAPPED:-0} alive=${_alive} crt_sig=${APP_CRT_SIG:-none} target=${APP_TARGET:-}"
 }
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   SEED="$WINEPREFIX/drive_c/App/app.exe"
@@ -2656,7 +2713,7 @@ fi
 app_load_nohwnd_request() {
   # $1 = basename hint (PE file name)
   _bn="${1:-app.exe}"
-  printf 'basename=%s\nwant=mapraise\nstamp=0.1.79\n' "$_bn" > /mnt/data/.x86-nohwnd-req
+  printf 'basename=%s\nwant=mapraise\nstamp=0.1.80\n' "$_bn" > /mnt/data/.x86-nohwnd-req
   log "NOHWND_MAP req written basename=$_bn path=/mnt/data/.x86-nohwnd-req"
 }
 app_load_marker_nohwnd_scan() {
@@ -2745,7 +2802,9 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           log "APP_LOAD WARN Loaded-but-no-HWND after NOHWND_MAP (no host scan response)"
         fi
         # 0.1.79: classify CreateWindow miss; one CUI wineconsole relaunch if not yet wrapped
+        # 0.1.80: ensure VS CRT on disk before any relaunch (idempotent)
         app_load_classify_nocreate
+        ensure_vs_crt_seed
         _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
         _scan_none=0
         case "$_scan_body" in
@@ -2791,6 +2850,52 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
             if [ "$APP_HWND_SEEN" != "1" ]; then
               app_load_classify_nocreate
               log "APP_LOAD WARN Loaded-but-no-HWND after CUI wineconsole relaunch"
+            fi
+          fi
+        elif [ "${APP_CRT_RELAUNCHED:-0}" = "0" ]             && { [ "${APP_MISS_REASON}" = "missing_dll" ] || [ -n "${APP_CRT_SIG:-}" ]; }; then
+          # 0.1.80: GUI missing CRT/DLL — seed VS CRT + one relaunch (mirror CUI pattern)
+          APP_CRT_RELAUNCHED=1
+          ensure_vs_crt_seed
+          log "APP_CRT_RELAUNCH once reason=${APP_MISS_REASON} sig=${APP_CRT_SIG:-none} scan_none=${_scan_none} pe_mach=0x${PE_MACH:-?}"
+          if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+            kill -TERM "$APP_PID" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          fi
+          # Respawn same mode (wineconsole if wrapped, else absolute)
+          if [ "${APP_CUI_WRAPPED:-0}" = "1" ]; then
+            app_load_spawn wineconsole
+          else
+            app_load_spawn absolute
+          fi
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_CRT_RELAUNCH quick-exit rc=${APP_RC:-?}"
+            app_load_classify_nocreate
+          else
+            log "APP_CRT_RELAUNCH alive pid=$APP_PID"
+            HWND_CRT_I=0
+            HWND_CRT_MAX="${X86_HWND_CRT_WAIT_MAX:-50}"
+            while [ "$HWND_CRT_I" -lt "$HWND_CRT_MAX" ]; do
+              if app_load_marker_app_hwnd; then
+                APP_HWND_SEEN=1
+                log "APP_HWND_WAIT ready after CRT seed relaunch t=${HWND_CRT_I}x0.2s marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+                break
+              fi
+              if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+                log "APP_HWND_WAIT CRT abort app dead"
+                break
+              fi
+              if [ $((HWND_CRT_I % 10)) -eq 0 ]; then
+                app_load_nohwnd_request "$APP_BASE_NAME"
+              fi
+              sleep 0.2
+              HWND_CRT_I=$((HWND_CRT_I + 1))
+            done
+            if [ "$APP_HWND_SEEN" != "1" ]; then
+              app_load_classify_nocreate
+              log "APP_LOAD WARN Loaded-but-no-HWND after CRT seed relaunch"
             fi
           fi
         elif [ "$_scan_none" = "1" ]; then

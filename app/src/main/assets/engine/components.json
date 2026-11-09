@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.79-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole",
+  "runtimeId": "wine-gpustack-v0.1.80-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.79: CUI wineconsole --backend=user + APP_CREATEWINDOW_MISS; keep 0.1.78 sticky/nohwnd"
+  "notes": "0.1.80: VS CRT seed (msvcp140/vcruntime140/\u2026) + APP_CRT_RELAUNCH on CREATEWINDOW_MISS missing_dll; keep 0.1.79 CUI/classify"
 }

@@ -1,3 +1,19 @@
+## 0.1.80 — VS CRT seed / CREATEWINDOW_MISS missing_dll
+
+**Smoke risk (0.1.79):** `APP_CREATEWINDOW_MISS reason=missing_dll` (or early_exit with
+msvcp/vcruntime in wine-run.out) — PREFIX_EXEC seeded only `ucrtbase/msvcrt`, not
+VS CRT redistributables present under `x86_64-windows` / `i386-windows`. GUI never
+CreateWindow → scan=none looks like Present black.
+
+**Fix:**
+- Seed `msvcp140/vcruntime140/vcruntime140_1/concrt140/msvcp120/msvcr120/…` into
+  system32 + SysWOW64 (`APP_CRT_SEED`)
+- After CREATEWINDOW_MISS `missing_dll`: one CRT relaunch (`APP_CRT_RELAUNCH`) + `APP_CRT_SIG=`
+- Keep 079 CUI/classify / 078 sticky/nohwnd / 077 fingerprint
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.80`; `APP_CRT_SEED … vcruntime140=yes`;
+on miss → `APP_CRT_RELAUNCH` → `APP_HWND_WAIT ready`; Present `desktopOnly=0`.
+
 ## 0.1.79 — CUI / CreateWindow (wineconsole wrap)
 
 **Smoke risk (0.1.78):** sticky/nohwnd map can still leave Loaded-but-no-HWND when

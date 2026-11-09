@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.79",
-  "versionCode": 80,
-  "notes": "0.1.79: CUI/CreateWindow — seed wineconsole.exe; PE subsystem=3 → wineconsole --backend=user; after nohwnd scan=none classify APP_CREATEWINDOW_MISS + one CUI relaunch; keep 078 sticky/nohwnd"
+  "versionName": "0.1.80",
+  "versionCode": 81,
+  "notes": "0.1.80: VS CRT seed (msvcp140/vcruntime140/concrt140/…) into system32+SysWOW64; CREATEWINDOW_MISS missing_dll → APP_CRT_SEED + one APP_CRT_RELAUNCH + APP_CRT_SIG; keep 079 CUI/classify"
 }

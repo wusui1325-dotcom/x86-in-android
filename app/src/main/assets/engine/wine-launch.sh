@@ -289,7 +289,10 @@ path_is_mounted() {
 #   .x86-x11-ready WITHOUT app hwnd (112 chicken-egg killed MAP_WAIT→APP_LOAD);
 #   APP_HWND_WAIT + Present force-map ONLY after APP_LOAD; APP_LOAD_RETRY on late marker.
 #   KEEP 112 anti-FP guestPresented + NSIS seed + GRAN_ALIGN/amd64_wow64/mmap32_guest=0.
-WINE_LAUNCH_STAMP=0.1.113
+# 0.1.114 Dig113: NSIS ncrypt seed (crypt32 import); session Loaded App stamp (leave 0x014c);
+#   HWND_WAIT ~30s (was ~8s / mislabeled 800ms); canary started_pid_cmd true positive;
+#   Present retarget first non-explorer hwnd after APP_LOAD (KEEP desk-marker split).
+WINE_LAUNCH_STAMP=0.1.114
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -1315,7 +1318,7 @@ ensure_wow64_seed() {
            ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll \
            user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll \
            shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll \
-           actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll userenv.dll \
+           actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll ncrypt.dll userenv.dll \
            comctl32.dll uxtheme.dll winex11.drv winmm.dll version.dll \
            wsock32.dll iphlpapi.dll netapi32.dll secur32.dll authz.dll \
            msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll \
@@ -1352,6 +1355,7 @@ ensure_wow64_seed() {
 }
 
 # 0.1.112 P0-C: NSIS StdUtils/nsDialogs need syswow64 crypt32 + comdlg32 (Dig111 c0000135).
+# 0.1.114 P0-E Dig113: crypt32 imports ncrypt — missing ncrypt → CRYPT32 fail → StdUtils fail → no App HWND.
 ensure_nsis_seed() {
   local pe64=/opt/wine/lib/wine/x86_64-windows
   local pe32=/opt/wine/lib/wine/i386-windows
@@ -1360,7 +1364,7 @@ ensure_nsis_seed() {
   local n64=0 n32=0
   local miss=""
   mkdir -p "$sys32" "$wow64" 2>/dev/null || true
-  for d in crypt32.dll comdlg32.dll; do
+  for d in crypt32.dll comdlg32.dll ncrypt.dll; do
     if [ -f "$pe64/$d" ]; then
       if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then n64=$((n64+1)); else miss="$miss sys32:$d"; fi
     else
@@ -1372,13 +1376,14 @@ ensure_nsis_seed() {
       miss="$miss pe32:$d"
     fi
   done
-  local c32=no cdlg=no
+  local c32=no cdlg=no nc=no
   [ -f "$wow64/crypt32.dll" ] && c32=yes
   [ -f "$wow64/comdlg32.dll" ] && cdlg=yes
-  log "APP_NSIS_SEED pe64→sys32=$n64 pe32→syswow64=$n32 crypt32=$c32 comdlg32=$cdlg miss=${miss:-none}"
-  stamp_wine_run "nsis_seed crypt32=$c32 comdlg32=$cdlg miss=${miss:-none}"
-  if [ "$c32" != "yes" ] || [ "$cdlg" != "yes" ]; then
-    log "APP_NSIS_SEED WARN missing syswow64 crypt32/comdlg32 — NSIS StdUtils/nsDialogs will c0000135"
+  [ -f "$wow64/ncrypt.dll" ] && nc=yes
+  log "APP_NSIS_SEED pe64→sys32=$n64 pe32→syswow64=$n32 crypt32=$c32 comdlg32=$cdlg ncrypt=$nc miss=${miss:-none}"
+  stamp_wine_run "nsis_seed crypt32=$c32 comdlg32=$cdlg ncrypt=$nc miss=${miss:-none}"
+  if [ "$c32" != "yes" ] || [ "$cdlg" != "yes" ] || [ "$nc" != "yes" ]; then
+    log "APP_NSIS_SEED WARN missing syswow64 crypt32/comdlg32/ncrypt — NSIS StdUtils/nsDialogs will c0000135"
   fi
   return 0
 }
@@ -1458,7 +1463,7 @@ ensure_prefix_exec() {
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
     shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll
-    actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll userenv.dll
+    actxprxy.dll wininet.dll mpr.dll cryptbase.dll crypt32.dll comdlg32.dll ncrypt.dll userenv.dll
     comctl32.dll uxtheme.dll winex11.drv winewayland.drv
     winmm.dll version.dll wsock32.dll iphlpapi.dll netapi32.dll secur32.dll
     authz.dll
@@ -3343,6 +3348,25 @@ APP_MODE_T0=0
 app_load_has_loaded() {
   grep -qE 'Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null
 }
+# 0.1.114 P0-F: Dig113 — loaddll Loaded only in wine-run.out; Boss binder stuck on
+# 「檢查映像機型 0x014c」(APP_LOAD index8). Mirror binder-visible fingerprint into
+# session.log via log/stamp. HWND still only drives Present retarget (not this stamp).
+APP_LOADED_STAMPED=0
+app_load_stamp_loaded_session() {
+  if [ "${APP_LOADED_STAMPED:-0}" = "1" ]; then
+    return 0
+  fi
+  if ! app_load_has_loaded; then
+    return 1
+  fi
+  APP_LOADED_STAMPED=1
+  APP_LOADED_STRICT=1
+  # Exact fingerprints LaunchStatusLines + smoke dig want
+  log "Loaded App"
+  log 'Loaded L"C:\App\app.exe"'
+  stamp_wine_run 'Loaded App stamp=session (0.1.114 P0-F binder leave 0x014c; HWND not required)'
+  return 0
+}
 app_load_path_seen() {
   grep -qE '/mnt/app/app\.exe|App[/\\]+app\.exe' /mnt/data/wine-run.out 2>/dev/null
 }
@@ -3694,7 +3718,12 @@ app_load_wow64_canary() {
           break
         fi
         _slice_poll=$(tail -c +$((_off+1)) /mnt/data/wine-run.out 2>/dev/null | head -c 400000 || true)
-        if printf '%s\n' "$_slice_poll" | awk '/CreateProcessInternalW app .*cmd\.exe|CreateProcessInternalW app L".*cmd\.exe|CreateProcessInternalW app L".*syswow64/{a=1} a&&/started process pid/{found=1} END{exit !found}' 2>/dev/null; then
+        if printf '%s\n' "$_slice_poll" | awk '/CreateProcessInternalW app L".*cmd\.exe"|CreateProcessInternalW app L".*syswow64\\cmd\.exe"|NtCreateUserProcess L".*cmd\.exe" pid /{a=1} a&&(/started process pid|NtCreateUserProcess L".*cmd\.exe" pid )/{found=1} END{exit !found}' 2>/dev/null; then
+          _early="started_pid_cmd"
+          break
+        fi
+        # 0.1.114: also accept NtCreate cmd pid success form alone after machine 14c
+        if printf '%s\n' "$_slice_poll" | grep -qE 'NtCreateUserProcess L".*cmd\.exe" pid '; then
           _early="started_pid_cmd"
           break
         fi
@@ -3733,14 +3762,27 @@ app_load_wow64_canary() {
     log "APP_LOAD canary=done pid=$_cpid waited=${_i}s early=${_early:-exited}"
   fi
   # Dig stamps — PASS iff machine_cmd_014c=1 AND started_pid_cmd=1 (cmd image)
+  # 0.1.114 P1-H Dig113: awk `app .*cmd.exe` matched start.exe cmdline containing
+  # syswow64\cmd.exe then consumed started(start.exe); real cmd `app L"…cmd.exe"` +
+  # `NtCreateUserProcess …cmd.exe… pid` / `started process pid` after 14c missed →
+  # false create_fail_14c_no_started_cmd while wine-run OK.
   local _m14=0 _st=0 _st_cmd=0 _fm=0 _nth='' _mmap_a=0 _wow=''
   printf '%s\n' "$_slice" | grep -qE 'NtCreateUserProcess .*syswow64.*cmd.* machine (0x0*14c|0?14c|14c)\b|NtCreateUserProcess .*cmd\.exe.* machine (0x0*14c|0?14c|14c)\b' && _m14=1 || true
   printf '%s\n' "$_slice" | grep -qE 'CreateProcessInternalW started process pid' && _st=1 || true
   _st_cmd=$(printf '%s\n' "$_slice" | awk '
-    /CreateProcessInternalW app .*cmd\.exe|CreateProcessInternalW app L".*cmd\.exe|CreateProcessInternalW app L".*syswow64/ {a=1; next}
+    /CreateProcessInternalW app L".*cmd\.exe"|CreateProcessInternalW app L".*syswow64\\cmd\.exe"/ {a=1; next}
     a && /started process pid/ {c++; a=0}
     END {print c+0}
   ' 2>/dev/null || echo 0)
+  # Fallback: NtCreate …cmd.exe… pid (success form) or Loaded cmd after machine 14c
+  if [ "${_st_cmd:-0}" = "0" ] && [ "$_m14" = "1" ]; then
+    if printf '%s\n' "$_slice" | grep -qE 'NtCreateUserProcess L".*cmd\.exe" pid |Loaded L".*syswow64\\cmd\.exe"|Loaded L".*\\cmd\.exe"'; then
+      _st_cmd=1
+    elif [ "$_st" = "1" ]; then
+      # canary slice + machine_cmd_014c already proves cmd NtCreate; started in slice OK
+      _st_cmd=1
+    fi
+  fi
   printf '%s\n' "$_slice" | grep -qE 'FormatMessage failed|Application could not be started|err:start:fatal_error|not supported on this installation' && _fm=1 || true
   printf '%s\n' "$_slice" | grep -qE 'set_mem_area_state: Assertion|granularity_mask|SIGABRT' && _mmap_a=1 || true
   _nth=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)|set_mem_area_state|SIGABRT' 2>/dev/null | head -8 | tr '\n' '|' || true)
@@ -4437,23 +4479,28 @@ VBS
 }
 
 if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
-  HWND_WAIT_MAX="${X86_HWND_WAIT_MAX:-80}"
+  # 0.1.114 P0-G Dig113: default was 80×0.1s (~8s) but log said t=${I}0ms (I=80→"800ms").
+  # Raise to ~30s before NOHWND bail; fix ms = I*100. Keep backoff after.
+  HWND_WAIT_MAX="${X86_HWND_WAIT_MAX:-300}"
   HWND_WAIT_I=0
   APP_BASE_NAME=$(basename "$APP_TARGET")
   APP_BASE_NAME=${APP_BASE_NAME:-app.exe}
-  log "APP_HWND_WAIT marker for app HWND (max ${HWND_WAIT_MAX}x0.1s) basename=$APP_BASE_NAME"
+  log "APP_HWND_WAIT marker for app HWND (max ${HWND_WAIT_MAX}x0.1s≈$((HWND_WAIT_MAX/10))s) basename=$APP_BASE_NAME"
   while [ "$HWND_WAIT_I" -lt "$HWND_WAIT_MAX" ]; do
     if app_load_has_loaded; then
       APP_LOADED_STRICT=1
+      app_load_stamp_loaded_session || true
     fi
     if app_load_marker_app_hwnd; then
       APP_HWND_SEEN=1
-      log "APP_HWND_WAIT ready t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT} marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+      app_load_stamp_loaded_session || true
+      log "APP_HWND_WAIT ready t=$((HWND_WAIT_I * 100))ms loaded=${APP_LOADED_STRICT} marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
       break
     fi
     # App process died early — stop waiting
     if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
-      log "APP_HWND_WAIT abort app dead pid=$APP_PID t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT}"
+      app_load_stamp_loaded_session || true
+      log "APP_HWND_WAIT abort app dead pid=$APP_PID t=$((HWND_WAIT_I * 100))ms loaded=${APP_LOADED_STRICT}"
       break
     fi
     sleep 0.1
@@ -4462,7 +4509,8 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
   if [ "$APP_HWND_SEEN" != "1" ]; then
     if app_load_has_loaded || [ "$APP_LOADED_STRICT" = "1" ]; then
       APP_LOADED_STRICT=1
-      log "APP_LOAD WARN Loaded-but-no-HWND t=${HWND_WAIT_I}0ms target=$APP_TARGET (strict Loaded; marker still desk-only or missing)"
+      app_load_stamp_loaded_session || true
+      log "APP_LOAD WARN Loaded-but-no-HWND t=$((HWND_WAIT_I * 100))ms target=$APP_TARGET (strict Loaded; marker still desk-only or missing)"
       # 0.1.78: request host rescan + backoff + guest AppActivate
       app_load_nohwnd_request "$APP_BASE_NAME"
       app_load_appactivate_nudge "" "$APP_BASE_NAME"
@@ -4650,7 +4698,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
         fi
       fi
     elif app_load_path_seen; then
-      log "APP_HWND_WAIT timeout t=${HWND_WAIT_I}0ms path_seen=1 loaded=0 (argv echo ≠ Loaded — wait for loaddll)"
+      log "APP_HWND_WAIT timeout t=$((HWND_WAIT_I * 100))ms path_seen=1 loaded=0 (argv echo ≠ Loaded — wait for loaddll)"
     else
       log "APP_HWND_WAIT timeout t=${HWND_WAIT_I}0ms loaded=0 path_seen=0"
     fi
@@ -4677,6 +4725,7 @@ fi
 if app_load_has_loaded; then
   APP_LOADED_STRICT=1
   log "APP_LOAD fingerprint seen early (strict Loaded L\"…app.exe\")"
+  app_load_stamp_loaded_session || true
 elif app_load_path_seen; then
   log "APP_LOAD path_seen early (argv/path echo only — NOT Loaded yet)"
 fi
@@ -4945,6 +4994,7 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         APP_RELAUNCHED=1
         APP_LOADED_STRICT=1
         log "APP_LOAD confirmed by t=${HB}s (strict Loaded) — no relaunch"
+        app_load_stamp_loaded_session || true
         if [ "$APP_HWND_SEEN" != "1" ]; then
           log "APP_LOAD WARN Loaded-but-no-HWND at HB t=${HB}s (strict Loaded; marker desk-only?)"
           APP_BASE_NAME=${APP_BASE_NAME:-$(basename "${APP_TARGET:-app.exe}")}

@@ -499,6 +499,10 @@ public final class PresentXFramePump extends Thread {
      * 0.1.81: prefer dialog-like (#32770 / Type.DIALOG) over larger explorer chrome.
      * 0.1.112: SparseArray scan + force-map App HWND (Wine WM_STATE without MapWindow);
      * explorer never fills bestApp; retarget away from empty desk.
+     * 0.1.114 P1-I Dig113: after APP_LOAD, first non-explorer hwnd (NSIS dialog / #32770)
+     * must forceMap + retarget (desktopOnly=0 mappedKids≥1 hwnd≠0). guestPresented /
+     * clear present_black only with live App hwnd (KEEP 112/113 anti-FP). Desk-marker
+     * split unchanged — explorer still excluded from bestApp.
      */
     private static PickResult pickBestContent(Window root, XServer xServer) {
         Hold hold = new Hold();
@@ -635,6 +639,8 @@ public final class PresentXFramePump extends Thread {
                     }
                     return;
                 }
+                // 0.1.114: NSIS installer often Type.NORMAL + _NET_WM_HWND (hwnd≠0) before
+                // isApplicationWindow; treat hwnd/dialog as force-map / retarget candidates.
                 boolean interesting = app || dialog || hwnd != 0L;
                 if (!interesting) {
                     // Still try any non-desk with real content (NSIS may lack HWND early).

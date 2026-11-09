@@ -183,14 +183,16 @@ object LaunchStatusLines {
                 return Phase.X_SERVER
             "create_fail=" in t || "ladder advance exhausted" in t || "APP_LOAD_FATAL" in t ->
                 return Phase.FAIL_HINT
+            // 0.1.114 P0-F: Dig113 sticky「檢查映像機型 0x014c」— prefer Loaded fingerprint
+            // over lingering APP_LOAD tokens so phase can leave index8 / enter RUNNING.
+            "Loaded App" in t || ("Loaded L\"" in t && ("App\\app.exe" in t || "App/app.exe" in t)) ->
+                return Phase.RUNNING
             "APP_LOAD" in t && "WINE_START" in t ->
                 return Phase.APP_LOAD
             "WINE_START" in t && ("MAP_WAIT" in t || "explorer" in t.lowercase()) && "APP_LOAD cmdline" !in t ->
                 return Phase.DESKTOP
             "WINE_START" in t ->
-                return if ("Loaded L\"" in t && ("App\\app.exe" in t || "App/app.exe" in t)) {
-                    Phase.RUNNING
-                } else if ("APP_LOAD" in t) {
+                return if ("APP_LOAD" in t) {
                     Phase.APP_LOAD
                 } else {
                     Phase.DESKTOP
@@ -249,7 +251,9 @@ object LaunchStatusLines {
                 else -> at(0)
             }
             Phase.APP_LOAD -> when {
-                "Loaded L\"" in logText && ("App\\app.exe" in logText || "App/app.exe" in logText) -> at(6)
+                // 0.1.114: Loaded App / Loaded L"…App\app.exe" beat machine 0x014c (Dig113 sticky index8)
+                "Loaded App" in logText ||
+                    ("Loaded L\"" in logText && ("App\\app.exe" in logText || "App/app.exe" in logText)) -> at(6)
                 "ladder advance" in logText -> at(5)
                 "create_fail=" in logText || "shellex_after_machine14c" in logText -> at(14)
                 "machine 14c" in logText || "machine_014c=1" in logText || "machine 0x014c" in logText -> at(8)

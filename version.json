@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.51",
-  "versionCode": 52,
-  "notes": "0.1.51: WINE_START hang (light debug + complete-prefix wineboot + WINE_HB); full log export; parallel extract; holefit skip-probe; keep NTDLL_ANON_PE + soft-pass"
+  "versionName": "0.1.52",
+  "versionCode": 53,
+  "notes": "0.1.52: kernel32 c0000135 — stop system32 bind-over; seed PE DLLs; wipe incomplete prefix; FATAL on c0000135/incomplete before WINE_START; keep NTDLL_ANON_PE + soft-pass + log export"
 }

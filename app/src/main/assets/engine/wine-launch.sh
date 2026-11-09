@@ -13,10 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.51: WINE_START hang — light WINE_RUN debug, complete-prefix wineboot,
-# smoke cleanup, WINE_HB heartbeats, DISPLAY diagnose; speed: holefit skip-probe,
-# PREFIX_EXEC skip redundant copy; keep NTDLL_ANON_PE + soft-pass smoke.
-WINE_LAUNCH_STAMP=0.1.51
+# 0.1.52: kernel32 c0000135 — stop bind-over system32 (hid wineboot layout);
+# seed PE DLLs by copy; wipe incomplete prefix; FATAL on c0000135 / incomplete
+# before WINE_START. Keep NTDLL_ANON_PE + soft-pass smoke + log export + speed.
+WINE_LAUNCH_STAMP=0.1.52
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -425,13 +425,15 @@ parallel_dir_copy() {
 }
 
 ensure_prefix_exec() {
+  # 0.1.52: NTDLL_ANON_PE already bypasses Android W^X (anon/pread). Binding a
+  # scratch tree OVER $WINEPREFIX/.../system32 HIDES wineboot-created DLLs and
+  # left child start.exe with c0000135 (kernel32 DLL_NOT_FOUND) while parent
+  # still loaded builtins. Do NOT bind-over system32 — seed PE DLLs by copy.
   local p="${WINEPREFIX:-/home/xuser/.wine}"
   local pe_dir=/opt/wine/lib/wine/x86_64-windows
   local pe_ntdll="$pe_dir/ntdll.dll"
   local sys32="$p/drive_c/windows/system32"
-  # Durable marker on prefix (not /tmp) so early-skip works across PRoot /tmp flakes
   local ok_marker="$p/.prefix-exec-ok"
-  local scratch=""
 
   ensure_dir() {
     local d="$1"
@@ -448,167 +450,26 @@ ensure_prefix_exec() {
     [ -d "$d" ]
   }
 
-  log_diag() {
-    local label="$1"
-    local path="$2"
-    ls -ld "$path" 2>&1 | while read -r line; do log "PREFIX_EXEC ls[$label]: $line"; done || true
-    if [ ! -e "$path" ]; then
-      log "PREFIX_EXEC ls[$label]: missing $path"
-    fi
-    awk -v s="$path" '$2==s {print}' /proc/mounts 2>/dev/null | while read -r line; do
-      log "PREFIX_EXEC mount[$label]: $line"
-    done || true
-    grep -E 'pe-exec|wine-pe' /proc/mounts 2>/dev/null | while read -r line; do
-      log "PREFIX_EXEC mountgrep[$label]: $line"
-    done || true
-  }
-
   path_is_mounted() {
     local s="$1"
     awk -v m="$s" '$2==m {found=1} END{exit !found}' /proc/mounts 2>/dev/null
   }
 
-  scratch_verify() {
-    local s="$1"
-    local need_mount="${2:-0}"
-    if [ ! -d "$s" ]; then
-      log "PREFIX_EXEC verify FAIL not-dir path=$s"
-      return 1
+  # Drop stale bind from 0.1.48–0.1.51 that covered real system32
+  if path_is_mounted "$sys32"; then
+    log "PREFIX_EXEC umount stale system32 bind path=$sys32 (0.1.52: seed-copy, no bind-over)"
+    umount "$sys32" 2>/dev/null || umount -l "$sys32" 2>/dev/null || true
+    if path_is_mounted "$sys32"; then
+      log "WARN: PREFIX_EXEC could not umount system32 bind — wineboot may still see scratch tree"
+    else
+      log "PREFIX_EXEC umount system32 ok"
     fi
-    if ! touch "$s/.writetest" 2>/dev/null; then
-      log "PREFIX_EXEC verify FAIL not-writable path=$s"
-      return 1
-    fi
-    rm -f "$s/.writetest" 2>/dev/null || true
-    if [ "$need_mount" = "1" ] && ! path_is_mounted "$s"; then
-      log "PREFIX_EXEC verify FAIL not-in-/proc/mounts path=$s"
-      return 1
-    fi
-    if ! mkdir "$s/.verify-mkdir" 2>/dev/null; then
-      log "PREFIX_EXEC verify FAIL cannot mkdir under path=$s"
-      return 1
-    fi
-    rmdir "$s/.verify-mkdir" 2>/dev/null || true
-    # Drop a tiny probe file and mmap PROT_EXEC when python available (catches noexec early)
-    if [ -f "$pe_ntdll" ]; then
-      cp -f "$pe_ntdll" "$s/.pe-probe.dll" 2>/dev/null || true
-      if [ -f "$s/.pe-probe.dll" ]; then
-        if ! probe_pe_exec "$s/.pe-probe.dll"; then
-          log "PREFIX_EXEC verify FAIL pe-probe noexec path=$s"
-          rm -f "$s/.pe-probe.dll" 2>/dev/null || true
-          return 1
-        fi
-        rm -f "$s/.pe-probe.dll" 2>/dev/null || true
-      fi
-    fi
-    log "PREFIX_EXEC verify ok path=$s need_mount=$need_mount"
-    return 0
-  }
-
-  # Prefer plain rootfs dirs (same FS as pe_ok /opt/wine). Guest mount -t tmpfs is broken
-  # under this PRoot (claim success → path ENOENT). Optional: reuse already-live tmpfs.
-  prepare_scratch() {
-    local c
-    # 1) Reuse an already-mounted + accessible pe-exec/tmpfs if sticky
-    for c in /opt/wine-pe-exec /var/tmp/wine-pe-exec /home/xuser/wine-pe-exec \
-             "$p/.pe-exec" /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec /dev/shm/wine-pe-exec; do
-      if path_is_mounted "$c"; then
-        log "PREFIX_EXEC scratch try reuse-mounted path=$c"
-        log_diag already-mounted "$c"
-        if scratch_verify "$c" 1; then
-          scratch="$c"
-          log "PREFIX_EXEC scratch ok mode=reuse-mounted path=$scratch"
-          return 0
-        fi
-        log "PREFIX_EXEC scratch mounted but stale — umount $c"
-        umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
-      fi
-    done
-
-    # 2) Plain durable dirs on rootfs (NO mount -t tmpfs)
-    for c in /opt/wine-pe-exec /var/tmp/wine-pe-exec /home/xuser/wine-pe-exec; do
-      log "PREFIX_EXEC scratch try path=$c mode=plain-dir"
-      case "$c" in
-        */*) mkdir -p "${c%/*}" 2>/dev/null || true ;;
-      esac
-      if [ -e "$c" ] && [ ! -d "$c" ]; then
-        rm -f "$c" 2>/dev/null || true
-      fi
-      if [ ! -d "$c" ]; then
-        mkdir -p "$c" 2>/dev/null || true
-      fi
-      if [ ! -d "$c" ]; then
-        log "PREFIX_EXEC scratch mkdir fail path=$c"
-        log_diag mkdirfail "$c"
-        continue
-      fi
-      log_diag pre-plain "$c"
-      if scratch_verify "$c" 0; then
-        scratch="$c"
-        log "PREFIX_EXEC scratch ok mode=plain-dir path=$scratch"
-        return 0
-      fi
-      log "PREFIX_EXEC scratch plain-dir verify fail path=$c — try next"
-    done
-
-    # 3) Last resort: guest tmpfs (known flaky) — only accept if post-mount verify sticks
-    for c in /var/tmp/.wine-pe-exec-tmpfs /tmp/.wine-pe-exec; do
-      log "PREFIX_EXEC scratch try path=$c mode=tmpfs-lastresort"
-      case "$c" in
-        */*) mkdir -p "${c%/*}" 2>/dev/null || true ;;
-      esac
-      if [ -e "$c" ] && [ ! -d "$c" ]; then
-        rm -f "$c" 2>/dev/null || true
-      fi
-      if [ ! -d "$c" ]; then
-        mkdir -p "$c" 2>/dev/null || true
-      fi
-      if [ ! -d "$c" ]; then
-        log "PREFIX_EXEC scratch mkdir mountpoint fail path=$c"
-        continue
-      fi
-      log_diag pre-mount "$c"
-      local size_ok=""
-      if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=768M tmpfs "$c" 2>/dev/null; then
-        size_ok=768M
-      elif mount -t tmpfs -o rw,exec,nosuid,mode=755,size=512M tmpfs "$c" 2>/dev/null; then
-        size_ok=512M
-      else
-        log "PREFIX_EXEC tmpfs mount syscall failed path=$c"
-        continue
-      fi
-      log "PREFIX_EXEC tmpfs mount claimed size=$size_ok path=$c"
-      log_diag post-mount "$c"
-      if scratch_verify "$c" 1; then
-        scratch="$c"
-        log "PREFIX_EXEC scratch ok mode=tmpfs path=$scratch size=$size_ok"
-        return 0
-      fi
-      log "PREFIX_EXEC scratch vanished after tmpfs mount — try next"
-      umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
-    done
-
-    log "FATAL: PREFIX_EXEC no durable scratch (plain-dir + tmpfs-lastresort all failed)"
-    exit 1
-  }
-
-  ensure_dir "$sys32" || true
-  ensure_dir "$p" || true
-
-  sys32_ok() {
-    [ -f "$sys32/ntdll.dll" ] || return 1
-    probe_pe_exec "$sys32/ntdll.dll"
-  }
-  pe_ok() {
-    [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"
-  }
-
-  if [ -f "$ok_marker" ] && pe_ok && sys32_ok; then
-    log "PREFIX_EXEC skip (already ok) pe=$pe_ntdll sys32=$sys32/ntdll.dll"
-    return 0
   fi
 
-  # Remount: claimed only — never success
+  ensure_dir "$p" || true
+  ensure_dir "$sys32" || true
+
+  # Remount: claimed only — never success alone
   if mount -o remount,exec,rw "$p" 2>/dev/null; then
     log "PREFIX_EXEC remount WINEPREFIX claimed (not trusted alone)"
   fi
@@ -622,168 +483,63 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC remount x86_64-windows claimed (not trusted alone)"
   fi
 
-  if pe_ok && sys32_ok; then
-    log "PREFIX_EXEC ok mode=probe pe=$pe_ntdll sys32=$sys32/ntdll.dll (fs already exec)"
-    echo "mode=probe" > "$ok_marker" 2>/dev/null || true
-    return 0
-  fi
-  if pe_ok && [ ! -f "$sys32/ntdll.dll" ]; then
-    log "PREFIX_EXEC pe ok but sys32/ntdll missing — forcing tmpfs+bind before wineboot materializes PE"
-  elif pe_ok && ! sys32_ok; then
-    log "PREFIX_EXEC pe ok but sys32 noexec ($sys32/ntdll.dll) — forcing tmpfs+bind system32"
-  else
-    log "PREFIX_EXEC probe fail pe=$pe_ntdll — forcing tmpfs+bind for x86_64-windows + system32"
-  fi
-
-  prepare_scratch
-  if [ -z "$scratch" ] || ! scratch_verify "$scratch" 0; then
-    log "FATAL: PREFIX_EXEC scratch not verified after prepare path=${scratch:-unset}"
-    log_diag fatal-scratch "${scratch:-/}"
+  if [ ! -f "$pe_ntdll" ]; then
+    log "FATAL: PREFIX_EXEC missing $pe_ntdll"
     exit 1
   fi
 
-  if [ ! -f "$scratch/x86_64-windows/ntdll.dll" ]; then
-    if [ ! -d "$pe_dir" ]; then
-      log "FATAL: PREFIX_EXEC missing $pe_dir"
-      exit 1
+  # Seed critical PE DLLs into system32 (copy; never delete wineboot extras)
+  # Wineboot will add more; child start.exe needs kernel32.dll visible as a file
+  # under C:\windows\system32 (builtin-only was flaky after half-init + bind).
+  local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
+    sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
+    user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
+    shell32.dll shlwapi.dll shcore.dll ole32.dll combase.dll coml2.dll
+    wininet.dll mpr.dll cryptbase.dll userenv.dll"
+  local seeded=0
+  local skipped=0
+  local d
+  for d in $seed_list; do
+    if [ -f "$pe_dir/$d" ]; then
+      if cp -f "$pe_dir/$d" "$sys32/$d" 2>/dev/null; then
+        seeded=$((seeded+1))
+      else
+        log "PREFIX_EXEC seed fail $d"
+        skipped=$((skipped+1))
+      fi
     fi
-    log "PREFIX_EXEC copying $pe_dir → tmpfs (one-time) scratch=$scratch"
-    log_diag pre-copy "$scratch"
-    if ! ensure_dir "$scratch/x86_64-windows"; then
-      log "FATAL: PREFIX_EXEC cannot mkdir $scratch/x86_64-windows"
-      log_diag mkdir-x64w "$scratch"
-      log_diag mkdir-x64w-child "$scratch/x86_64-windows"
-      exit 1
+  done
+  # Also seed common wine boot PE exes so start.exe / wineboot.exe resolve as files
+  for d in wineboot.exe start.exe services.exe explorer.exe rundll32.exe; do
+    if [ -f "$pe_dir/$d" ]; then
+      cp -f "$pe_dir/$d" "$sys32/$d" 2>/dev/null && seeded=$((seeded+1)) || true
     fi
-    # Parallel copy when nproc>1 (wall-clock win on large PE tree)
-    if ! parallel_dir_copy "$pe_dir" "$scratch/x86_64-windows"; then
-      log "FATAL: PREFIX_EXEC cp x86_64-windows failed"
-      exit 1
-    fi
-    log "PREFIX_EXEC copy x86_64-windows done"
-  else
-    log "PREFIX_EXEC reuse tmpfs x86_64-windows copy scratch=$scratch"
-  fi
+  done
+  chmod -R u+rx "$sys32" 2>/dev/null || true
 
-  bind_pe_from_scratch() {
-    if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
-       || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
-      log "PREFIX_EXEC bind x86_64-windows ok"
-      log_diag bind-x64w "$pe_dir"
-      return 0
-    fi
-    log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
-    log_diag bindfail-x64w "$pe_dir"
-    exit 1
-  }
-
-  if pe_ok; then
-    log "PREFIX_EXEC skip bind x86_64-windows (pe already exec)"
-  elif path_is_mounted "$pe_dir"; then
-    log "PREFIX_EXEC bind x86_64-windows already mounted — re-probe"
-    log_diag already-pe "$pe_dir"
-    if pe_ok; then
-      log "PREFIX_EXEC existing pe bind still exec"
-    else
-      log "PREFIX_EXEC pe stale/noexec on existing bind — umount+rebind"
-      umount "$pe_dir" 2>/dev/null || umount -l "$pe_dir" 2>/dev/null || true
-      bind_pe_from_scratch
-    fi
-  else
-    bind_pe_from_scratch
-  fi
-
-  # ALWAYS put system32 on scratch bind so wineboot copies / NT maps land on exec
-  if ! ensure_dir "$scratch/system32"; then
-    log "FATAL: PREFIX_EXEC cannot mkdir $scratch/system32"
-    log_diag mkdir-sys32 "$scratch"
-    exit 1
-  fi
-  # Skip full sys32 tree copy when already seeded (ntdll + .copied); only refresh ntdll
-  if [ -f "$scratch/system32/.copied" ] && [ -f "$scratch/system32/ntdll.dll" ]; then
-    log "PREFIX_EXEC reuse scratch/system32 (skip full copy)"
-  else
-    if [ -d "$sys32" ] && [ "$(ls -A "$sys32" 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
-      parallel_dir_copy "$sys32" "$scratch/system32" 2>/dev/null || cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
-    fi
-  fi
-  cp -f "$scratch/x86_64-windows/ntdll.dll" "$scratch/system32/ntdll.dll" 2>/dev/null \
-    || cp -f "$pe_ntdll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
-  touch "$scratch/system32/.copied" 2>/dev/null || true
-  ensure_dir "$sys32" || true
-
-  bind_sys32_from_scratch() {
-    if mount --bind "$scratch/system32" "$sys32" 2>/dev/null \
-       || mount -o bind "$scratch/system32" "$sys32" 2>/dev/null; then
-      log "PREFIX_EXEC bind system32 ok path=$sys32"
-      log_diag bind-sys32 "$sys32"
-      return 0
-    fi
-    log "FATAL: PREFIX_EXEC bind system32 failed path=$sys32 — C:\\windows\\system32 will stay noexec"
-    log_diag bindfail-sys32 "$sys32"
-    exit 1
-  }
-
-  if path_is_mounted "$sys32"; then
-    log "PREFIX_EXEC bind system32 already mounted path=$sys32 — re-probe"
-    log_diag already-sys32 "$sys32"
-    cp -f "$scratch/x86_64-windows/ntdll.dll" "$sys32/ntdll.dll" 2>/dev/null \
-      || cp -f "$pe_ntdll" "$sys32/ntdll.dll" 2>/dev/null || true
-    if ! sys32_ok; then
-      log "PREFIX_EXEC sys32 stale/noexec on existing bind — umount+rebind"
-      umount "$sys32" 2>/dev/null || umount -l "$sys32" 2>/dev/null || true
-      bind_sys32_from_scratch
-    else
-      log "PREFIX_EXEC existing sys32 bind still exec"
-    fi
-  else
-    bind_sys32_from_scratch
-  fi
-
-  chmod -R u+x "$scratch/x86_64-windows" "$scratch/system32" "$sys32" 2>/dev/null || true
-
-  # Nested tmpfs sticky check after binds (P0: mount claimed then vanish)
-  log_diag post-bind-scratch "$scratch"
-  grep -E 'pe-exec|wine-pe|system32|x86_64-windows' /proc/mounts 2>/dev/null | while read -r line; do
-    log "PREFIX_EXEC mountgrep[post-bind]: $line"
+  local k32=no n32=no kb=no
+  [ -f "$sys32/kernel32.dll" ] && k32=yes
+  [ -f "$sys32/ntdll.dll" ] && n32=yes
+  [ -f "$sys32/kernelbase.dll" ] && kb=yes
+  local ndll
+  ndll=$(ls "$sys32"/*.dll 2>/dev/null | wc -l | tr -d ' \n')
+  ndll=${ndll:-0}
+  log "PREFIX_EXEC seed pe→sys32 seeded=$seeded skip=$skipped kernel32=$k32 ntdll=$n32 kernelbase=$kb dlls=$ndll sys32=$sys32"
+  ls -l "$sys32/kernel32.dll" "$sys32/ntdll.dll" "$sys32/kernelbase.dll" 2>&1 | while read -r line; do
+    log "PREFIX_EXEC ls[seed]: $line"
   done || true
-  if ! scratch_verify "$scratch" 0; then
-    log "FATAL: PREFIX_EXEC scratch vanished after bind path=$scratch"
-    log_diag fatal-post-bind "$scratch"
+
+  if [ "$k32" != "yes" ] || [ "$n32" != "yes" ]; then
+    log "FATAL: PREFIX_EXEC seed missing kernel32/ntdll after copy (k32=$k32 ntdll=$n32 pe_dir=$pe_dir)"
     exit 1
   fi
 
-  # Require pe PROT_EXEC — pe_ok=no must NEVER print PREFIX_EXEC ok (false green)
-  if pe_ok; then pe_state=yes; else pe_state=no; fi
-  if sys32_ok; then sys32_state=yes; else sys32_state=no; fi
-  if probe_pe_wine_wx "$sys32/ntdll.dll" 2>/dev/null; then wine_wx=yes; else wine_wx=no; fi
-  log "PREFIX_EXEC post-bind probe pe_ok=$pe_state sys32_ok=$sys32_state wine_wx=$wine_wx scratch=$scratch pe=$pe_ntdll sys32=$sys32/ntdll.dll"
-  log "PREFIX_EXEC note wine_wx=no expected on Android W^X; NTDLL_ANON_PE makes Wine use anon/pread"
-
-  if [ "$pe_state" = "yes" ] && [ "$sys32_state" = "yes" ]; then
-    log "PREFIX_EXEC ok mode=scratch+bind sys32=$sys32/ntdll.dll pe_ok=yes scratch=$scratch"
-    echo "mode=scratch+bind-sys32 scratch=$scratch pe_ok=yes" > "$ok_marker"
-    return 0
-  fi
-
-  # preseed only if pe truly exec AND sys32 is bound (ntdll may appear after wineboot)
-  if [ "$pe_state" = "yes" ] && [ ! -f "$sys32/ntdll.dll" ] && path_is_mounted "$sys32"; then
-    log "PREFIX_EXEC ok mode=scratch+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch pe_ok=yes (ntdll will land on exec scratch)"
-    echo "mode=scratch+bind-preseed scratch=$scratch pe_ok=yes" > "$ok_marker"
-    return 0
-  fi
-
-  if [ "$pe_state" = "no" ]; then
-    log "FATAL: PREFIX_EXEC pe_ok=no after scratch+bind — refusing false green (pe=$pe_ntdll scratch=$scratch)"
-    log_diag final-pe "$pe_dir"
-    log_diag final-scratch "$scratch"
-    exit 1
-  fi
-
-  log "FATAL: PREFIX_EXEC probe still fail after scratch+bind — noexec ntdll unresolved (sys32=$sys32 pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch)"
-  log_diag final-sys32 "$sys32"
-  log_diag final-scratch "$scratch"
-  exit 1
+  # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
+  local pe_state=no
+  if [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"; then pe_state=yes; fi
+  log "PREFIX_EXEC ok mode=seed-copy sys32=$sys32/kernel32.dll pe_probe=$pe_state (NTDLL_ANON_PE; no system32 bind)"
+  echo "mode=seed-copy pe_probe=$pe_state k32=yes" > "$ok_marker"
+  return 0
 }
 
 patch_ntdll_anon_pe
@@ -1373,7 +1129,7 @@ else
   exit 1
 fi
 
-# 0.1.51: complete-prefix check (system.reg alone is NOT enough — stub from noexec era)
+# 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
 export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
@@ -1402,15 +1158,38 @@ prefix_is_complete() {
   return 0
 }
 
-if prefix_is_complete "$WINEPREFIX"; then
-  log "WINEBOOT_INIT skip (prefix complete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" | tr -d ' ')B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') .update-timestamp=yes)"
-else
-  if [ -f "$WINEPREFIX/system.reg" ]; then
-    log "WINEBOOT_INIT force (prefix incomplete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" 2>/dev/null | tr -d ' ')B — stub/half-init from prior fail)"
-  else
-    log "WINEBOOT_INIT begin (no system.reg) timeout=120s"
+wipe_wine_prefix() {
+  local p="${1:-$WINEPREFIX}"
+  local reason="${2:-incomplete}"
+  log "WINEBOOT_WIPE begin reason=$reason path=$p"
+  "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+  # Drop stale system32 bind if any
+  if awk -v m="$p/drive_c/windows/system32" '$2==m {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    umount "$p/drive_c/windows/system32" 2>/dev/null || umount -l "$p/drive_c/windows/system32" 2>/dev/null || true
   fi
-  # Drop stale wineserver locks on main prefix before init
+  # Keep parent dir; wipe prefix contents (regs + drive_c + markers)
+  if [ -d "$p" ]; then
+    rm -rf "$p/drive_c" "$p/dosdevices" "$p/system.reg" "$p/user.reg" "$p/userdef.reg" \
+      "$p/.update-timestamp" "$p/.prefix-exec-ok" 2>/dev/null || true
+    # Catch leftovers
+    find "$p" -mindepth 1 -maxdepth 1 ! -name '.' -exec rm -rf {} + 2>/dev/null || true
+  fi
+  mkdir -p "$p/drive_c/windows/system32" 2>/dev/null || true
+  # Re-seed DXVK if present
+  if [ -d /mnt/gpu/dxvk/x64 ]; then
+    for dll in d3d8 d3d9 d3d10core d3d11 dxgi; do
+      if [ -f "/mnt/gpu/dxvk/x64/${dll}.dll" ]; then
+        cp -f "/mnt/gpu/dxvk/x64/${dll}.dll" "$p/drive_c/windows/system32/" 2>/dev/null || true
+      fi
+    done
+  fi
+  ensure_prefix_exec
+  log "WINEBOOT_WIPE done path=$p"
+}
+
+run_wineboot_init() {
+  local label="${1:-init}"
+  log "WINEBOOT_INIT begin ($label) timeout=120s"
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
   : > /mnt/data/wineboot-init.out
   set +e
@@ -1429,10 +1208,8 @@ else
     if [ $((WB_T % 15)) -eq 0 ]; then
       log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ"
     fi
-    # Early done: .update-timestamp appeared
     if [ -f "$WINEPREFIX/.update-timestamp" ] && [ -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]; then
       log "WINEBOOT_INIT progress complete markers t=${WB_T}s — wait exit"
-      # give wineboot a few more seconds to exit cleanly
       for _ in 1 2 3 4 5; do
         kill -0 "$WB_PID" 2>/dev/null || break
         sleep 1
@@ -1443,6 +1220,15 @@ else
         sleep 1
         kill -KILL "$WB_PID" 2>/dev/null || true
       fi
+      break
+    fi
+    # Early abort on c0000135 — no point waiting full 120s
+    if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
+      log "WINEBOOT_INIT detected c0000135 t=${WB_T}s — killing"
+      kill -TERM "$WB_PID" 2>/dev/null || true
+      sleep 1
+      kill -KILL "$WB_PID" 2>/dev/null || true
+      "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
       break
     fi
     if [ "$WB_T" -ge 120 ]; then
@@ -1460,19 +1246,66 @@ else
   set -e
   log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
   log "--- WINEBOOT_INIT key lines ---"
-  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
+  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image|kernel32' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
   log "--- WINEBOOT_INIT tail ---"
   tail -60 /mnt/data/wineboot-init.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
+}
+
+if prefix_is_complete "$WINEPREFIX"; then
+  log "WINEBOOT_INIT skip (prefix complete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" | tr -d ' ')B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') .update-timestamp=yes)"
+else
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    log "WINEBOOT_INIT force wipe (prefix incomplete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" 2>/dev/null | tr -d ' ')B — stub/half-init)"
+    wipe_wine_prefix "$WINEPREFIX" "incomplete-before-init"
+  else
+    log "WINEBOOT_INIT fresh prefix (no system.reg)"
+    # Still ensure seed on empty tree
+    ensure_prefix_exec
+  fi
+  run_wineboot_init "first"
+  # If c0000135 or still incomplete: wipe once more and retry
+  NEED_RETRY=0
+  if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
+    NEED_RETRY=1
+    log "WINEBOOT_INIT c0000135 on first try — wipe+retry once"
+  elif ! prefix_is_complete "$WINEPREFIX"; then
+    NEED_RETRY=1
+    log "WINEBOOT_INIT incomplete after first try — wipe+retry once"
+  fi
+  if [ "$NEED_RETRY" = "1" ]; then
+    wipe_wine_prefix "$WINEPREFIX" "retry-after-fail"
+    run_wineboot_init "retry"
+  fi
   if [ ! -f "$WINEPREFIX/system.reg" ]; then
     log "FATAL: wineboot --init did not create system.reg (exit=$WB_RC). See WINEBOOT_INIT key lines."
     [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
     [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
     exit "${WB_RC:-1}"
   fi
-  if ! prefix_is_complete "$WINEPREFIX"; then
-    log "WARN: WINEBOOT_INIT left incomplete prefix (will still try WINE_START; export log if Present hangs)"
+  if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
+    log "FATAL: wineboot c0000135 (kernel32.dll) after wipe+retry — refusing WINE_START"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit 53
   fi
+  if ! prefix_is_complete "$WINEPREFIX"; then
+    log "FATAL: WINEBOOT_INIT left incomplete prefix (complete=no) — refusing WINE_START (export log)"
+    log "FATAL detail: kernel32=$([ -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ] && echo yes || echo no) ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) update-ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ')"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit "${WB_RC:-1}"
+  fi
+  log "WINEBOOT_INIT complete=yes after init"
 fi
+
+# Gate: kernel32 must exist before explorer
+if [ ! -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]; then
+  log "FATAL: kernel32.dll missing in system32 before WINE_START — refuse launch"
+  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+  exit 53
+fi
+log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
 
 # Display diagnose before START
 X0_STATE=missing

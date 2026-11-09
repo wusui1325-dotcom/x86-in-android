@@ -125,6 +125,10 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.82 DXGI syncInterval：** seed `dxgi.syncInterval=0` + `d3d9.presentInterval=0`
+  (DXVK 2.7.1; unused before). Default VSync can stall forever on virtual/mobile WSI
+  → HWND mapped + Present ok but guest black. `X86_DXGI_SYNC=n` (default 0);
+  `X86_DXVK_CONF=keep` leaves file. Keep 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM.
 - **0.1.81 MessageBox / title：** WINEDEBUG `+msgbox`; `isDialogLike` sticky (#32770/Type.DIALOG);
   Present prefer dialog; AppActivate Error/Warning/錯誤/警告; `APP_MSGBOX_DETECT`;
   keep 080 CRT / 079 CUI / 078 sticky.

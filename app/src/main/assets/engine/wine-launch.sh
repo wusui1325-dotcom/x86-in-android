@@ -14,6 +14,10 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.82: DXGI syncInterval — seed dxgi.syncInterval=0 + d3d9.presentInterval=0
+# (DXVK 2.7.1 dxvk.conf; unused before). Default VSync=1 can stall forever on virtual/
+# mobile WSI → HWND mapped + Present ok but guest black. X86_DXGI_SYNC=n (default 0);
+# X86_DXVK_CONF=keep leaves file. Keep 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM.
 # 0.1.81: MessageBox / title — WINEDEBUG +msgbox; classify msgbox:; host dialog-like
 # sticky (#32770 / Type.DIALOG); Present prefer dialog; AppActivate Error/Warning/錯誤/警告
 # nudge; APP_MSGBOX_DETECT source=wine|x11. Keep 080 CRT / 079 CUI / 078 sticky.
@@ -58,7 +62,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.81
+WINE_LAUNCH_STAMP=0.1.82
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -149,8 +153,13 @@ case "${X86_DXWRAPPER:-dxvk}" in
     if [ "${X86_DXVK_CONF:-}" = "keep" ] && [ -f "$_dxvk_conf" ]; then
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
-      cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.80 — managed (set X86_DXVK_CONF=keep to preserve edits)
+      # 0.1.82: X86_DXGI_SYNC=n (default 0) — disable VSync wait on mobile/virtual WSI
+      _sync="${X86_DXGI_SYNC:-0}"
+      case "$_sync" in
+        ''|*[!0-9]*) _sync=0 ;;
+      esac
+      cat > "$_dxvk_conf" <<DXVKEOF
+# x86-in-android 0.1.82 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -166,8 +175,14 @@ dxgi.maxFrameLatency = 1
 d3d9.maxFrameLatency = 1
 dxgi.numBackBuffers = 3
 d3d9.numBackBuffers = 3
+# 0.1.82: DXVK 2.7.1 — force syncInterval=0 (disable VSync). Default -1/1 can stall
+# forever waiting for a refresh that never arrives on virtual/mobile WSI (HWND black).
+# Override: X86_DXGI_SYNC=n
+dxgi.syncInterval = ${_sync}
+d3d9.presentInterval = ${_sync}
 DXVKEOF
-      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0 dialogMode=1 allowFse=0 maxFrameLatency=1 numBackBuffers=3"
+      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0 dialogMode=1 allowFse=0 maxFrameLatency=1 numBackBuffers=3 syncInterval=${_sync}"
+      unset _sync
     fi
     export DXVK_CONFIG_FILE="$_dxvk_conf"
     log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} config=${DXVK_CONFIG_FILE:-off} (Present skips HUD band)"

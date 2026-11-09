@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.81",
-  "versionCode": 82,
-  "notes": "0.1.81: MessageBox/title — WINEDEBUG +msgbox; dialog-like sticky (#32770/Type.DIALOG); Present prefer dialog; AppActivate Error/Warning/錯誤/警告; APP_MSGBOX_DETECT; keep 080 CRT/079 CUI/078 sticky"
+  "versionName": "0.1.82",
+  "versionCode": 83,
+  "notes": "0.1.82: DXGI syncInterval=0 + d3d9.presentInterval=0 (DXVK 2.7.1; VSync stall on mobile WSI); X86_DXGI_SYNC=n; keep 081 msgbox/080 CRT/079 CUI/078 sticky/076 TU_GMEM"
 }

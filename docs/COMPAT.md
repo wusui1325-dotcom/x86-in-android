@@ -1,3 +1,20 @@
+## 0.1.82 — DXGI syncInterval (Present fence / VSync stall)
+
+**Smoke risk (0.1.81):** HWND path saturated (077–081). Guest can stay black with
+HWND mapped + Present-ok when DXVK waits on VSync (FIFO syncInterval=1) for a refresh
+that never arrives on virtual/mobile WSI. Managed dxvk.conf already had
+deferSurfaceCreation / tearFree=False / maxFrameLatency / numBackBuffers / dialogMode
+but **never** `dxgi.syncInterval` (DXVK 2.7.1 dxvk.conf documents it; default -1 = no override).
+
+**Fix:**
+- Seed `dxgi.syncInterval = 0` + `d3d9.presentInterval = 0` (disable VSync wait)
+- Overridable: `X86_DXGI_SYNC=n` (default 0); `X86_DXVK_CONF=keep` leaves file
+- Log `DXVK_CONFIG … syncInterval=0`
+- Keep 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.82`; `DXVK_CONFIG … syncInterval=0`; HWND+Present
+path → frames without VSync stall (`guestBlack=0`).
+
 ## 0.1.81 — MessageBox / title sticky + +msgbox
 
 **Smoke risk (0.1.80):** after VS CRT seed, CREATEWINDOW_MISS may still be a Wine

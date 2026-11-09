@@ -1,3 +1,17 @@
+## 0.1.61 — reject false RpcSs ready (alive + OLE/sc4)
+
+**Smoke (0.1.60):** `ready=1 reason=sc-query-running` while `rpcss_pid alive=0`.
+Relaunch storm; sc 1056; AUTO-start 1053; wine-run froze after actxprxy; black Present.
+
+**Fix:**
+- Ready requires **proc_alive=1** AND (`sc STATE 4 RUNNING` OR OLE `regsvr32` probe clean)
+- Reject START_PENDING / dead-pid false ready (`false-ready-dead`)
+- Max **2** rpcss launches; 1056 = already-running OK; no per-second relaunch
+- RpcSs/MountMgr **DEMAND_START** (no AUTO 1053 race); MountMgr only after true ready
+- WINE_START: explorer desktop first, then `start.exe /unix` app; `WINEDEBUG=err+ole,err+rpcss` (heavier if not ready)
+
+**Expect:** `RPCSS_PRESTART done ready=1 … proc_alive=1` (not alive=0); no relaunch storm; Present or next OLE/x11drv signature.
+
 ## 0.1.60 — RpcSs SCM-ready + soft-continue UX + log scroll
 
 **Smoke (0.1.59 full):** soft-continue OK, WINE_START alive, `app_seen=1`, but **no Present**.

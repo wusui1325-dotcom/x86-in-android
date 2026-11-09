@@ -261,13 +261,13 @@ def cmd_inject_rpcss(prefix):
         text += "\n"
     text += "\n;; --- x86-in-android offline RpcSs/MountMgr inject ---\n"
     text += svc_block(
-        "RpcSs", 0x20, 0x2,  # AUTO_START so OpenService works
+        "RpcSs", 0x20, 0x3,  # DEMAND_START — avoid AUTO 1053 race; we start once
         "%SystemRoot%\\\\system32\\\\rpcss.exe",
         "Remote Procedure Call (RPC)",
         desc="RPC service",
     ) + "\n"
     text += svc_block(
-        "MountMgr", 0x1, 0x0,
+        "MountMgr", 0x1, 0x3,  # DEMAND — avoid SCM autostart 1053
         "%SystemRoot%\\\\system32\\\\drivers\\\\mountmgr.sys",
         "Mount Manager",
         group="System Bus Extender",

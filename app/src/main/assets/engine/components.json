@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.60-box64-wine64k-holefit-anonpe-rpcss-win64",
+  "runtimeId": "wine-gpustack-v0.1.61-box64-wine64k-holefit-anonpe-rpcss-win64",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.60: soft-continue 50KB/markers; wineboot UI; log scroll; Wine Version 2 UTF-8 regs"
+  "notes": "0.1.61: RpcSs alive+OLE ready gate; no relaunch storm; DEMAND_START; desktop-first"
 }

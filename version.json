@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.60",
-  "versionCode": 61,
-  "notes": "0.1.60: RpcSs SCM-ready probe before WINE_START; soft-continue 50KB/markers; wineboot/RpcSs UI; log LazyColumn scroll"
+  "versionName": "0.1.61",
+  "versionCode": 62,
+  "notes": "0.1.61: RpcSs ready=alive+sc4/OLE (reject false sc READY); max 2 launches; DEMAND_START; desktop-first WINE_START; +ole/+rpcss diag"
 }

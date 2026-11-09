@@ -318,11 +318,20 @@ object LaunchPipeline {
         if (backend == GraphicsBackend.GpuStack && GpuStack.hasTurnip(ctx)) {
             GpuStack.turnipSo(ctx).setExecutable(true, false)
             bindGpu += listOf("-b", "${GpuStack.turnipDir(ctx).absolutePath}:/mnt/gpu/turnip")
-            // /dev 已 bind；KGSL 節點若存在則客體可見
-            val kgsl = java.io.File("/dev/kgsl-3d0")
-            if (kgsl.exists()) {
-                bindGpu += listOf("-b", "/dev/kgsl-3d0:/dev/kgsl-3d0")
+            // /dev 已 bind；KGSL／dma_heap 節點若存在則再顯式 bind（0.1.73 soft）
+            fun softBindDev(path: String) {
+                val f = java.io.File(path)
+                if (!f.exists()) return
+                runCatching {
+                    // Best-effort; Android SELinux often denies — never hard-block
+                    f.setReadable(true, false)
+                    f.setWritable(true, false)
+                }
+                bindGpu += listOf("-b", "$path:$path")
             }
+            softBindDev("/dev/kgsl-3d0")
+            softBindDev("/dev/dma_heap/system")
+            softBindDev("/dev/dma_heap/system-uncached")
         }
         if (backend == GraphicsBackend.GpuStack && GpuStack.hasDxvk(ctx)) {
             bindGpu += listOf("-b", "${GpuStack.dxvkDir(ctx).absolutePath}:/mnt/gpu/dxvk")

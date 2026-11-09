@@ -32,7 +32,7 @@
 - 上游：Mesa freedreno／turnip（Pipetto-crypto／KGSL 移植）
 - 授權：**MIT**（Mesa）
 - 用途：PRoot **glibc** 客體 Vulkan ICD（直載；需 `/dev/kgsl-3d0`）
-- 路徑：`files/engine/gpu-stack/turnip-25.1.0-R2/`＋`freedreno_icd.json`（客體絕對 `library_path=/mnt/gpu/turnip/libvulkan_freedreno.so`；0.1.71）；0.1.72 另 seed `dxvk.conf`（deferSurfaceCreation／maxDeviceMemory）
+- 路徑：`files/engine/gpu-stack/turnip-25.1.0-R2/`＋`freedreno_icd.json`（客體絕對 `library_path=/mnt/gpu/turnip/libvulkan_freedreno.so`；0.1.71）；0.1.72 seed `dxvk.conf`；0.1.73 `TU_DEBUG=noconform,noubwc,sysmem`＋Mesa shader cache under `/mnt/data`
 - 依賴：rootfs `x11-overlay`（`libvulkan.so.1`／`libdrm`／`libxcb-*`）
 
 ### 未採用（本輪）

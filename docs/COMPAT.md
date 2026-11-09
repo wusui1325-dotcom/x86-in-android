@@ -1,3 +1,21 @@
+## 0.1.73 — Turnip queue noubwc/sysmem + Mesa shader cache
+
+**Smoke risk (0.1.72):** `deferSurfaceCreation` + VideoMemory/GrabFullscreen/ESYNC can still
+leave a black window when Turnip submits UBWC tiles that AHB Present samples as linear, or
+when Mesa has no writable shader cache under PRoot (`/tmp`/`$HOME/.cache` noexec/missing).
+
+**Fix:**
+- Default `TU_DEBUG=noconform,noubwc,sysmem` (overridable) — UBWC-off for AHB Present
+  readback/sample; sysmem skips GMEM resolve hang/black (Pipetto 25.1 R2, not Autotuner)
+- `MESA_SHADER_CACHE_DIR=/mnt/data/mesa_shader_cache` + `DISABLE=false` + `MAX_SIZE=512MB`
+  + `XDG_CACHE_HOME=/mnt/data/xdg-cache`
+- Soft bind `/dev/dma_heap/system{,-uncached}` if present; best-effort chmod on kgsl/dma;
+  `TURNIP_QUEUE` log. No hard-block KGSL.
+- Keep 072 dxvk.conf / 071 ICD absolute / 070 ahb_gpu
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.73`; `TURNIP_QUEUE TU_DEBUG=noconform,noubwc,sysmem`;
+`mesa_cache=/mnt/data/mesa_shader_cache`; `guestBlack=0` with real pixels after submit.
+
 ## 0.1.72 — DXGI Present deferSurface + Wine Direct3D/X11 knobs
 
 **Smoke risk (0.1.71):** ICD absolute + DllOverrides can make `vkCreate`/`DXVK:` Adapter

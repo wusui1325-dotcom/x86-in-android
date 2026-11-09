@@ -141,7 +141,12 @@ object GpuStack {
             env += "HOST_TURNIP_DIR=${turnipDir(ctx).absolutePath}"
             env += "VK_ICD_FILENAMES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
             env += "VK_DRIVER_FILES=/mnt/gpu/turnip/$TURNIP_ICD_NAME"
-            env += "TU_DEBUG=noconform"
+            // 0.1.73: noubwc + sysmem with noconform (AHB Present / GMEM black class)
+            env += "TU_DEBUG=noconform,noubwc,sysmem"
+            env += "MESA_SHADER_CACHE_DIR=/mnt/data/mesa_shader_cache"
+            env += "MESA_SHADER_CACHE_DISABLE=false"
+            env += "MESA_SHADER_CACHE_MAX_SIZE=512MB"
+            env += "XDG_CACHE_HOME=/mnt/data/xdg-cache"
             env += "X86_TURNIP_ICD=glibc_kgsl"
         }
         val dxvk = dxvkDir(ctx)

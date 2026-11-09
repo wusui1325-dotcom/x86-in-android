@@ -14,6 +14,8 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.73: Turnip queue — TU_DEBUG noconform,noubwc,sysmem + Mesa shader cache under /mnt/data;
+# soft KGSL/dma_heap bind (LaunchPipeline). Keep 0.1.72 dxvk.conf/ESYNC.
 # 0.1.72: DXGI Present — dxvk.conf deferSurfaceCreation + Direct3D/X11 reg + WINEESYNC.
 # 0.1.71: Turnip ICD library_path guest-absolute + DllOverrides reg + TURNIP_DLOPEN probe.
 # 0.1.70: Present forceGpu ahb_gpu (no-CPU AHB / guestBlack sticky); keep 0.1.69 HUD sample + DXVK_DIAG.
@@ -33,7 +35,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.72
+WINE_LAUNCH_STAMP=0.1.73
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -189,8 +191,24 @@ ICDEOF
   export VK_ICD_FILENAMES="$_turnip_icd"
   export VK_DRIVER_FILES="$_turnip_icd"
   export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  export TU_DEBUG="${TU_DEBUG:-noconform}"
+  # 0.1.73: noubwc (AHB Present readback/sample) + sysmem (skip GMEM resolve black/hang;
+  # Pipetto 25.1 R2 — not Autotuner). Overridable via TU_DEBUG env.
+  export TU_DEBUG="${TU_DEBUG:-noconform,noubwc,sysmem}"
+  # Writable Mesa shader cache under /mnt/data (Winlator-align; avoid PRoot /tmp noexec)
+  export MESA_SHADER_CACHE_DIR="${MESA_SHADER_CACHE_DIR:-/mnt/data/mesa_shader_cache}"
+  export MESA_SHADER_CACHE_DISABLE="${MESA_SHADER_CACHE_DISABLE:-false}"
+  export MESA_SHADER_CACHE_MAX_SIZE="${MESA_SHADER_CACHE_MAX_SIZE:-512MB}"
+  export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/mnt/data/xdg-cache}"
+  mkdir -p "$MESA_SHADER_CACHE_DIR" "$XDG_CACHE_HOME"
   log "TURNIP_ICD library_path=/mnt/gpu/turnip/libvulkan_freedreno.so (guest-absolute; 0.1.71)"
+  _kgsl_open=no
+  if [ -e /dev/kgsl-3d0 ] && [ -r /dev/kgsl-3d0 ]; then _kgsl_open=yes; fi
+  _dma=no
+  [ -e /dev/dma_heap/system ] && _dma=system
+  [ -e /dev/dma_heap/system-uncached ] && _dma="${_dma}+uncached"
+  [ "$_dma" = "no" ] || true
+  log "TURNIP_QUEUE TU_DEBUG=${TU_DEBUG} mesa_cache=${MESA_SHADER_CACHE_DIR} disable=${MESA_SHADER_CACHE_DISABLE} max=${MESA_SHADER_CACHE_MAX_SIZE} kgsl_open=${_kgsl_open} dma_heap=${_dma}"
+  unset _kgsl_open _dma
   # Early dlopen probe — fail-loud for missing NEEDED deps; do NOT hard-block Session
   if command -v python3 >/dev/null 2>&1; then
     if python3 -c "import ctypes; ctypes.CDLL('/mnt/gpu/turnip/libvulkan_freedreno.so')" >/mnt/data/turnip-dlopen.out 2>&1; then

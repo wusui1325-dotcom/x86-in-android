@@ -3,5 +3,5 @@
   "versionName": "0.1.103",
   "versionCode": 104,
   "notes": "0.1.103: P0 RPCSS quiet WINEDEBUG=err+ole,err+rpcss for services/sc/rpcss START; rpcss-appeared sc soft-cap 20→40s; ready=0 no WINEDEBUG expand; MAP_WAIT display fix ${I}0ms→I*100ms; defer launch_rpcss_once overlap; KEEP 102 hard-gate/TERM orphan/recover/per-mode dwell/creator_hang + /exec+/machine x86 + mmap32_creators + parent MMAP32=0 + WINELOADERNOEXEC; no hot bake; GIT_SHA bake-after-commit",
-  "tipSha": "PENDING"
+  "tipSha": "3db146f"
 }

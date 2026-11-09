@@ -196,8 +196,9 @@ dependencies {
     implementation("org.tukaani:xz:1.10")
     implementation("org.apache.commons:commons-compress:1.27.1")
 
-    // smokeHot: in-app Google Sign-In → Drive access token (no pasted OAuth token)
-    "smokeHotImplementation"("com.google.android.gms:play-services-auth:21.2.0")
+    // Google Sign-In lives in main (MainActivity + DriveGoogleAuth); needed for mainline compile too.
+    // Runtime UI gated by BuildConfig.SMOKE_HOT; smokeHot is the consumer of Drive scope.
+    implementation("com.google.android.gms:play-services-auth:21.2.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

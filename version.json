@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.43",
-  "versionCode": 44,
-  "notes": "0.1.43: PREFIX_EXEC real fix — never trust remount; probe PROT_EXEC on /opt/wine/.../x86_64-windows/ntdll.dll; tmpfs+bind PE windows tree (+system32); KEY_LOG stamp/HOLEFIT/PREFIX_EXEC/noexec; runtimeId bump; WINE_LAUNCH_STAMP=0.1.43"
+  "versionName": "0.1.44",
+  "versionCode": 45,
+  "notes": "0.1.44: auto-bump from 0.1.43 (code 44->45)"
 }

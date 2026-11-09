@@ -391,9 +391,9 @@ object ComponentInstaller {
             dest.outputStream().use { output -> input.copyTo(output) }
         }
         ExecBits.force(dest)
-        // 0.1.43: script stamp fingerprint; clear sticky holefit marker when APK script changes
+        // 0.1.44: script stamp fingerprint; clear sticky holefit marker when APK script changes
         val scriptStamp = File(rootfs, "usr/local/bin/.wine-launch-apk-stamp")
-        val want = "0.1.43"
+        val want = "0.1.44"
         val prev = runCatching { scriptStamp.readText().trim() }.getOrDefault("")
         if (prev != want) {
             File(rootfs, "usr/local/bin/.box64-wine64k-holefit").delete()

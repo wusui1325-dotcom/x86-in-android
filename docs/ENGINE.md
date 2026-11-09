@@ -1,3 +1,23 @@
+## 0.1.44 — system32 PREFIX_EXEC + STACK_HEAD mid + 重裝運行時可見
+
+**Symptom (0.1.43):** `PREFIX_EXEC ok mode=probe` on `/opt/wine/.../ntdll.dll`, then
+`map_image_into_view … C:\windows\system32\ntdll.dll … noexec`; HOLEFIT `0x1000000` →
+stack overflow at `0x1000ec0` (stack followed mid base).
+
+**Fix:**
+- PREFIX_EXEC: never early-ok on `/opt/wine` alone; per-prefix marker; **always**
+  tmpfs+bind active `$WINEPREFIX/drive_c/windows/system32` before wineboot.
+- hole-fit: hole base `B` → mid `B+0x200000` (STACK_HEAD 2MiB); reject mid `<0x1200000`;
+  prefer high bases; clear sticky `0x1000000` markers.
+- UI: 首頁芯片＋⋮、Session 頂欄 ⋮、錯誤卡 皆有「重裝運行時」（未刪，只是 Session 先前只在錯誤卡）。
+
+- `runtimeId` → `…v0.1.44…sys32`; stamp `0.1.44`.
+
+**Retest:** Cover-install **0.1.44** → `WINE_LAUNCH_STAMP=0.1.44` →
+`PREFIX_EXEC ok mode=tmpfs+bind-sys32`（或 preseed）→ `HOLEFIT ok addr≥0x1200000` →
+無 `noexec`／`0x1000ec0` → `WINE_EXIT=0` 或下一 unmuted err。
+首頁應直接看到「重裝運行時」芯片；Session 右上 ⋮ 也有。
+
 ## 0.1.43 — PREFIX_EXEC real fix (noexec ntdll / false remount green)
 
 **Symptom (0.1.42 dig):** Hole-fit OK (`addr≠0x800000`), but still

@@ -385,6 +385,7 @@ class MainActivity : ComponentActivity() {
                             )
                             tick++
                         },
+                        onClearRuntime = { showClearRuntime = true },
                     )
                 }
             }
@@ -461,6 +462,7 @@ private fun HomeScreen(
     onMicrobenchNative: () -> Unit,
     onMicrobenchBox64: () -> Unit,
     onPeSmoke: () -> Unit,
+    onClearRuntime: () -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier
@@ -475,6 +477,13 @@ private fun HomeScreen(
                 text = stringResource(R.string.home_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            // 0.1.44: always-visible 重裝運行時 (also still in ⋮ menu)
+            AssistChip(
+                onClick = onClearRuntime,
+                label = { Text(stringResource(R.string.btn_clear_runtime)) },
+                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null) },
             )
             Spacer(Modifier.height(8.dp))
             if (showDevChips) {

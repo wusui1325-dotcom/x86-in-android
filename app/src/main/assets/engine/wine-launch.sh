@@ -13,8 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.43: fingerprint; hole-fit keeps 0.1.42 stack exclusion; PREFIX_EXEC real PE probe+tmpfs
-WINE_LAUNCH_STAMP=0.1.43
+# 0.1.44: PREFIX_EXEC always tmpfs-bind WINEPREFIX system32 (not /opt/wine-only probe);
+# hole-fit leaves STACK_HEAD 2MiB before mid (stack follows mid base in 0.1.43);
+# UI: Session / dev 重裝運行時
+WINE_LAUNCH_STAMP=0.1.44
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -264,15 +266,12 @@ log "WINEPRELOADRESERVE='${WINEPRELOADRESERVE-<unset>}' BOX64_MMAP32=$BOX64_MMAP
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
 
-# ---- 0.1.43: REAL PE exec for Wine builtins (not remount-false-green) ----
-# Under PRoot, mount -o remount,exec on filesDir often returns 0 while host MS_NOEXEC
-# remains → 0.1.42 logged "PREFIX_EXEC remount … ok" then still
-# map_image_into_view … ntdll.dll … noexec. Remount is NEVER success alone.
-#
-# Hot path is /opt/wine/lib/wine/x86_64-windows/*.dll (Wine opens PE from WINEDLLPATH;
-# NT name may still show C:\windows\system32\ntdll.dll). system32-only tmpfs misses it.
-# Winlator-style: copy PE windows tree (+ system32) onto tmpfs(exec), bind over; verify
-# with python3 mmap PROT_EXEC on ntdll.dll before claiming ok.
+# ---- 0.1.44: REAL PE exec — ALWAYS make active WINEPREFIX system32 exec ----
+# 0.1.43 probed /opt/wine/.../ntdll.dll, logged mode=probe, then wineboot mapped
+# C:\windows\system32\ntdll.dll from the *prefix* copy on noexec filesDir/tmp → still
+# "noexec filesystem?". /opt/wine probe OK is NOT enough.
+# Fix: per-prefix marker; require PROT_EXEC on $WINEPREFIX/.../system32/ntdll.dll when
+# present; always tmpfs+bind system32 (and x86_64-windows if needed) before wineboot.
 probe_pe_exec() {
   local f="$1"
   [ -f "$f" ] || return 1
@@ -297,7 +296,6 @@ sys.exit(0)
 PY
     return $?
   fi
-  # No python3: refuse to trust remount; require tmpfs bind marker
   return 1
 }
 
@@ -307,15 +305,26 @@ ensure_prefix_exec() {
   local pe_ntdll="$pe_dir/ntdll.dll"
   local sys32="$p/drive_c/windows/system32"
   local scratch=/tmp/.wine-pe-exec
-  local ok_marker="$scratch/.prefix-exec-ok"
+  # per-prefix marker so smoke prefix ≠ main prefix cannot false-skip
+  local ok_marker="$scratch/.prefix-exec-ok-$(echo "$p" | tr '/:' '__')"
   mkdir -p "$sys32" 2>/dev/null || true
+  mkdir -p "$scratch" 2>/dev/null || true
 
-  if [ -f "$ok_marker" ] && [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"; then
-    log "PREFIX_EXEC skip (already ok) pe=$pe_ntdll"
+  sys32_ok() {
+    # No ntdll in prefix yet: not OK — wineboot will materialize onto this fs
+    [ -f "$sys32/ntdll.dll" ] || return 1
+    probe_pe_exec "$sys32/ntdll.dll"
+  }
+  pe_ok() {
+    [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"
+  }
+
+  if [ -f "$ok_marker" ] && pe_ok && sys32_ok; then
+    log "PREFIX_EXEC skip (already ok) pe=$pe_ntdll sys32=$sys32/ntdll.dll"
     return 0
   fi
 
-  # Remount attempts: log as claimed only — never set success from return code
+  # Remount: claimed only — never success
   if mount -o remount,exec,rw "$p" 2>/dev/null; then
     log "PREFIX_EXEC remount WINEPREFIX claimed (not trusted alone)"
   fi
@@ -329,15 +338,20 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC remount x86_64-windows claimed (not trusted alone)"
   fi
 
-  if [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"; then
-    log "PREFIX_EXEC ok mode=probe pe=$pe_ntdll (fs already exec)"
-    mkdir -p "$scratch"
+  # Even if /opt/wine PE probes exec, prefix system32 often does not — do not early-return
+  if pe_ok && sys32_ok; then
+    log "PREFIX_EXEC ok mode=probe pe=$pe_ntdll sys32=$sys32/ntdll.dll (fs already exec)"
     echo "mode=probe" > "$ok_marker"
     return 0
   fi
-  log "PREFIX_EXEC probe fail pe=$pe_ntdll — forcing tmpfs+bind for x86_64-windows"
+  if pe_ok && [ ! -f "$sys32/ntdll.dll" ]; then
+    log "PREFIX_EXEC pe ok but sys32/ntdll missing — forcing tmpfs+bind before wineboot materializes PE"
+  elif pe_ok && ! sys32_ok; then
+    log "PREFIX_EXEC pe ok but sys32 noexec ($sys32/ntdll.dll) — forcing tmpfs+bind system32"
+  else
+    log "PREFIX_EXEC probe fail pe=$pe_ntdll — forcing tmpfs+bind for x86_64-windows + system32"
+  fi
 
-  mkdir -p "$scratch"
   if ! awk -v s="$scratch" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
     if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=768M tmpfs "$scratch" 2>/dev/null; then
       log "PREFIX_EXEC tmpfs scratch ok size=768M path=$scratch"
@@ -351,7 +365,6 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC tmpfs scratch already mounted path=$scratch"
   fi
 
-  # Copy Wine PE builtins (hot path). ~334M once per session.
   if [ ! -f "$scratch/x86_64-windows/ntdll.dll" ]; then
     if [ ! -d "$pe_dir" ]; then
       log "FATAL: PREFIX_EXEC missing $pe_dir"
@@ -366,52 +379,65 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC copy x86_64-windows done"
   fi
 
-  # Bind tmpfs PE tree over /opt/wine/.../x86_64-windows
-  if ! awk -v s="$pe_dir" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
-    if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
-       || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
-      log "PREFIX_EXEC bind x86_64-windows ok"
+  if ! pe_ok; then
+    if ! awk -v s="$pe_dir" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+      if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
+         || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
+        log "PREFIX_EXEC bind x86_64-windows ok"
+      else
+        log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
+        exit 1
+      fi
     else
-      log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
-      exit 1
+      log "PREFIX_EXEC bind x86_64-windows already mounted"
     fi
   else
-    log "PREFIX_EXEC bind x86_64-windows already mounted"
+    log "PREFIX_EXEC skip bind x86_64-windows (pe already exec)"
   fi
 
-  # system32 also on tmpfs (wineboot may materialize PE there; NT path often system32)
+  # ALWAYS put system32 on tmpfs so wineboot copies / NT maps land on exec
   mkdir -p "$scratch/system32"
-  if [ ! -f "$scratch/system32/.copied" ]; then
-    if [ -d "$sys32" ]; then
-      cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
-    fi
-    cp -f "$scratch/x86_64-windows/ntdll.dll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
-    touch "$scratch/system32/.copied"
+  # Refresh ntdll into scratch every call (prefix may have new/noexec copy)
+  if [ -d "$sys32" ]; then
+    cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
   fi
+  cp -f "$scratch/x86_64-windows/ntdll.dll" "$scratch/system32/ntdll.dll" 2>/dev/null \
+    || cp -f "$pe_ntdll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
+  touch "$scratch/system32/.copied"
   mkdir -p "$sys32"
   if ! awk -v s="$sys32" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
     if mount --bind "$scratch/system32" "$sys32" 2>/dev/null \
        || mount -o bind "$scratch/system32" "$sys32" 2>/dev/null; then
-      log "PREFIX_EXEC bind system32 ok"
+      log "PREFIX_EXEC bind system32 ok path=$sys32"
     else
-      log "WARN: PREFIX_EXEC bind system32 failed (x86_64-windows bind may still suffice)"
+      log "FATAL: PREFIX_EXEC bind system32 failed path=$sys32 — C:\\windows\\system32 will stay noexec"
+      exit 1
     fi
+  else
+    log "PREFIX_EXEC bind system32 already mounted path=$sys32"
+    # Remount may still be stale copy — refresh ntdll on the tmpfs side
+    cp -f "$scratch/x86_64-windows/ntdll.dll" "$sys32/ntdll.dll" 2>/dev/null \
+      || cp -f "$pe_ntdll" "$sys32/ntdll.dll" 2>/dev/null || true
   fi
 
-  chmod -R u+x "$scratch/x86_64-windows" "$scratch/system32" 2>/dev/null || true
+  chmod -R u+x "$scratch/x86_64-windows" "$scratch/system32" "$sys32" 2>/dev/null || true
 
-  if probe_pe_exec "$pe_ntdll"; then
-    log "PREFIX_EXEC ok mode=tmpfs+bind pe=$pe_ntdll"
-    echo "mode=tmpfs+bind" > "$ok_marker"
-    return 0
-  fi
-  if [ -f "$sys32/ntdll.dll" ] && probe_pe_exec "$sys32/ntdll.dll"; then
-    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll"
+  if sys32_ok; then
+    if pe_ok; then pe_state=yes; else pe_state=no; fi
+    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=$pe_state"
     echo "mode=tmpfs+bind-sys32" > "$ok_marker"
     return 0
   fi
+  if pe_ok; then
+    # sys32 ntdll still missing (pre-wineboot) but bind is up — OK to continue
+    if [ ! -f "$sys32/ntdll.dll" ]; then
+      log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 (ntdll will land on exec tmpfs)"
+      echo "mode=tmpfs+bind-preseed" > "$ok_marker"
+      return 0
+    fi
+  fi
 
-  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved"
+  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32)"
   exit 1
 }
 ensure_prefix_exec
@@ -453,14 +479,16 @@ export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
 export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
 log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32"
 
-# ---- 0.1.42 hole-fit: patch Box64 my_wine_reserve mid so isBlockFree can succeed ----
+# ---- 0.1.44 hole-fit: mid after STACK_HEAD so Wine TEB/stack != mid base ----
 # Evidence: WINEPRELOADRESERVE=100000-1 occupied 0x100000; addr-outer first-success
-# missed larger holes; failed-all still continued PE smoke with last bad patch → SIGABRT.
+# missed larger holes; failed-all still continued PE smoke with last bad patch -> SIGABRT.
 # 0.1.40: unset WPR; size-outer (prefer largest); stop on first useful mid; FATAL if all fail;
 # never treat 0x*:0x1 as mid OK; marker stamped with SCRIPT_STAMP.
-# 0.1.42: NEVER use mid overlapping Wine default stack [0x800000,0xa00000) —
-# Boss 0.1.41: mid 0x800000:0x10000000 → stack overflow at 0x800ec0 + ntdll map fail.
-# Prefer mid addr ≥ 0x1000000; reject sticky marker that overlaps stack.
+# 0.1.42: NEVER use mid overlapping Wine default stack [0x800000,0xa00000).
+# 0.1.43: mid 0x1000000 -> stack followed to 0x1000ec0 (0x1000000-0x1200000) + still noexec.
+# 0.1.44: hole base B -> patch mid at B+STACK_HEAD (2MiB), size S-STACK_HEAD; leave
+# [B, B+2MiB) free for TEB/stack; also keep classic [0x800000,0xa00000) free.
+# Prefer larger/higher holes; reject sticky mid with addr < 0x1200000.
 box64_find_prereserve_mid_off() {
   python3 - "$1" <<'PY'
 import sys
@@ -591,6 +619,7 @@ PY
 box64_holefit_mid() {
   local marker=/usr/local/bin/.box64-wine64k-holefit
   local box=/usr/local/bin/box64
+  local STACK_HEAD=0x200000
   if [ ! -x "$box" ]; then
     log "FATAL: holefit — no $box"
     return 1
@@ -603,19 +632,23 @@ box64_holefit_mid() {
     log "FATAL: holefit — cannot locate my_wine_reserve mid in $box"
     return 1
   fi
-  # Size outer (largest first), addr inner — first success = prefer largest useful mid
-  # 0.1.42: addrs start at ≥0x1000000 (after Wine stack 0x800000-0xa00000); drop 0x800000
-  local cand_sizes="0x10000000 0x8000000 0x4000000 0x1000000"
-  local cand_addrs="0x1000000 0x2000000 0x4000000 0x10000000"
-  # Wine default TEB/stack reserve (see virtual_setup_exception … 0x800000-0x801000-0xa00000)
-  holefit_overlaps_stack() {
-    python3 - "$1" "$2" <<'PY'
+  # Size outer (largest first). cand_addrs = hole *bases*; mid = base+STACK_HEAD.
+  # 0.1.44: leave >=2MiB after hole base for Wine TEB/stack (Boss 0.1.43: stack follows mid).
+  local cand_sizes="0x10000000 0x8000000 0x4000000 0x2000000"
+  # Prefer high base first so classic 0x800000 stack stays free.
+  local cand_addrs="0x10000000 0x4000000 0x2000000 0x1000000"
+  # Reject mid overlapping classic stack OR mid addr < 0x1200000 (stack-head zone)
+  holefit_bad_mid() {
+    python3 - "$1" "$2" <<'PYINNER'
 import sys
 a=int(sys.argv[1],0); s=int(sys.argv[2],0)
 lo, hi = 0x800000, 0xa00000
-# half-open [a,a+s) vs [lo,hi)
-sys.exit(0 if (a < hi and (a + s) > lo) else 1)
-PY
+if a < 0x1200000:
+    sys.exit(0)  # bad
+if a < hi and (a + s) > lo:
+    sys.exit(0)  # bad overlap classic stack
+sys.exit(1)  # ok
+PYINNER
   }
   if [ -f "$marker" ]; then
     # shellcheck disable=SC1090
@@ -625,8 +658,8 @@ PY
       rm -f "$marker"
       unset HOLEFIT_ADDR HOLEFIT_SIZE SCRIPT_STAMP
     elif [ -n "${HOLEFIT_ADDR:-}" ] && [ -n "${HOLEFIT_SIZE:-}" ]; then
-      if holefit_overlaps_stack "$HOLEFIT_ADDR" "$HOLEFIT_SIZE"; then
-        log "HOLEFIT marker overlaps Wine stack ($HOLEFIT_ADDR:$HOLEFIT_SIZE vs 0x800000-0xa00000) — clearing"
+      if holefit_bad_mid "$HOLEFIT_ADDR" "$HOLEFIT_SIZE"; then
+        log "HOLEFIT marker bad mid ($HOLEFIT_ADDR:$HOLEFIT_SIZE; need mid>=0x1200000, skip 0x800000-0xa00000) — clearing"
         rm -f "$marker"
         unset HOLEFIT_ADDR HOLEFIT_SIZE SCRIPT_STAMP
       else
@@ -644,31 +677,41 @@ PY
       fi
     fi
   fi
-  log "HOLEFIT begin (no WINEPRELOADRESERVE; skip Wine stack 0x800000-0xa00000; size-outer; stop on first useful mid)"
-  local a s n=0
+  log "HOLEFIT begin (no WINEPRELOADRESERVE; STACK_HEAD=$STACK_HEAD; skip 0x800000-0xa00000; size-outer; mid=base+head)"
+  local base s mid_a mid_s n=0
   for s in $cand_sizes; do
-    for a in $cand_addrs; do
-      python3 - "$a" "$s" <<'PY' || continue
+    for base in $cand_addrs; do
+      mid_a=$(python3 - "$base" "$s" "$STACK_HEAD" <<'PYINNER'
 import sys
-a=int(sys.argv[1],0); s=int(sys.argv[2],0)
+base=int(sys.argv[1],0); size=int(sys.argv[2],0); head=int(sys.argv[3],0)
 stack_lo, stack_hi = 0x800000, 0xa00000
-if a & 0xFFFF: sys.exit(1)
-if s & 0xFFFF: sys.exit(1)
-if a < 0x1000000: sys.exit(1)  # 0.1.42: after Wine stack
-if a + s > 0x7f000000: sys.exit(1)
-if a + s <= a: sys.exit(1)
-if a < stack_hi and (a + s) > stack_lo: sys.exit(1)  # overlap stack
-sys.exit(0)
-PY
+if base & 0xFFFF: sys.exit(1)
+if size & 0xFFFF: sys.exit(1)
+if head & 0xFFFF: sys.exit(1)
+if size <= head: sys.exit(1)
+mid_a = base + head
+mid_s = size - head
+if mid_a < 0x1200000: sys.exit(1)
+if mid_a + mid_s > 0x7f000000: sys.exit(1)
+if mid_a + mid_s <= mid_a: sys.exit(1)
+if mid_a < stack_hi and (mid_a + mid_s) > stack_lo: sys.exit(1)
+# hole base itself must not sit inside classic stack either
+if base < stack_hi and (base + size) > stack_lo: sys.exit(1)
+print("%#x %#x" % (mid_a, mid_s))
+PYINNER
+) || continue
+      mid_s=${mid_a#* }
+      mid_a=${mid_a%% *}
       n=$((n+1))
-      log "HOLEFIT try $n/16 addr=$a size=$s"
-      if ! box64_patch_prereserve_mid "$box" "$a" "$s" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
+      log "HOLEFIT try $n/16 base=$base head=$STACK_HEAD mid=$mid_a size=$mid_s"
+      if ! box64_patch_prereserve_mid "$box" "$mid_a" "$mid_s" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
         continue
       fi
-      if box64_probe_mid_done "$a"; then
-        printf 'SCRIPT_STAMP=%s\nHOLEFIT_ADDR=%s\nHOLEFIT_SIZE=%s\n' "$WINE_LAUNCH_STAMP" "$a" "$s" > "$marker"
-        log "HOLEFIT ok addr=$a size=$s (saved $marker)"
-        export HOLEFIT_ADDR="$a" HOLEFIT_SIZE="$s"
+      if box64_probe_mid_done "$mid_a"; then
+        printf 'SCRIPT_STAMP=%s\nHOLEFIT_ADDR=%s\nHOLEFIT_SIZE=%s\nHOLEFIT_BASE=%s\n' \
+          "$WINE_LAUNCH_STAMP" "$mid_a" "$mid_s" "$base" > "$marker"
+        log "HOLEFIT ok addr=$mid_a size=$mid_s base=$base stack_head=$STACK_HEAD (saved $marker)"
+        export HOLEFIT_ADDR="$mid_a" HOLEFIT_SIZE="$mid_s"
         unset WINEPRELOADRESERVE
         return 0
       fi
@@ -680,7 +723,7 @@ PY
 }
 
 if ! box64_holefit_mid; then
-  log "FATAL: hole-fit failed — install 0.1.43+ script + wine64k box64; mid must avoid 0x800000-0xa00000; clear sticky marker"
+  log "FATAL: hole-fit failed — install 0.1.44+ script + wine64k box64; mid>=0x1200000 (STACK_HEAD 2MiB); avoid 0x800000-0xa00000; clear sticky marker"
   exit 134
 fi
 

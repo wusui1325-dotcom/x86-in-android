@@ -31,6 +31,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +53,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -206,6 +210,7 @@ class SessionActivity : ComponentActivity() {
                 var pendingDownloadConfirm by remember { mutableStateOf(false) }
                 var downloadConfirmAck by remember { mutableStateOf(false) }
                 var showClearConfirm by remember { mutableStateOf(false) }
+                var menuExpanded by remember { mutableStateOf(false) }
                 var launchFailedBeforeStart by remember { mutableStateOf(false) }
                 var pendingKgslConfirm by remember { mutableStateOf(false) }
                 var kgslConfirmAck by remember { mutableStateOf(false) }
@@ -732,6 +737,31 @@ class SessionActivity : ComponentActivity() {
                                     finish()
                                 }) {
                                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                                }
+                            },
+                            actions = {
+                                IconButton(onClick = { menuExpanded = true }) {
+                                    Icon(
+                                        Icons.Default.MoreVert,
+                                        contentDescription = getString(com.wusper.x86.R.string.menu_more),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(getString(com.wusper.x86.R.string.btn_clear_runtime))
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            showClearConfirm = true
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Default.Delete, contentDescription = null)
+                                        },
+                                    )
                                 }
                             },
                             colors = TopAppBarDefaults.topAppBarColors(

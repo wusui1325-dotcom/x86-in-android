@@ -105,7 +105,7 @@ object ExitStatusMessages {
             )
         1 -> (
             "客體行程以退出碼 1 結束（不是 Android「存取所有檔案」權限）。" +
-                "0.1.43+ 請看 WINE_LAUNCH_STAMP、PREFIX_EXEC ok mode=tmpfs+bind／probe、" +
+                "0.1.44+ 請看 WINE_LAUNCH_STAMP、PREFIX_EXEC ok mode=tmpfs+bind／probe、" +
                 "WINEBOOT_INIT／wine-run key lines、HOLEFIT ok（mid 不可蓋 0x800000-0xa00000）、prereserve mid done。" +
                 "c0000018 → unix wine；noexec ntdll → 需 PREFIX_EXEC ok（勿信 remount claimed）；無 system.reg → wineboot 早死。"
             )
@@ -115,16 +115,16 @@ object ExitStatusMessages {
             )
         124 -> (
             "客體退出碼 124＝WINE_PE_SMOKE 逾時。0.1.37+ 版號改讀 wine.inf；PE 探測仍逾時＝loader／wineboot 卡住。" +
-                "請確認日誌有 WINE_LAUNCH_STAMP=0.1.43＋HOLEFIT ok（size-outer 偏好最大洞；成功即停；失敗 FATAL；勿把 0x100000:0x1 當 mid OK）。"
+                "請確認日誌有 WINE_LAUNCH_STAMP=0.1.44＋HOLEFIT ok（size-outer 偏好最大洞；成功即停；失敗 FATAL；勿把 0x100000:0x1 當 mid OK）。"
             )
         139 -> (
             "客體退出碼 139＝Wine PE SIGSEGV。常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
-                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.43+ hole-fit size-outer＋FATAL；" +
+                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.44+ hole-fit size-outer＋FATAL；" +
                 "請蓋裝後看 HOLEFIT ok 與 prereserve mid done。"
             )
         134 -> (
             "客體退出碼 134＝SIGABRT。常見 Wine11 set_mem_area_state granularity_mask assert。" +
-                "0.1.43+ 需 wine64k-align + hole-fit mid；看 WINE_LAUNCH_STAMP／HOLEFIT ok／BOX64_WINE64K_STAMP／PREFIX_EXEC ok。"
+                "0.1.44+ 需 wine64k-align + hole-fit mid；看 WINE_LAUNCH_STAMP／HOLEFIT ok／BOX64_WINE64K_STAMP／PREFIX_EXEC ok。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

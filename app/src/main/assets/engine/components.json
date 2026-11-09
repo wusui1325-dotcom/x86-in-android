@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.43-box64-wine64k-holefit-peexec",
+  "runtimeId": "wine-gpustack-v0.1.44-box64-wine64k-holefit-peexec-sys32",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.43: PREFIX_EXEC tmpfs+bind x86_64-windows PE (ntdll); remount not trusted; PROT_EXEC probe; KEY_LOG; keeps 0.1.42 hole-fit stack exclusion"
+  "notes": "0.1.44: PREFIX_EXEC always tmpfs-bind WINEPREFIX system32 (fix green on /opt/wine-only); hole-fit STACK_HEAD 2MiB (mid>=0x1200000); Session/home 重裝運行時 discoverability"
 }

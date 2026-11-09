@@ -1,3 +1,24 @@
+## 0.1.99 — A2 child-only MMAP32 (box64rc [app.exe])
+
+**Smoke (0.1.98 mainline):** A1 PASS — `noexec=kept` / `mmap32_parent=0` /
+`decide=direct_cmd64` / **0× SIGILL**; cmd/start/explorer all reach
+`NtCreateUserProcess(C:\App\app.exe)`. Residual A2: every App NtCreate TRACE
+`machine 0`, never `started process pid`, **0× Loaded App**, ladder
+`direct→unix_seed→explorer→start` all `no_loaded_t`; Present still blue.
+
+**P0 A2:** Child-only `BOX64_MMAP32=1` via `BOX64_RCFILE` section `[app.exe]`
+(+ `/wow64cpu.dll` path sections). `BOX64_NORCFILES=0` so RCFILE loads (skips
+`/etc` + `~/.box64rc`). Stamp `mmap32_child=1` / `mmap32_parent=0` /
+`noexec=kept`. **Never** parent `export BOX64_MMAP32=1` (096 SIGILL). Keep
+WINELOADERNOEXEC / direct_cmd64 / BinaryType_host + stronger App NtCreate dig
+(NTSTATUS/GetLastError/GetBinaryTypeW return/wow64cpu/box64 rcfile apply).
+Optional ladder probe: `start //machine i386` (non-primary). Never i386 MAIN.
+DXVK x32 deferred until Loaded.
+
+**Expect:** `mmap32_child=1` stamp; App NtCreate → `started process pid` +
+`Loaded L"C:\App\app.exe"`; ideally machine 0x014c / wow64cpu init; then
+non-blue. If still machine 0 / no started — dig NTSTATUS + rcfile apply lines.
+
 ## 0.1.98 — NOEXEC kept (097 SIGILL root; not MMAP32)
 
 **Smoke (0.1.97 mainline):** `mmap32_parent=0` / `BOX64_MMAP32=0` landed, but

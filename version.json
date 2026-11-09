@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.98",
-  "versionCode": 99,
-  "notes": "0.1.98: P0 KEEP WINELOADERNOEXEC on APP_LOAD (097 SIGILL root). Primary wine cmd //c C:/App (decide=direct_cmd64); ladder-2 start //exec NOEXEC kept; mmap32_parent=0; noexec=kept; never parent MMAP32=1; never i386 MAIN; BinaryType_host + ntcreate_diag kept; child-only MMAP32/Wow64 0x014c (A2) deferred; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "c2e3e92"
+  "versionName": "0.1.99",
+  "versionCode": 100,
+  "notes": "0.1.99: P0 A2 child-only BOX64_MMAP32 via BOX64_RCFILE [app.exe] (mmap32_child=1); parent mmap32_parent=0; NORCFILES=0; KEEP WINELOADERNOEXEC; stronger App NtCreate dig; optional ladder start //machine i386; never parent MMAP32=1; never i386 MAIN; DXVK x32 defer; GIT_SHA bake-after-commit",
+  "tipSha": "PENDING"
 }

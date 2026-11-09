@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.91",
-  "versionCode": 92,
-  "notes": "0.1.91: K0\u2013K3 prove APP_LOAD \u2014 logs/session.log export + app-load.stamp; early wine-run clear + orphan start reap; seed gate refuse blind wow64_start; RPCSS heartbeat/done soft-continue@30; keep 090 A1/A3; DXVK x32 defer"
+  "versionName": "0.1.92",
+  "versionCode": 93,
+  "notes": "0.1.92: P0 orphan-reap whitelist + fail_sig slice + fail_hr + start /exec; P1 RPCSS crush; UX 新建工作區／裝置exe全掃／＋精確匯入; DXVK x32 defer"
 }

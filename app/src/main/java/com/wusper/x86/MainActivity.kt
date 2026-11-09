@@ -9,6 +9,8 @@ import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
+import android.provider.Settings
+import android.os.Environment
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -85,6 +87,10 @@ class MainActivity : ComponentActivity() {
                 var showClearRuntime by remember { mutableStateOf(false) }
                 var showAbout by remember { mutableStateOf(false) }
                 var workspacePendingDelete by remember { mutableStateOf<Workspace?>(null) }
+                var workspacePendingRebuild by remember { mutableStateOf<Workspace?>(null) }
+                var showNewWorkspace by remember { mutableStateOf(false) }
+                var scannedExes by remember { mutableStateOf<List<DeviceExe>>(emptyList()) }
+                var scanMessage by remember { mutableStateOf<String?>(null) }
 
                 val notifPerm = rememberLauncherForActivityResult(
                     ActivityResultContracts.RequestPermission(),
@@ -101,10 +107,62 @@ class MainActivity : ComponentActivity() {
 
                 val workspaces = remember(tick) { WorkspaceStore.listWorkspaces(this) }
                 val picked = remember(tick) { WorkspaceStore.loadPickedExes(this) }
-                val visibleExes = remember(tick, workspaces, picked) {
-                    WorkspaceStore.filterVisibleExes(this, picked)
+                val hasAllFiles = remember(tick) {
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        Environment.isExternalStorageManager()
+                    } else {
+                        ContextCompat.checkSelfPermission(
+                            this,
+                            Manifest.permission.READ_EXTERNAL_STORAGE,
+                        ) == PackageManager.PERMISSION_GRANTED
+                    }
+                }
+                val deviceExes = remember(tick, scannedExes, picked, hasAllFiles) {
+                    val base = if (scannedExes.isNotEmpty()) scannedExes else picked
+                    // merge scan + picked (scan wins on path)
+                    val map = LinkedHashMap<String, DeviceExe>()
+                    for (e in picked) map[e.path.ifBlank { e.displayName }.lowercase()] = e
+                    for (e in scannedExes) map[e.path.ifBlank { e.displayName }.lowercase()] = e
+                    WorkspaceStore.filterVisibleExes(this, map.values.toList())
                 }
 
+                fun requestAllFilesAccess() {
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        try {
+                            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                                data = Uri.parse("package:$packageName")
+                            }
+                            startActivity(intent)
+                        } catch (_: Exception) {
+                            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        }
+                        Toast.makeText(this, getString(R.string.toast_all_files_needed), Toast.LENGTH_LONG).show()
+                    } else {
+                        // legacy: request READ
+                    }
+                }
+
+                fun doScanDeviceExes() {
+                    if (Build.VERSION.SDK_INT >= 30 && !Environment.isExternalStorageManager()) {
+                        requestAllFilesAccess()
+                        return
+                    }
+                    val found = WorkspaceStore.scanDeviceExes()
+                    scannedExes = found
+                    scanMessage = getString(R.string.toast_scan_done, found.size)
+                    Toast.makeText(this, scanMessage, Toast.LENGTH_SHORT).show()
+                    tick++
+                }
+
+                val legacyReadPerm = rememberLauncherForActivityResult(
+                    ActivityResultContracts.RequestPermission(),
+                ) { granted ->
+                    if (granted) doScanDeviceExes() else {
+                        Toast.makeText(this, getString(R.string.toast_all_files_needed), Toast.LENGTH_LONG).show()
+                    }
+                }
+
+                // ＋號：精確匯入 → 新乾淨工作區（複製 exe），不模糊掃描、不假桌面
                 val pickExe = rememberLauncherForActivityResult(
                     ActivityResultContracts.OpenDocument(),
                 ) { uri: Uri? ->
@@ -127,9 +185,15 @@ class MainActivity : ComponentActivity() {
                         path = uri.toString(),
                         uriString = uri.toString(),
                     )
-                    WorkspaceStore.addPickedExe(this, exe)
-                    launchExe(exe)
+                    val stream = runCatching { contentResolver.openInputStream(uri) }.getOrNull()
+                    val ws = WorkspaceStore.importExeToNewWorkspace(this, exe, copyFrom = stream)
+                    Toast.makeText(
+                        this,
+                        getString(R.string.workspace_imported, ws.displayName),
+                        Toast.LENGTH_LONG,
+                    ).show()
                     tick++
+                    // 不自動開 session — 讓用戶確認是新乾淨工作區再點
                 }
 
                 if (showClearRuntime) {
@@ -200,6 +264,70 @@ class MainActivity : ComponentActivity() {
                         },
                         dismissButton = {
                             TextButton(onClick = { workspacePendingDelete = null }) {
+                                Text(stringResource(R.string.dialog_cancel))
+                            }
+                        },
+                    )
+                }
+
+                workspacePendingRebuild?.let { ws ->
+                    AlertDialog(
+                        onDismissRequest = { workspacePendingRebuild = null },
+                        title = { Text(stringResource(R.string.dialog_rebuild_title)) },
+                        text = {
+                            Text(stringResource(R.string.dialog_rebuild_message, ws.displayName))
+                        },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                WorkspaceStore.rebuildPrefix(this, ws)
+                                Toast.makeText(
+                                    this,
+                                    getString(R.string.toast_rebuild_done, ws.displayName),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                workspacePendingRebuild = null
+                                launchWorkspace(ws)
+                                tick++
+                            }) {
+                                Text(stringResource(R.string.dialog_rebuild_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = {
+                                workspacePendingRebuild = null
+                                launchWorkspace(ws)
+                                tick++
+                            }) {
+                                Text("仍要啟動")
+                            }
+                        },
+                    )
+                }
+
+                if (showNewWorkspace) {
+                    AlertDialog(
+                        onDismissRequest = { showNewWorkspace = false },
+                        title = { Text(stringResource(R.string.dialog_new_ws_title)) },
+                        text = { Text(stringResource(R.string.dialog_new_ws_message)) },
+                        confirmButton = {
+                            TextButton(onClick = {
+                                val ws = WorkspaceStore.createCleanWorkspace(
+                                    this,
+                                    displayName = "新工作區",
+                                )
+                                Toast.makeText(
+                                    this,
+                                    getString(R.string.workspace_clean_created, ws.displayName),
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                showNewWorkspace = false
+                                tick++
+                            }) {
+                                Text(stringResource(R.string.dialog_new_ws_confirm))
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showNewWorkspace = false }) {
                                 Text(stringResource(R.string.dialog_cancel))
                             }
                         },
@@ -310,22 +438,58 @@ class MainActivity : ComponentActivity() {
                                 )
                             },
                         ) {
-                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.btn_pick_exe))
+                            Icon(Icons.Default.Add, contentDescription = stringResource(R.string.btn_import_exe))
                         }
                     },
                 ) { padding ->
                     HomeScreen(
                         padding = padding,
                         workspaces = workspaces,
-                        visibleExes = visibleExes,
+                        visibleExes = deviceExes,
+                        hasAllFiles = hasAllFiles,
                         showDevChips = developerMode,
+                        onNewWorkspace = { showNewWorkspace = true },
+                        onGrantAllFiles = {
+                            if (Build.VERSION.SDK_INT >= 30) requestAllFilesAccess()
+                            else legacyReadPerm.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                        },
+                        onScanExes = {
+                            if (Build.VERSION.SDK_INT >= 30) doScanDeviceExes()
+                            else if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+                                == PackageManager.PERMISSION_GRANTED) doScanDeviceExes()
+                            else legacyReadPerm.launch(Manifest.permission.READ_EXTERNAL_STORAGE)
+                        },
                         onLaunchWorkspace = { ws ->
-                            launchWorkspace(ws)
-                            tick++
+                            if (WorkspaceStore.isWorkspaceDirty(ws)) {
+                                workspacePendingRebuild = ws
+                            } else {
+                                launchWorkspace(ws)
+                                tick++
+                            }
                         },
                         onDeleteWorkspace = { ws -> workspacePendingDelete = ws },
+                        onRebuildWorkspace = { ws -> workspacePendingRebuild = ws },
                         onLaunchExe = { exe ->
-                            launchExe(exe)
+                            // 裝置列表啟動：若尚無工作區 → 新乾淨工作區＋複製；有則沿用
+                            val existing = WorkspaceStore.findByExe(this, exe)
+                            if (existing == null) {
+                                val src = runCatching { java.io.File(exe.path) }.getOrNull()
+                                val stream = when {
+                                    exe.uriString != null ->
+                                        runCatching { contentResolver.openInputStream(Uri.parse(exe.uriString)) }.getOrNull()
+                                    src != null && src.isFile -> src.inputStream()
+                                    else -> null
+                                }
+                                val ws = WorkspaceStore.importExeToNewWorkspace(this, exe, copyFrom = stream)
+                                Toast.makeText(
+                                    this,
+                                    getString(R.string.workspace_imported, ws.displayName),
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                                launchWorkspace(ws)
+                            } else {
+                                launchWorkspace(existing)
+                            }
                             tick++
                         },
                         onHostSmoke = {
@@ -441,6 +605,13 @@ class MainActivity : ComponentActivity() {
         return null
     }
 
+    override fun onResume() {
+        super.onResume()
+        // bump via intent flag — Compose tick is local; use shared pref pulse
+        getSharedPreferences("x86_ui", Context.MODE_PRIVATE)
+            .edit().putLong("resume_pulse", System.currentTimeMillis()).apply()
+    }
+
     companion object {
         private const val PREF_DEV = "developer_options"
     }
@@ -452,9 +623,14 @@ private fun HomeScreen(
     padding: PaddingValues,
     workspaces: List<Workspace>,
     visibleExes: List<DeviceExe>,
+    hasAllFiles: Boolean,
     showDevChips: Boolean,
+    onNewWorkspace: () -> Unit,
+    onGrantAllFiles: () -> Unit,
+    onScanExes: () -> Unit,
     onLaunchWorkspace: (Workspace) -> Unit,
     onDeleteWorkspace: (Workspace) -> Unit,
+    onRebuildWorkspace: (Workspace) -> Unit,
     onLaunchExe: (DeviceExe) -> Unit,
     onHostSmoke: () -> Unit,
     onGuestAndroidSmoke: () -> Unit,
@@ -530,6 +706,14 @@ private fun HomeScreen(
 
         item {
             SectionTitle(stringResource(R.string.title_workspaces))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                AssistChip(
+                    onClick = onNewWorkspace,
+                    label = { Text(stringResource(R.string.btn_new_workspace)) },
+                    leadingIcon = { Icon(Icons.Default.Folder, contentDescription = null) },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
         }
         if (workspaces.isEmpty()) {
             item {
@@ -537,14 +721,23 @@ private fun HomeScreen(
             }
         } else {
             items(workspaces, key = { it.id }) { ws ->
+                val dirty = WorkspaceStore.isWorkspaceDirty(ws)
                 EntryCard(
-                    title = ws.displayName,
-                    subtitle = "工作區 · ${ws.dir.name}\n來源：${ws.sourceExeName.ifBlank { ws.sourceExePath }}\n長按可刪除",
+                    title = if (dirty) {
+                        "${ws.displayName} · " + stringResource(R.string.workspace_dirty_badge)
+                    } else ws.displayName,
+                    subtitle = buildString {
+                        append("工作區 · ${ws.dir.name}")
+                        append('\n')
+                        append("來源：${ws.sourceExeName.ifBlank { ws.sourceExePath.ifBlank { "（乾淨／未匯入）" } }}")
+                        append('\n')
+                        append(if (dirty) "點擊可重建 Prefix；長按刪除" else "點擊啟動；長按刪除")
+                    },
                     icon = {
                         Icon(
                             Icons.Default.Folder,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
+                            tint = if (dirty) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
                         )
                     },
                     onClick = { onLaunchWorkspace(ws) },
@@ -562,6 +755,20 @@ private fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 4.dp),
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!hasAllFiles) {
+                    AssistChip(
+                        onClick = onGrantAllFiles,
+                        label = { Text(stringResource(R.string.btn_grant_all_files)) },
+                    )
+                }
+                AssistChip(
+                    onClick = onScanExes,
+                    label = { Text(stringResource(R.string.btn_scan_exes)) },
+                    leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
+                )
+            }
+            Spacer(Modifier.height(4.dp))
         }
         if (visibleExes.isEmpty()) {
             item {

@@ -28,7 +28,7 @@
       "pickFiles": [
         "box64"
       ],
-      "notes": "0.1.91: K0–K3 APP_LOAD stamp/export + RPCSS done + seed gate; DXVK x32 defer; keep 090–070"
+      "notes": "0.1.92: orphan-reap whitelist + fail_sig slice + start /exec + RPCSS crush + UX clean workspace/import/scan; DXVK x32 defer"
     },
     {
       "id": "box64-x64lib",

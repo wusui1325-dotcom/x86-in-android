@@ -1,4 +1,4 @@
-<!-- 0.1.91: APP_LOAD stamp/export + RPCSS done + seed gate; DXVK x32 still defer -->
+<!-- 0.1.92: orphan-reap whitelist + start /exec + RPCSS crush + UX clean workspace; DXVK x32 defer -->
 # 第三方組件
 
 ## Box64

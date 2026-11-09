@@ -1,3 +1,12 @@
+## 0.1.92 — APP_LOAD /exec + orphan-reap + RPCSS crush + UX
+
+**Boss 0.1.91 藍屏：** K0–K3 過；`wine C:/App` → Loaded `start.exe` + ShellExecute「no application associated」；orphan-reap 誤殺 services.exe；RPCSS wall ~30s；舊工作區半殘。
+
+- **P0:** orphan-reap whitelist（永不殺 services/rpcss）；fail_sig per-mode wine-run slice + 真 fail_hr；`wow64_direct` = `start /exec`（CreateProcess）
+- **P1:** RPCSS services sleep 2／sc cap 10／skip ole when RUNNING／wall soft-continue@45s
+- **UX:** 「新建工作區」乾淨 prefix；裝置 .exe 全掃（MANAGE_EXTERNAL_STORAGE）；＋號精確匯入到新工作區；半殘提示重建（不默刪）
+- DXVK x32 仍 defer（尚未 Loaded）
+
 ## 0.1.91 — K0–K3 prove APP_LOAD (stamp + RPCSS done + seed gate)
 
 Boss 0.1.90 smoke: live log never entered WINE_START/APP_LOAD (stuck RPCSS t=30,

@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.54-box64-wine64k-holefit-anonpe-rpcss",
+  "runtimeId": "wine-gpustack-v0.1.55-box64-wine64k-holefit-anonpe-rpcss",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.54: RpcSs/MountMgr seed+diag+prestart; drop +module; keep 0.1.53 winex11 + seed-copy + NTDLL_ANON_PE"
+  "notes": "0.1.55: no soft-kill wineboot --init; reuse large prefix; keep rpcss/mountmgr seed+diag; winex11; NTDLL_ANON_PE"
 }

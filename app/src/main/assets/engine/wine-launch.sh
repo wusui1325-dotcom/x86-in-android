@@ -13,12 +13,14 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.54: RpcSs / MountMgr — seed rpcss.exe + drivers/mountmgr.sys (+ service PE);
-# prefix_is_complete requires RpcSs reg + bins; RPCSS_DIAG + optional rpcss prestart;
-# drop +module from default WINE_RUN debug (keep err+all,+seh,+loaddll).
+# 0.1.55: wineboot --init must NOT soft-kill on markers (0.1.54 exit=143 regression);
+# soften wipe — large system.reg (>100KB) + seeded dlls reused (seed bins + RPCSS_PRESTART /
+# wineboot -u); wipe only true stubs (~1–2KB smoke) or init that never wrote system.reg.
+# Keep 0.1.54 seed rpcss/mountmgr + RPCSS_DIAG/PRESTART; +module off; winex11; NTDLL_ANON_PE.
+# 0.1.54: RpcSs / MountMgr seed + diag (over-aggressive complete→wipe — fixed in 0.1.55).
 # 0.1.53: nodrv — seed winex11.drv + desktop,x11; DRIVER_DIAG; actxprxy.
 # 0.1.52: kernel32 c0000135 — seed-copy (no system32 bind) + NTDLL_ANON_PE.
-WINE_LAUNCH_STAMP=0.1.54
+WINE_LAUNCH_STAMP=0.1.55
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -1244,13 +1246,44 @@ driver_diag() {
   fi
 }
 
+# 0.1.55: size helpers — stub vs large usable prefix
+prefix_reg_bytes() {
+  local p="$1"
+  local ssz=0
+  if [ -f "$p/system.reg" ]; then
+    ssz=$(wc -c < "$p/system.reg" 2>/dev/null | tr -d ' \n')
+  fi
+  echo "${ssz:-0}"
+}
+
+# True stub: missing or tiny system.reg (smoke-era ~1–2KB). Safe to wipe.
+prefix_is_stub() {
+  local p="$1"
+  local ssz
+  ssz=$(prefix_reg_bytes "$p")
+  [ "$ssz" -lt 20000 ]
+}
+
+# Large usable prefix: keep it even if RpcSs reg keys missing (seed bins + PRESTART).
+prefix_is_large() {
+  local p="$1"
+  local ssz
+  ssz=$(prefix_reg_bytes "$p")
+  [ "$ssz" -ge 100000 ] || return 1
+  [ -f "$p/drive_c/windows/system32/kernel32.dll" ] || return 1
+  [ -f "$p/drive_c/windows/system32/ntdll.dll" ] || return 1
+  return 0
+}
+
+# Complete enough to skip wineboot --init. Do NOT require RpcSs reg keys
+# (0.1.54 over-complete caused wipe of 1.6MB 0.1.53-era prefixes).
 prefix_is_complete() {
   local p="$1"
   [ -f "$p/system.reg" ] || return 1
   local ssz usz ndll
   ssz=$(wc -c < "$p/system.reg" 2>/dev/null | tr -d ' \n')
   ssz=${ssz:-0}
-  # Real wineboot system.reg is typically 100KB+; stub from failed era ~1–2KB
+  # Real wineboot system.reg is typically 100KB+; accept >=20KB as non-stub
   [ "$ssz" -ge 20000 ] || return 1
   [ -f "$p/user.reg" ] || return 1
   usz=$(wc -c < "$p/user.reg" 2>/dev/null | tr -d ' \n')
@@ -1261,15 +1294,10 @@ prefix_is_complete() {
   ndll=$(ls "$p/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' \n')
   ndll=${ndll:-0}
   [ "$ndll" -ge 15 ] || return 1
-  # Wine writes .update-timestamp when wineboot finishes
-  [ -f "$p/.update-timestamp" ] || return 1
-  # 0.1.54: SCM service bins + RpcSs registration (bind-umount era left 1.6MB
-  # system.reg but empty real system32 → MountMgr err2 + Failed to open RpcSs)
-  [ -f "$p/drive_c/windows/system32/rpcss.exe" ] || return 1
-  [ -f "$p/drive_c/windows/system32/drivers/mountmgr.sys" ] || return 1
-  grep -qE 'Services\\RpcSs\]|Services\\RpcSs"' "$p/system.reg" 2>/dev/null \
-    || grep -q 'rpcss.exe' "$p/system.reg" 2>/dev/null \
-    || return 1
+  # Prefer .update-timestamp, but large+seeded without it is still reusable
+  if [ ! -f "$p/.update-timestamp" ]; then
+    [ "$ssz" -ge 100000 ] || return 1
+  fi
   return 0
 }
 
@@ -1286,8 +1314,14 @@ wipe_wine_prefix() {
   if [ -d "$p" ]; then
     rm -rf "$p/drive_c" "$p/dosdevices" "$p/system.reg" "$p/user.reg" "$p/userdef.reg" \
       "$p/.update-timestamp" "$p/.prefix-exec-ok" 2>/dev/null || true
-    # Catch leftovers
+    # Catch leftovers (Android/busy files: retry timestamp explicitly)
     find "$p" -mindepth 1 -maxdepth 1 ! -name '.' -exec rm -rf {} + 2>/dev/null || true
+    rm -f "$p/.update-timestamp" "$p/system.reg" "$p/user.reg" "$p/userdef.reg" 2>/dev/null || true
+    if [ -e "$p/.update-timestamp" ] || [ -e "$p/system.reg" ]; then
+      log "WARN: WINEBOOT_WIPE leftover markers still present after rm — forcing"
+      : > "$p/.update-timestamp" 2>/dev/null || true
+      rm -f "$p/.update-timestamp" "$p/system.reg" 2>/dev/null || true
+    fi
   fi
   mkdir -p "$p/drive_c/windows/system32" 2>/dev/null || true
   # Re-seed DXVK if present
@@ -1303,15 +1337,24 @@ wipe_wine_prefix() {
 }
 
 run_wineboot_init() {
+  # 0.1.55: NEVER soft-kill wineboot --init on boot markers / .update-timestamp.
+  # Soft-pass (kill after 5s) was for WINE_PE_SMOKE only — applying it here caused
+  # exit=143 before system.reg was written (0.1.54 regression vs 0.1.53).
+  # Wait for real process exit, OR timeout with system.reg still missing.
   local label="${1:-init}"
-  log "WINEBOOT_INIT begin ($label) timeout=120s"
+  local wb_timeout="${2:-180}"
+  log "WINEBOOT_INIT begin ($label) timeout=${wb_timeout}s (no soft-kill on markers)"
   "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+  # Drop any stale .update-timestamp left after wipe so we do not misread progress
+  rm -f "$WINEPREFIX/.update-timestamp" 2>/dev/null || true
   : > /mnt/data/wineboot-init.out
   set +e
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineboot --init >>/mnt/data/wineboot-init.out 2>&1 &
   WB_PID=$!
   WB_T=0
   WB_BYTES=0
+  WB_SAW_REG=0
+  WB_SAW_TS=0
   while kill -0 "$WB_PID" 2>/dev/null; do
     WB_T=$((WB_T+1))
     SZ=$(wc -c < /mnt/data/wineboot-init.out 2>/dev/null | tr -d ' \n' || echo 0)
@@ -1320,24 +1363,21 @@ run_wineboot_init() {
       dd if=/mnt/data/wineboot-init.out bs=1 skip="$WB_BYTES" count=$((SZ-WB_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
       WB_BYTES=$SZ
     fi
-    if [ $((WB_T % 15)) -eq 0 ]; then
-      log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ"
-    fi
-    if [ -f "$WINEPREFIX/.update-timestamp" ] && [ -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]; then
-      log "WINEBOOT_INIT progress complete markers t=${WB_T}s — wait exit"
-      for _ in 1 2 3 4 5; do
-        kill -0 "$WB_PID" 2>/dev/null || break
-        sleep 1
-        WB_T=$((WB_T+1))
-      done
-      if kill -0 "$WB_PID" 2>/dev/null; then
-        kill -TERM "$WB_PID" 2>/dev/null || true
-        sleep 1
-        kill -KILL "$WB_PID" 2>/dev/null || true
+    REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+    if [ "$REG_B" -ge 400 ] 2>/dev/null; then
+      if [ "$WB_SAW_REG" = "0" ]; then
+        log "WINEBOOT_INIT system.reg appeared t=${WB_T}s bytes=$REG_B — waiting for natural exit"
+        WB_SAW_REG=1
       fi
-      break
     fi
-    # Early abort on c0000135 — no point waiting full 120s
+    if [ -f "$WINEPREFIX/.update-timestamp" ] && [ "$WB_SAW_TS" = "0" ]; then
+      log "WINEBOOT_INIT .update-timestamp appeared t=${WB_T}s system.reg=${REG_B}B — waiting for natural exit (NO soft-kill)"
+      WB_SAW_TS=1
+    fi
+    if [ $((WB_T % 15)) -eq 0 ]; then
+      log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ system.reg=${REG_B}B ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no)"
+    fi
+    # Early abort on c0000135 — no point waiting full timeout
     if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
       log "WINEBOOT_INIT detected c0000135 t=${WB_T}s — killing"
       kill -TERM "$WB_PID" 2>/dev/null || true
@@ -1346,12 +1386,23 @@ run_wineboot_init() {
       "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
       break
     fi
-    if [ "$WB_T" -ge 120 ]; then
-      log "WINEBOOT_INIT TIMEOUT — killing"
-      kill -TERM "$WB_PID" 2>/dev/null || true
-      sleep 1
-      kill -KILL "$WB_PID" 2>/dev/null || true
-      "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+    if [ "$WB_T" -ge "$wb_timeout" ]; then
+      REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+      if [ "$REG_B" -ge 20000 ] 2>/dev/null; then
+        # Have a real system.reg — ask politely then accept if still alive
+        log "WINEBOOT_INIT TIMEOUT t=${WB_T}s but system.reg=${REG_B}B — TERM then accept if reg survives"
+        kill -TERM "$WB_PID" 2>/dev/null || true
+        sleep 3
+        if kill -0 "$WB_PID" 2>/dev/null; then
+          kill -KILL "$WB_PID" 2>/dev/null || true
+        fi
+      else
+        log "WINEBOOT_INIT TIMEOUT t=${WB_T}s system.reg=${REG_B}B — killing (no usable reg)"
+        kill -TERM "$WB_PID" 2>/dev/null || true
+        sleep 1
+        kill -KILL "$WB_PID" 2>/dev/null || true
+        "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+      fi
       break
     fi
     sleep 1
@@ -1359,40 +1410,101 @@ run_wineboot_init() {
   wait "$WB_PID" 2>/dev/null
   WB_RC=$?
   set -e
-  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  # exit 143 (SIGTERM) is NEVER success unless system.reg already usable
+  if [ "$WB_RC" = "143" ] && [ "$REG_B" -lt 20000 ] 2>/dev/null; then
+    log "WINEBOOT_INIT exit=143 with tiny/missing system.reg=${REG_B}B — treat as FAIL (soft-kill regression guard)"
+  fi
+  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) bytes=$REG_B complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no) ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no)"
   log "--- WINEBOOT_INIT key lines ---"
   grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image|kernel32' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
   log "--- WINEBOOT_INIT tail ---"
   tail -60 /mnt/data/wineboot-init.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
 }
 
+run_wineboot_update() {
+  # Soft update on a large reused prefix — never wipe; never soft-kill early
+  local label="${1:-update}"
+  local wb_timeout="${2:-90}"
+  log "WINEBOOT_UPDATE begin ($label) timeout=${wb_timeout}s"
+  : > /mnt/data/wineboot-update.out
+  set +e
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineboot -u >>/mnt/data/wineboot-update.out 2>&1 &
+  WB_PID=$!
+  WB_T=0
+  WB_BYTES=0
+  while kill -0 "$WB_PID" 2>/dev/null; do
+    WB_T=$((WB_T+1))
+    SZ=$(wc -c < /mnt/data/wineboot-update.out 2>/dev/null | tr -d ' \n' || echo 0)
+    SZ=${SZ:-0}
+    if [ "$SZ" -gt "$WB_BYTES" ] 2>/dev/null; then
+      dd if=/mnt/data/wineboot-update.out bs=1 skip="$WB_BYTES" count=$((SZ-WB_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
+      WB_BYTES=$SZ
+    fi
+    if [ $((WB_T % 15)) -eq 0 ]; then
+      log "WINEBOOT_UPDATE hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ"
+    fi
+    if [ "$WB_T" -ge "$wb_timeout" ]; then
+      log "WINEBOOT_UPDATE TIMEOUT — TERM (prefix kept)"
+      kill -TERM "$WB_PID" 2>/dev/null || true
+      sleep 2
+      kill -KILL "$WB_PID" 2>/dev/null || true
+      break
+    fi
+    sleep 1
+  done
+  wait "$WB_PID" 2>/dev/null
+  WB_RC=$?
+  set -e
+  log "WINEBOOT_UPDATE exit=$WB_RC system.reg_bytes=$(prefix_reg_bytes "$WINEPREFIX")"
+  grep -E 'wine:|err:|fix:|RpcSs|MountMgr|c0000|FATAL' /mnt/data/wineboot-update.out 2>/dev/null | head -40 | while read -r line; do
+    log "WINEBOOT_UPDATE.out: $line"
+  done || true
+}
+
+# 0.1.55 wipe policy:
+# - complete → skip init
+# - large (>=100KB) but not "complete" → REUSE (seed bins + wineboot -u); NEVER wipe for missing RpcSs keys
+# - stub (tiny/missing) → wipe + wineboot --init (no soft-kill)
+# - after init: FATAL only if system.reg still missing/tiny; large prefix proceeds even if complete=no
 if prefix_is_complete "$WINEPREFIX"; then
-  log "WINEBOOT_INIT skip (prefix complete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" | tr -d ' ')B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') .update-timestamp=yes)"
-else
+  log "WINEBOOT_INIT skip (prefix complete: system.reg=$(prefix_reg_bytes "$WINEPREFIX")B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no))"
+  ensure_prefix_exec
+elif prefix_is_large "$WINEPREFIX"; then
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  log "WINEBOOT_INIT reuse large prefix (system.reg=${REG_B}B) — NO wipe; seed bins + wineboot -u + RPCSS_PRESTART"
+  ensure_prefix_exec
+  run_wineboot_update "reuse-large" 90
+  # Ensure timestamp marker so future skips are quiet (best-effort)
+  if [ ! -f "$WINEPREFIX/.update-timestamp" ] && [ -f /opt/wine/share/wine/wine.inf ]; then
+    date +%s > "$WINEPREFIX/.update-timestamp" 2>/dev/null || true
+    log "WINEBOOT_INIT wrote .update-timestamp after reuse-large"
+  fi
+elif prefix_is_stub "$WINEPREFIX"; then
   if [ -f "$WINEPREFIX/system.reg" ]; then
-    log "WINEBOOT_INIT force wipe (prefix incomplete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" 2>/dev/null | tr -d ' ')B — stub/half-init)"
-    wipe_wine_prefix "$WINEPREFIX" "incomplete-before-init"
+    log "WINEBOOT_INIT wipe stub (system.reg=$(prefix_reg_bytes "$WINEPREFIX")B <20KB)"
+    wipe_wine_prefix "$WINEPREFIX" "stub-before-init"
   else
     log "WINEBOOT_INIT fresh prefix (no system.reg)"
-    # Still ensure seed on empty tree
     ensure_prefix_exec
   fi
-  run_wineboot_init "first"
-  # If c0000135 or still incomplete: wipe once more and retry
+  run_wineboot_init "first" 180
   NEED_RETRY=0
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
   if grep -q 'could not load kernel32.dll, status c0000135' /mnt/data/wineboot-init.out 2>/dev/null; then
     NEED_RETRY=1
     log "WINEBOOT_INIT c0000135 on first try — wipe+retry once"
-  elif ! prefix_is_complete "$WINEPREFIX"; then
+  elif [ "$REG_B" -lt 20000 ] 2>/dev/null; then
     NEED_RETRY=1
-    log "WINEBOOT_INIT incomplete after first try — wipe+retry once"
+    log "WINEBOOT_INIT no usable system.reg after first try (bytes=$REG_B exit=$WB_RC) — wipe+retry once"
   fi
   if [ "$NEED_RETRY" = "1" ]; then
     wipe_wine_prefix "$WINEPREFIX" "retry-after-fail"
-    run_wineboot_init "retry"
+    run_wineboot_init "retry" 180
   fi
-  if [ ! -f "$WINEPREFIX/system.reg" ]; then
-    log "FATAL: wineboot --init did not create system.reg (exit=$WB_RC). See WINEBOOT_INIT key lines."
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  if [ "$REG_B" -lt 400 ] 2>/dev/null; then
+    log "FATAL: wineboot --init did not create system.reg (exit=$WB_RC bytes=$REG_B). See WINEBOOT_INIT key lines."
     [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
     [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
     exit "${WB_RC:-1}"
@@ -1403,14 +1515,24 @@ else
     [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
     exit 53
   fi
-  if ! prefix_is_complete "$WINEPREFIX"; then
-    log "FATAL: WINEBOOT_INIT left incomplete prefix (complete=no) — refusing WINE_START (export log)"
+  if prefix_is_complete "$WINEPREFIX"; then
+    log "WINEBOOT_INIT complete=yes after init"
+  elif [ "$REG_B" -ge 20000 ] 2>/dev/null; then
+    log "WINEBOOT_INIT soft-ok system.reg=${REG_B}B (complete=no) — proceed with seed/RPCSS (no FATAL)"
+    ensure_prefix_exec
+  else
+    log "FATAL: WINEBOOT_INIT left tiny system.reg=${REG_B}B — refusing WINE_START"
     log "FATAL detail: kernel32=$([ -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ] && echo yes || echo no) ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) update-ts=$([ -f "$WINEPREFIX/.update-timestamp" ] && echo yes || echo no) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ')"
     [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
     [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
     exit "${WB_RC:-1}"
   fi
-  log "WINEBOOT_INIT complete=yes after init"
+else
+  # Mid-size odd prefix (20KB–100KB): treat as incomplete but prefer update over wipe
+  REG_B=$(prefix_reg_bytes "$WINEPREFIX")
+  log "WINEBOOT_INIT mid-size prefix (system.reg=${REG_B}B) — seed + wineboot -u (no wipe)"
+  ensure_prefix_exec
+  run_wineboot_update "mid-size" 120
 fi
 
 # Gate: kernel32 must exist before explorer

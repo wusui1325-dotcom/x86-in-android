@@ -1,3 +1,22 @@
+## 0.1.55 — wineboot soft-kill / wipe regression (exit=143)
+
+**Bug (0.1.54 smoke):** Seed rpcss/mountmgr OK, but `prefix_is_complete` required RpcSs
+reg keys → marked usable 1.6MB 0.1.53-era prefix as `stub/half-init` → **WINEBOOT_WIPE**.
+Then `run_wineboot_init` treated `.update-timestamp`+kernel32 as soft-pass markers and
+**SIGTERM'd wineboot after 5s** (`exit=143`) before `system.reg` was written → FATAL.
+GIT_SHA in About lagged tip (`c2c79ea` while tip claimed `9747390`).
+
+**Fix:** Never soft-kill `wineboot --init` on markers — wait for natural exit or real
+timeout; exit 143 without usable `system.reg` is FAIL. Wipe only true stubs (`system.reg`
+<20KB); **reuse** large prefixes (`>=100KB`) with seed bins + `wineboot -u` +
+`RPCSS_PRESTART` (no mandatory wipe for missing RpcSs keys). Soft-ok proceed when
+`system.reg` usable even if complete=no. Commit tip **before** assembleRelease so
+About/GIT_SHA matches tip.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.55` → no `force wipe … 1680940B` →
+`reuse large` **or** `WINEBOOT_INIT … no soft-kill` with `system.reg` surviving →
+`RPCSS_DIAG` / `RPCSS_PRESTART` → `WINE_START` → Present or next err (not exit=143 FATAL).
+
 ## 0.1.54 — RpcSs / MountMgr (Failed to open RpcSs + MountMgr err 2)
 
 **Bug (0.1.53 smoke):** winex11 loads (`DRIVER_DIAG` all yes, no nodrv); explorer hangs on

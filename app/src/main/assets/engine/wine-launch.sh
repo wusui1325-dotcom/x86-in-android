@@ -38,6 +38,16 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.103: P0 RPCSS quiet+cap + MAP_WAIT display (dig-2 on 101; keep 102 gates).
+# Dig-2: RPCSS code 100↔101 identical; sc_rc=124 race/env; 101 rpcss alive but
+# 0×ServiceMain / 0×STATE RUNNING; +x11drv spam out 276k; soft-continue causal.
+# Knives ADD: (1) quiet WINEDEBUG=err+ole,err+rpcss for services/sc/rpcss START
+#   (not only query); (2) if rpcss appeared raise sc soft-cap 20→40s; (3) ready=0
+#   do NOT expand WINEDEBUG; (4) fix MAP_WAIT stamp ${I}0ms→I*100ms (I=150 was
+#   "1500ms" while real wait 15s); (5) defer launch_rpcss_once overlap (no eager
+#   race with sc start). KEEP 102: hard-gate APP_LOAD / TERM orphan / recover /
+#   per-mode dwell / creator_hang / /exec+/machine x86 / mmap32_creators /
+#   parent MMAP32=0 / WINELOADERNOEXEC. No hot / no DXVK x32 / no Xvfb / no force.
 # 0.1.102: P0 restore 100 CPIW baseline (101 deep dig).
 # Root: RPCSS ready=0 (sc_rc=124 DETACH orphan) → soft-continue → MAP_WAIT timeout
 # still APP_LOAD → creator ntdll wrap hang; absolute-HB ladder starve dwell ~1s.
@@ -185,7 +195,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.102
+WINE_LAUNCH_STAMP=0.1.103
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -2542,7 +2552,8 @@ launch_rpcss_once() {
     log "RPCSS_PRESTART rpcss already in /proc — skip launch"
     return 0
   fi
-  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine rpcss.exe >>/mnt/data/wine-rpcss.out 2>&1 &
+  # 0.1.103: quiet WINEDEBUG for rpcss START (dig-2: +x11drv spam 276k / sc stall)
+  WINEDEBUG="${X86_RPCSS_WINEDEBUG:-err+ole,err+rpcss}" "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine rpcss.exe >>/mnt/data/wine-rpcss.out 2>&1 &
   RPCSS_PID=$!
   RPCSS_LAUNCHES=$((RPCSS_LAUNCHES+1))
   sleep 2
@@ -2577,6 +2588,10 @@ rpcss_prestart() {
   RPCSS_LAUNCHES=0
 
   RPC_T0=$(date +%s 2>/dev/null || echo 0)
+  # 0.1.103: quiet WINEDEBUG for services/sc/rpcss START (dig-2 P0; query already quiet)
+  _RPC_WD_SAVE="${WINEDEBUG:-}"
+  export WINEDEBUG="${X86_RPCSS_WINEDEBUG:-err+ole,err+rpcss}"
+  log "RPCSS_PRESTART quiet WINEDEBUG=$WINEDEBUG (0.1.103 services/sc/rpcss start)"
   if [ -f "$sys32/services.exe" ]; then
     "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine services.exe >>/mnt/data/wine-rpcss.out 2>&1 &
     SERVICES_PID=$!
@@ -2604,17 +2619,28 @@ rpcss_prestart() {
   fi
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine sc.exe start RpcSs >>/mnt/data/wine-rpcss.out 2>&1 &
   SC_PID=$!
-  # overlap launch_rpcss_once while sc start runs
-  launch_rpcss_once || true
+  # 0.1.103: NO eager overlap launch_rpcss_once with sc start (dig-2: race when
+  # soft-cap frequent — raw wine rpcss.exe vs SCM StartService). Deferred: only
+  # launch if sc still running AND rpcss not appeared after 5s.
   ST=0
   APPEARED_LOGGED=0
+  _SC_CAP=20
+  _RPCSS_DEFERRED_LAUNCH=0
   # 0.1.93: wait for sc natural exit (091 ~15s rc=0). Appear only logs — NEVER TERM sc.
-  while kill -0 "$SC_PID" 2>/dev/null && [ "$ST" -lt 20 ]; do
+  # 0.1.103: if rpcss appeared raise soft-cap 20→40s (100 exited @15s; 101 died @20s).
+  while kill -0 "$SC_PID" 2>/dev/null && [ "$ST" -lt "$_SC_CAP" ]; do
     sleep 1
     ST=$((ST+1))
     if [ "$APPEARED_LOGGED" = "0" ] && rpcss_proc_alive; then
       APPEARED_LOGGED=1
-      log "RPCSS_PRESTART rpcss appeared during sc start t=${ST}s — keep waiting for sc exit (no TERM)"
+      _SC_CAP="${X86_RPCSS_SC_CAP_ALIVE:-40}"
+      log "RPCSS_PRESTART rpcss appeared during sc start t=${ST}s — raise soft-cap to ${_SC_CAP}s (0.1.103; keep waiting; no TERM)"
+      stamp_wine_run "RPCSS_PRESTART appeared t=${ST}s sc_cap=${_SC_CAP}"
+    fi
+    if [ "$APPEARED_LOGGED" = "0" ] && [ "$ST" -ge 5 ] && [ "$_RPCSS_DEFERRED_LAUNCH" = "0" ]; then
+      _RPCSS_DEFERRED_LAUNCH=1
+      log "RPCSS_PRESTART deferred launch_rpcss_once at t=${ST}s (no appear yet; 0.1.103 no eager overlap)"
+      launch_rpcss_once || true
     fi
   done
   if kill -0 "$SC_PID" 2>/dev/null; then
@@ -2622,7 +2648,7 @@ rpcss_prestart() {
     # + wineserver/SCM queue busy → creators stall at ntdll wrap). Appear-wait still
     # NEVER TERMs mid-loop; only TERM at soft-cap before recover/gate.
     SC_RC=124
-    log "RPCSS_PRESTART sc start soft-timeout t=${ST}s (cap 20; 0.1.102 TERM orphan sc — no DETACH)"
+    log "RPCSS_PRESTART sc start soft-timeout t=${ST}s (cap ${_SC_CAP}; appeared=${APPEARED_LOGGED}; 0.1.102 TERM orphan sc — no DETACH)"
     kill -TERM "$SC_PID" 2>/dev/null || true
     sleep 0.5
     if kill -0 "$SC_PID" 2>/dev/null; then
@@ -2630,13 +2656,16 @@ rpcss_prestart() {
       sleep 0.2
     fi
     wait "$SC_PID" 2>/dev/null || true
-    log "RPCSS_PRESTART sc orphan TERMed soft-cap t=${ST}s sc_rc=124"
-    stamp_wine_run "RPCSS_PRESTART sc_orphan_term soft_cap t=${ST}s sc_rc=124"
+    log "RPCSS_PRESTART sc orphan TERMed soft-cap t=${ST}s sc_rc=124 cap=${_SC_CAP}"
+    stamp_wine_run "RPCSS_PRESTART sc_orphan_term soft_cap t=${ST}s sc_rc=124 cap=${_SC_CAP}"
   else
     wait "$SC_PID" 2>/dev/null
     SC_RC=$?
-    log "RPCSS_PRESTART sc start exited rc=$SC_RC t=${ST}s"
+    log "RPCSS_PRESTART sc start exited rc=$SC_RC t=${ST}s cap=${_SC_CAP} appeared=${APPEARED_LOGGED}"
   fi
+  # 0.1.103: restore WINEDEBUG after services/sc/rpcss start quiet window
+  export WINEDEBUG="${_RPC_WD_SAVE}"
+  unset _RPC_WD_SAVE _SC_CAP _RPCSS_DEFERRED_LAUNCH
   unset APPEARED_LOGGED
   if grep -qE '1056|already been started|already running' /mnt/data/wine-rpcss.out 2>/dev/null; then
     log "RPCSS_PRESTART sc 1056/already-running — treat as OK"
@@ -2772,17 +2801,30 @@ rpcss_prestart() {
             wait "$SC_PID" 2>/dev/null || true
             log "RPCSS_PRESTART recover TERMed leftover SC_PID=$SC_PID"
           fi
-          launch_rpcss_once || true
+          # 0.1.103: quiet WINEDEBUG for recover sc/rpcss start; skip launch if already alive
+          _RPC_WD_SAVE="${WINEDEBUG:-}"
+          export WINEDEBUG="${X86_RPCSS_WINEDEBUG:-err+ole,err+rpcss}"
+          if rpcss_proc_alive; then
+            log "RPCSS_PRESTART recover skip launch_rpcss_once (already alive; 0.1.103 overlap harden)"
+          else
+            launch_rpcss_once || true
+          fi
           "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine sc.exe start RpcSs >>/mnt/data/wine-rpcss.out 2>&1 &
           SC_PID=$!
           _rst=0
-          while kill -0 "$SC_PID" 2>/dev/null && [ "$_rst" -lt 20 ]; do
+          _rsc_cap=20
+          while kill -0 "$SC_PID" 2>/dev/null && [ "$_rst" -lt "$_rsc_cap" ]; do
             sleep 1
             _rst=$((_rst+1))
+            if rpcss_proc_alive && [ "$_rsc_cap" -lt 40 ]; then
+              _rsc_cap="${X86_RPCSS_SC_CAP_ALIVE:-40}"
+            fi
             if rpcss_proc_alive && grep -qE 'STATE[[:space:]]*:[[:space:]]*4|[[:space:]]RUNNING|1056|already' /mnt/data/wine-rpcss.out 2>/dev/null; then
               break
             fi
           done
+          export WINEDEBUG="${_RPC_WD_SAVE}"
+          unset _RPC_WD_SAVE _rsc_cap
           if kill -0 "$SC_PID" 2>/dev/null; then
             kill -TERM "$SC_PID" 2>/dev/null || true
             sleep 0.3
@@ -2849,8 +2891,8 @@ rpcss_prestart() {
     done || true
   fi
   if [ "$RPC_READY" != "1" ]; then
-    log "WARN: RPCSS_PRESTART not ready — enabling +ole/+rpcss/+x11drv for WINE_START diag"
-    export WINEDEBUG="err+all,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox"
+    # 0.1.103 dig-2: do NOT expand WINEDEBUG on ready=0 (101 +x11drv spam amplified stall)
+    log "WARN: RPCSS_PRESTART not ready — KEEP WINEDEBUG as-is (0.1.103: no expand on wedge; WINEDEBUG=${WINEDEBUG:-unset})"
   else
     log "RPCSS_PRESTART RpcSs ready — safe for WINE_START"
   fi
@@ -2976,11 +3018,11 @@ MAP_WAIT_I=0
 DESKTOP_READY=0
 # Marker cleared by Session/DesktopHelper before X start — do not rm after explorer
 # (desktop may already have mapped and written it).
-log "MAP_WAIT desktop marker .x86-x11-ready (max ${MAP_WAIT_MAX}x0.1s; extend=${MAP_WAIT_EXTEND}x0.1s; 0.1.102 gate)"
+log "MAP_WAIT desktop marker .x86-x11-ready (max ${MAP_WAIT_MAX}x0.1s=$((MAP_WAIT_MAX * 100))ms; extend=${MAP_WAIT_EXTEND}x0.1s; 0.1.103 t=I*100ms display; 0.1.102 gate)"
 while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]; do
   # explorer died early?
   if ! kill -0 "$WINE_PID" 2>/dev/null; then
-    log "MAP_WAIT abort explorer dead pid=$WINE_PID t=${MAP_WAIT_I}0ms"
+    log "MAP_WAIT abort explorer dead pid=$WINE_PID t=$((MAP_WAIT_I * 100))ms"
     break
   fi
   sleep 0.1
@@ -2988,13 +3030,13 @@ while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]
 done
 if [ -f /mnt/data/.x86-x11-ready ]; then
   DESKTOP_READY=1
-  log "MAP_WAIT desktop ready t=${MAP_WAIT_I}0ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+  log "MAP_WAIT desktop ready t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
 else
-  log "MAP_WAIT desktop timeout t=${MAP_WAIT_I}0ms — long-retry extend=${MAP_WAIT_EXTEND}x0.1s (0.1.102 NO APP_LOAD hard-open)"
+  log "MAP_WAIT desktop timeout t=$((MAP_WAIT_I * 100))ms — long-retry extend=${MAP_WAIT_EXTEND}x0.1s (0.1.102 NO APP_LOAD hard-open)"
   _ext=0
   while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$_ext" -lt "$MAP_WAIT_EXTEND" ]; do
     if ! kill -0 "$WINE_PID" 2>/dev/null; then
-      log "MAP_WAIT extend abort explorer dead pid=$WINE_PID t=$((MAP_WAIT_I+_ext))0ms"
+      log "MAP_WAIT extend abort explorer dead pid=$WINE_PID t=$(((MAP_WAIT_I+_ext) * 100))ms"
       break
     fi
     sleep 0.1
@@ -3004,11 +3046,11 @@ else
   unset _ext
   if [ -f /mnt/data/.x86-x11-ready ]; then
     DESKTOP_READY=1
-    log "MAP_WAIT desktop ready (after extend) t=${MAP_WAIT_I}0ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+    log "MAP_WAIT desktop ready (after extend) t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
   else
     DESKTOP_READY=0
-    log "MAP_WAIT desktop NOT ready t=${MAP_WAIT_I}0ms — APP_LOAD gated (DESKTOP_READY=0; no hard-open)"
-    stamp_wine_run "MAP_WAIT desktop_ready=0 t=${MAP_WAIT_I}0ms APP_LOAD_GATE"
+    log "MAP_WAIT desktop NOT ready t=$((MAP_WAIT_I * 100))ms — APP_LOAD gated (DESKTOP_READY=0; no hard-open)"
+    stamp_wine_run "MAP_WAIT desktop_ready=0 t=$((MAP_WAIT_I * 100))ms APP_LOAD_GATE"
   fi
 fi
 

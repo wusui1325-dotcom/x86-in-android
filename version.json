@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.102",
-  "versionCode": 103,
-  "notes": "0.1.102: P0 hard-gate APP_LOAD on RPCSS ready=1 + desktop MAP_WAIT ready (TERM orphan sc on soft-cap; recover/re-prestart; forbid soft-continue ready=0; no MAP_WAIT timeout→APP_LOAD); hang-ladder per-mode dwell ≥10–12s (not absolute HB); dig creator_hang=ntdll_wrap + HOLD; KEEP /exec+/machine x86 + mmap32_creators + P0-B stamps + parent MMAP32=0 + WINELOADERNOEXEC; restore 100 CPIW baseline; no hot bake; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "e9b7da2"
+  "versionName": "0.1.103",
+  "versionCode": 104,
+  "notes": "0.1.103: P0 RPCSS quiet WINEDEBUG=err+ole,err+rpcss for services/sc/rpcss START; rpcss-appeared sc soft-cap 20→40s; ready=0 no WINEDEBUG expand; MAP_WAIT display fix ${I}0ms→I*100ms; defer launch_rpcss_once overlap; KEEP 102 hard-gate/TERM orphan/recover/per-mode dwell/creator_hang + /exec+/machine x86 + mmap32_creators + parent MMAP32=0 + WINELOADERNOEXEC; no hot bake; GIT_SHA bake-after-commit",
+  "tipSha": "PENDING"
 }

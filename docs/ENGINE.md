@@ -1,3 +1,21 @@
+## 0.1.45 — PREFIX_EXEC scratch mkdir EEXIST fix
+
+**Symptom (0.1.44):** `WINE_LAUNCH_STAMP=0.1.44`, then
+`PREFIX_EXEC tmpfs scratch ok … path=/tmp/.wine-pe-exec` →
+`PREFIX_EXEC copying … → tmpfs` → `mkdir: cannot create directory '/tmp/.wine-pe-exec': File exists`
+and script aborted (`set -e`) before hole-fit. Cause: toybox/busybox `mkdir -p` on a
+tmpfs **mountpoint** parent returns EEXIST.
+
+**Fix:**
+- `ensure_dir` / `prepare_scratch`: never fatal on existing dir/mountpoint; reuse mounted
+  scratch; leaf `mkdir` after `cd` into parent; `rm -rf` + recreate only if path is not a dir.
+- Keep 0.1.44: always tmpfs+bind `$WINEPREFIX/.../system32`; STACK_HEAD mid `≥0x1200000`.
+- stamp `0.1.45`; `runtimeId` → `…v0.1.45…sys32`.
+
+**Retest:** Cover-install **0.1.45** → `WINE_LAUNCH_STAMP=0.1.45` →
+`PREFIX_EXEC ok mode=tmpfs+bind-sys32`（或 preseed）**without** `File exists` →
+`HOLEFIT ok addr≥0x1200000` → `WINE_EXIT=0` 或下一 unmuted err.
+
 ## 0.1.44 — system32 PREFIX_EXEC + STACK_HEAD mid + 重裝運行時可見
 
 **Symptom (0.1.43):** `PREFIX_EXEC ok mode=probe` on `/opt/wine/.../ntdll.dll`, then

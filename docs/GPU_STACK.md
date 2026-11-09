@@ -125,6 +125,10 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.84 d3dcompiler seed：** `d3dcompiler_47/46/43` (+33–42) → system32+SysWOW64
+  (`APP_D3DCOMPILER_SEED`); pe_dir has them; PREFIX_EXEC/DXVK reseed omit. Miss →
+  shader compile fail / MessageBox / black after HWND. Keep 083 Present cpuAccess /
+  082 syncInterval / 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM.
 - **0.1.83 PresentExtension GPUImage：** `selectInput` `createOrObtain(..., false, true)`
   match DRI3 (was cpuAccess=true). First-attach race → empty AHB / guestBlack; DIAG
   `PresentExtension GPUImage cpuAccess=false` + `ahbCpuAccess=`. Keep 082 syncInterval /

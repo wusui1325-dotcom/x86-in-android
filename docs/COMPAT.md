@@ -1,3 +1,20 @@
+## 0.1.84 — d3dcompiler seed (47/46/43)
+
+**Smoke risk (0.1.83):** HWND + Present cpuAccess=false still black possible when titles
+`LoadLibrary(d3dcompiler_47)` (or 43/46) and prefix system32 lacks the PE — pe_dir has
+`d3dcompiler_33…47` but PREFIX_EXEC seed_list + DXVK reseed only copy d3d8/9/10core/11/dxgi
+(+ CRT). Miss → shader compile fail / MessageBox / c0000135 / guestBlack after HWND ready.
+
+**Fix:**
+- `ensure_d3dcompiler_seed` → system32 from x86_64-windows + SysWOW64 from i386-windows
+- Seed **47 + 46 + 43** minimum (+ 33–42 when present); log `APP_D3DCOMPILER_SEED … dc47=`
+- PREFIX_EXEC seed_list +47/46/43; call after CRT seed / on missing_dll relaunch path
+- Classify `APP_CRT_SIG` also matches `d3dcompiler_*`
+- Keep 083 Present cpuAccess / 082 syncInterval / 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.84`; `APP_D3DCOMPILER_SEED … dc47=yes dc46=yes dc43=yes`;
+D3D titles LoadLibrary d3dcompiler_47; Present path unchanged.
+
 ## 0.1.83 — PresentExtension GPUImage cpuAccess=false
 
 **Smoke risk (0.1.82):** HWND + DXGI syncInterval=0 still black possible when Present

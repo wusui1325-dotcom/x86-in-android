@@ -1404,6 +1404,8 @@ class SessionActivity : ComponentActivity() {
             "APP_CRT_SEED",
             "APP_CRT_RELAUNCH",
             "APP_CRT_SIG",
+            "APP_D3DCOMPILER_SEED",
+            "d3dcompiler_",
             "APP_MSGBOX_DETECT",
             "+msgbox",
             "#32770",

@@ -14,6 +14,10 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.84: d3dcompiler seed — d3dcompiler_47/46/43 (+33–42) into system32 + SysWOW64
+# (pe_dir has them; PREFIX_EXEC/DXVK reseed omit). Log APP_D3DCOMPILER_SEED. Miss →
+# shader compile fail / MessageBox / black after HWND. Keep 083 Present cpuAccess /
+# 082 syncInterval / 081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM.
 # 0.1.83: PresentExtension GPUImage cpuAccess=false (match DRI3 bufferFromPixmap).
 # First-attach race: Present selectInput often before DRI3; createOrObtain keeps first
 # GPUImage — cpuAccess=true empty AHB → guestBlack (0.1.70 pump warning). Host Java fix;
@@ -66,7 +70,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.83
+WINE_LAUNCH_STAMP=0.1.84
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -808,6 +812,46 @@ ensure_vs_crt_seed() {
   return 0
 }
 
+# 0.1.84: seed d3dcompiler_* PE DLLs into system32 + SysWOW64.
+# pe_dir ships d3dcompiler_33…47; PREFIX_EXEC seed_list + DXVK reseed omit them →
+# D3D9/11 titles LoadLibrary d3dcompiler_47 (or 43/46) fail → shader compile /
+# MessageBox / c0000135 / guestBlack with HWND ready.
+ensure_d3dcompiler_seed() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  # Prefer 47+46+43 (most titles); also seed 33–42 when present (cheap, already in pe_dir).
+  # No 44/45 in Wine pe_dir — skip inventing.
+  local dc_list="d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll
+    d3dcompiler_42.dll d3dcompiler_41.dll d3dcompiler_40.dll d3dcompiler_39.dll
+    d3dcompiler_38.dll d3dcompiler_37.dll d3dcompiler_36.dll d3dcompiler_35.dll
+    d3dcompiler_34.dll d3dcompiler_33.dll"
+  mkdir -p "$sys32" 2>/dev/null || true
+  mkdir -p "$wow64" 2>/dev/null || true
+  local n64=0 n32=0 miss="" d
+  for d in $dc_list; do
+    if [ -f "$pe64/$d" ]; then
+      if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then
+        n64=$((n64+1))
+      else
+        miss="$miss $d"
+      fi
+    fi
+    if [ -f "$pe32/$d" ]; then
+      if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then
+        n32=$((n32+1))
+      fi
+    fi
+  done
+  local dc47=no dc46=no dc43=no
+  [ -f "$sys32/d3dcompiler_47.dll" ] && dc47=yes
+  [ -f "$sys32/d3dcompiler_46.dll" ] && dc46=yes
+  [ -f "$sys32/d3dcompiler_43.dll" ] && dc43=yes
+  log "APP_D3DCOMPILER_SEED pe64→sys32=$n64 pe32→syswow64=$n32 dc47=$dc47 dc46=$dc46 dc43=$dc43 miss=${miss:-none}"
+  return 0
+}
+
 ensure_prefix_exec() {
   # 0.1.52: NTDLL_ANON_PE already bypasses Android W^X (anon/pread). Binding a
   # scratch tree OVER $WINEPREFIX/.../system32 HIDES wineboot-created DLLs and
@@ -879,6 +923,7 @@ ensure_prefix_exec() {
   # 0.1.54: + service PE (rpcss/svchost/plugplay) + drivers/mountmgr.sys (MountMgr err 2)
   # 0.1.80: + VS CRT redistributables (msvcp140/vcruntime140/…) — pe_dir has them;
   # 079 seed only ucrtbase/msvcrt → GUI CREATEWINDOW_MISS missing_dll.
+  # 0.1.84: + d3dcompiler_47/46/43 (ensure_d3dcompiler_seed also seeds 33–42).
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
@@ -889,7 +934,8 @@ ensure_prefix_exec() {
     authz.dll
     msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll
     concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll
-    msvcp100.dll msvcr100.dll"
+    msvcp100.dll msvcr100.dll
+    d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll"
   local seeded=0
   local skipped=0
   local d
@@ -955,6 +1001,8 @@ ensure_prefix_exec() {
 
   # 0.1.80: also seed VS CRT into sys32 + SysWOW64 (idempotent)
   ensure_vs_crt_seed
+  # 0.1.84: seed d3dcompiler_* into sys32 + SysWOW64 (idempotent)
+  ensure_d3dcompiler_seed
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no
@@ -2578,6 +2626,7 @@ app_load_spawn() {
 
 # 0.1.79: classify why Loaded never produced CreateWindow / HWND
 # 0.1.80: also capture CRT / missing-DLL signature → APP_CRT_SIG
+# 0.1.84: APP_CRT_SIG also matches d3dcompiler_* (seed via ensure_d3dcompiler_seed)
 # 0.1.81: +msgbox channel → reason=messagebox + APP_MSGBOX_DETECT source=wine
 app_load_classify_nocreate() {
   APP_MISS_REASON=no_createwindow
@@ -2594,10 +2643,10 @@ app_load_classify_nocreate() {
       APP_MISS_REASON=messagebox
       _mb_hit=$(grep -oiE 'MessageBox[AW]?|TaskDialog|msgbox:[^ ]+|#32770' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr ' ' '_' || true)
       log "APP_MSGBOX_DETECT source=wine hit=${_mb_hit:-MessageBox}"
-    elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase|concrt' /mnt/data/wine-run.out 2>/dev/null; then
+    elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase|concrt|d3dcompiler' /mnt/data/wine-run.out 2>/dev/null; then
       APP_MISS_REASON=missing_dll
-      # Prefer a concrete CRT / module name for KEY_LOG
-      APP_CRT_SIG=$(grep -oiE 'msvcp[0-9_]+(\.[Dd][Ll][Ll])?|vcruntime[0-9_]+(\.[Dd][Ll][Ll])?|concrt[0-9_]+(\.[Dd][Ll][Ll])?|ucrtbase(\.[Dd][Ll][Ll])?|msvcr[0-9_]+(\.[Dd][Ll][Ll])?' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr 'A-Z' 'a-z' || true)
+      # Prefer a concrete CRT / d3dcompiler / module name for KEY_LOG
+      APP_CRT_SIG=$(grep -oiE 'd3dcompiler_[0-9]+(\.[Dd][Ll][Ll])?|msvcp[0-9_]+(\.[Dd][Ll][Ll])?|vcruntime[0-9_]+(\.[Dd][Ll][Ll])?|concrt[0-9_]+(\.[Dd][Ll][Ll])?|ucrtbase(\.[Dd][Ll][Ll])?|msvcr[0-9_]+(\.[Dd][Ll][Ll])?' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr 'A-Z' 'a-z' || true)
       if [ -z "${APP_CRT_SIG:-}" ]; then
         APP_CRT_SIG=$(grep -oiE 'err:module:[^:]+:[^ ]+|STATUS_DLL_NOT_FOUND|c0000135' /mnt/data/wine-run.out 2>/dev/null | head -1 | tr ' ' '_' || true)
       fi
@@ -2839,6 +2888,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
         # 0.1.80: ensure VS CRT on disk before any relaunch (idempotent)
         app_load_classify_nocreate
         ensure_vs_crt_seed
+        ensure_d3dcompiler_seed
         _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
         _scan_none=0
         case "$_scan_body" in
@@ -2890,6 +2940,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           # 0.1.80: GUI missing CRT/DLL — seed VS CRT + one relaunch (mirror CUI pattern)
           APP_CRT_RELAUNCHED=1
           ensure_vs_crt_seed
+          ensure_d3dcompiler_seed
           log "APP_CRT_RELAUNCH once reason=${APP_MISS_REASON} sig=${APP_CRT_SIG:-none} scan_none=${_scan_none} pe_mach=0x${PE_MACH:-?}"
           if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
             kill -TERM "$APP_PID" 2>/dev/null || true

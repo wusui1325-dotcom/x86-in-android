@@ -32,7 +32,7 @@
 - 上游：Mesa freedreno／turnip（Pipetto-crypto／KGSL 移植）
 - 授權：**MIT**（Mesa）
 - 用途：PRoot **glibc** 客體 Vulkan ICD（直載；需 `/dev/kgsl-3d0`）
-- 路徑：`files/engine/gpu-stack/turnip-25.1.0-R2/`＋`freedreno_icd.json`（客體絕對 `library_path=/mnt/gpu/turnip/libvulkan_freedreno.so`；0.1.71）；0.1.72 seed `dxvk.conf`；0.1.73 `TU_DEBUG=noconform,noubwc,sysmem`＋Mesa shader cache；0.1.74 winex11 HWND/FS knobs＋Present HWND prefer；0.1.75 map+raise／MAP_WAIT／VIEWABLE＋dxvk maxFrameLatency；0.1.76 Smart TU_GMEM auto a710/715/720/725；0.1.77 APP_LOAD fingerprint＋bringToFront raise；0.1.78 Loaded-but-no-HWND sticky＋nohwnd map；0.1.79 CUI wineconsole＋APP_CREATEWINDOW_MISS；0.1.80 VS CRT seed＋APP_CRT_RELAUNCH；0.1.81 MessageBox/title＋msgbox＋dialog sticky＋APP_MSGBOX_DETECT；0.1.82 dxgi.syncInterval=0＋d3d9.presentInterval=0（DXVK 2.7.1）；0.1.83 PresentExtension GPUImage cpuAccess=false（match DRI3）
+- 路徑：`files/engine/gpu-stack/turnip-25.1.0-R2/`＋`freedreno_icd.json`（客體絕對 `library_path=/mnt/gpu/turnip/libvulkan_freedreno.so`；0.1.71）；0.1.72 seed `dxvk.conf`；0.1.73 `TU_DEBUG=noconform,noubwc,sysmem`＋Mesa shader cache；0.1.74 winex11 HWND/FS knobs＋Present HWND prefer；0.1.75 map+raise／MAP_WAIT／VIEWABLE＋dxvk maxFrameLatency；0.1.76 Smart TU_GMEM auto a710/715/720/725；0.1.77 APP_LOAD fingerprint＋bringToFront raise；0.1.78 Loaded-but-no-HWND sticky＋nohwnd map；0.1.79 CUI wineconsole＋APP_CREATEWINDOW_MISS；0.1.80 VS CRT seed＋APP_CRT_RELAUNCH；0.1.81 MessageBox/title＋msgbox＋dialog sticky＋APP_MSGBOX_DETECT；0.1.82 dxgi.syncInterval=0＋d3d9.presentInterval=0（DXVK 2.7.1）；0.1.83 PresentExtension GPUImage cpuAccess=false（match DRI3）；0.1.84 d3dcompiler_47/46/43 seed（APP_D3DCOMPILER_SEED）
 - 依賴：rootfs `x11-overlay`（`libvulkan.so.1`／`libdrm`／`libxcb-*`）
 
 ### 未採用（本輪）

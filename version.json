@@ -2,6 +2,6 @@
   "minSdk": 28,
   "versionName": "0.1.111",
   "versionCode": 113,
-  "notes": "0.1.111: P0 App-only. Dig110: guest MMAP32=0 landed but machine-14c child still set_mem_area_state SIGABRT (WINEPRELOADRESERVE=400000-692000 PE size not 64k-aligned). Knives: (A) NTDLL_GRAN_ALIGN patch addr↓/size↑ before assert; (B) wow64cpu+started+Loaded after child lives; (C) +wow64 WINEDEBUG + fix stale mmap32_child labels + virtual_granularity_assert name. KEEP 107 order/NOEXEC/guest MMAP32=0. No trampoline/hot/Present/DXVK x32/FF. vc113.",
-  "tipSha": "PENDING"
+  "notes": "0.1.111: P0 App-only. Dig110: guest MMAP32=0 landed but machine-14c child still set_mem_area_state SIGABRT (WINEPRELOADRESERVE=400000-692000 PE size not 64k-aligned). Knives: (A) NTDLL_GRAN_ALIGN patch addr\u2193/size\u2191 before assert; (B) wow64cpu+started+Loaded after child lives; (C) +wow64 WINEDEBUG + fix stale mmap32_child labels + virtual_granularity_assert name. KEEP 107 order/NOEXEC/guest MMAP32=0. No trampoline/hot/Present/DXVK x32/FF. vc113.",
+  "tipSha": "4beaa33"
 }

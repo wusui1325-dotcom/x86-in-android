@@ -1,3 +1,26 @@
+## 0.1.87 — WoW64 i386 APP_LOAD (machine=0x014c)
+
+**Boss smoke (0.1.85 full log):** workspace `Antigravity-x64` but `APP_PE machine=0x014c`
+(i386). unix absolute `wine /mnt/app/app.exe` → ShellExecuteEx / FormatMessage failed →
+`APP_LOAD_FATAL missing-Loaded`; Present desktopOnly/guestBlack (app never started).
+Also `APP_PE WARN unexpected machine` because od prints `014c` but case only matched `14c`.
+
+**Why unix absolute fails for 0x014c:** under win64, unix CreateProcess does not reliably
+engage WoW64; need Windows-path `wine start C:/App/app.exe` so wow64cpu thunks to SysWOW64
+i386 ntdll. 0.1.67 C:/ ban stays for **amd64**; i386 is the exception.
+
+**Fix:**
+- Fingerprint `014c`/`14c` → `APP_LOAD wow64=1` → `wine start C:/App/app.exe` (fallback
+  bare `wine C:/App/app.exe`); 0x8664 keeps unix ladder
+- `ensure_wow64_seed` — wow64{,cpu,win}.dll → system32; core i386 PE → SysWOW64
+- Fix PE machine case to accept `014c`
+- InProcessX root cpuAccess **defer 088+** (app never Loaded — not this tip)
+- Keep 086 vulkan seed / 085 awk POSIX + forceGpu / 084 d3dcompiler / 083–070
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.87`; `APP_PE machine=0x014c` (no unexpected WARN);
+`APP_WOW64_SEED … wow64cpu=yes …`; `APP_LOAD wow64=1 machine=0x014c … decide=start_win`;
+strict `Loaded L"…app.exe"` (not missing-Loaded).
+
 ## 0.1.86 — ensure_vulkan_seed (vulkan-1 + winevulkan)
 
 **Smoke risk (0.1.85 residual):** awk abort fixed so APP_LOAD / DXVK / vkCreate now run;

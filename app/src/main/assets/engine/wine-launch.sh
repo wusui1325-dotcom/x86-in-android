@@ -27,6 +27,12 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.87: WoW64 i386 APP_LOAD — Boss 0.1.85: Antigravity PE machine=0x014c (i386) under
+# win64; unix absolute `wine /mnt/app/app.exe` → ShellExecuteEx/missing-Loaded (app never
+# starts; Present desktopOnly/guestBlack). Fix: fingerprint 014c/14c → wine start
+# C:/App/app.exe (WoW64); 8664 keeps unix ladder. ensure_wow64_seed (wow64*.dll→sys32 +
+# core i386 PE→SysWOW64). Fix od `014c` vs case `14c` false WARN. InProcessX defer 088+.
+# Keep 086 vulkan seed / 085 awk+forceGpu / 084–070.
 # 0.1.86: vulkan-1 + winevulkan seed — pe_dir ships both arches; PREFIX_EXEC seed_list
 # + DXVK reseed omit them. DXVK LoadLibrary(vulkan-1.dll) → winevulkan; seed-copy
 # prefix needs file-visible PE in system32 (same class as 080 CRT / 084 d3dcompiler).
@@ -93,7 +99,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.86
+WINE_LAUNCH_STAMP=0.1.87
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -917,6 +923,51 @@ ensure_vulkan_seed() {
   return 0
 }
 
+# 0.1.87: WoW64 thunk PE (system32) + core i386 PE (SysWOW64) for machine=0x014c apps.
+# seed-copy prefix may lack wow64cpu / SysWOW64 ntdll after wineboot; without them
+# `wine start C:/App/app.exe` cannot hand off to 32-bit loader.
+ensure_wow64_seed() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  local n64=0 n32=0
+  local miss=""
+  mkdir -p "$sys32" "$wow64" 2>/dev/null || true
+  # 64-bit wow64 layer lives in system32
+  for d in wow64.dll wow64cpu.dll wow64win.dll; do
+    if [ -f "$pe64/$d" ]; then
+      if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then
+        n64=$((n64 + 1))
+      else
+        miss="$miss sys32:$d"
+      fi
+    else
+      miss="$miss pe64:$d"
+    fi
+  done
+  # Core 32-bit PE into SysWOW64 (minimal chain for CreateProcess + x11)
+  for d in ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll sechost.dll \
+           ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll user32.dll gdi32.dll win32u.dll \
+           imm32.dll shell32.dll shlwapi.dll ole32.dll oleaut32.dll combase.dll \
+           comctl32.dll uxtheme.dll winex11.drv winmm.dll version.dll \
+           start.exe wineboot.exe wineconsole.exe cmd.exe explorer.exe; do
+    if [ -f "$pe32/$d" ]; then
+      if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then
+        n32=$((n32 + 1))
+      else
+        miss="$miss wow64:$d"
+      fi
+    fi
+  done
+  local wcpu=no wntdll=no wk32=no
+  [ -f "$sys32/wow64cpu.dll" ] && wcpu=yes
+  [ -f "$wow64/ntdll.dll" ] && wntdll=yes
+  [ -f "$wow64/kernel32.dll" ] && wk32=yes
+  log "APP_WOW64_SEED pe64→sys32=$n64 pe32→syswow64=$n32 wow64cpu=$wcpu syswow64_ntdll=$wntdll syswow64_k32=$wk32 miss=${miss:-none}"
+  return 0
+}
+
 ensure_prefix_exec() {
   # 0.1.52: NTDLL_ANON_PE already bypasses Android W^X (anon/pread). Binding a
   # scratch tree OVER $WINEPREFIX/.../system32 HIDES wineboot-created DLLs and
@@ -987,6 +1038,7 @@ ensure_prefix_exec() {
   # 079 seed only ucrtbase/msvcrt → GUI CREATEWINDOW_MISS missing_dll.
   # 0.1.84: + d3dcompiler_47/46/43 (ensure_d3dcompiler_seed also seeds 33–42).
   # 0.1.86: + vulkan-1.dll winevulkan.dll (ensure_vulkan_seed also seeds SysWOW64).
+  # 0.1.87: + wow64.dll wow64cpu.dll wow64win.dll (ensure_wow64_seed also seeds SysWOW64 i386).
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
@@ -999,7 +1051,8 @@ ensure_prefix_exec() {
     concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll
     msvcp100.dll msvcr100.dll
     d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll
-    vulkan-1.dll winevulkan.dll"
+    vulkan-1.dll winevulkan.dll
+    wow64.dll wow64cpu.dll wow64win.dll"
   local seeded=0
   local skipped=0
   local d
@@ -1069,6 +1122,8 @@ ensure_prefix_exec() {
   ensure_d3dcompiler_seed
   # 0.1.86: seed vulkan-1 + winevulkan into sys32 + SysWOW64 (idempotent)
   ensure_vulkan_seed
+  # 0.1.87: wow64 thunk + core i386 SysWOW64 (idempotent; needed for 0x014c)
+  ensure_wow64_seed
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no
@@ -2610,7 +2665,8 @@ APP_TARGET=""
 APP_LOAD_MODE=""
 APP_LOADED_STRICT=0
 APP_HWND_SEEN=0
-# 0.1.67: unix CreateProcess ladder — absolute → relative → start /unix. Never C:/App.
+# 0.1.67: unix CreateProcess ladder — absolute → relative → start /unix. Never C:/App (amd64).
+# 0.1.87: i386 (0x014c) exception — WoW64 via wine start C:/App/app.exe; unix absolute known-fail.
 # 0.1.77: strict Loaded = loaddll "Loaded L"…app.exe""; bare path mention is NOT Loaded.
 app_load_has_loaded() {
   grep -qE 'Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null
@@ -2653,7 +2709,8 @@ app_load_wait_rc() {
   return 1
 }
 app_load_spawn() {
-  # $1 = mode tag: absolute|relative|start_unix|wineconsole
+  # $1 = mode tag: absolute|relative|start_unix|wineconsole|wow64_start|wow64_direct
+  # 0.1.87: wow64_* use APP_WIN (C:/App/app.exe) for i386 under win64 — unix absolute fails.
   APP_LOAD_MODE="$1"
   case "$1" in
     absolute)
@@ -2674,12 +2731,33 @@ app_load_spawn() {
       log "APP_LOAD retry: wine start /unix $APP_TARGET (unix start; no C:/App)"
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       ;;
+    wow64_start)
+      # 0.1.87: i386 → wine start C:/App/app.exe (WoW64 CreateProcess)
+      _w64_win="${APP_WIN:-C:/App/app.exe}"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start win=$_w64_win unix=${APP_UNIX:-}"
+      log "APP_LOAD cmdline: wine start $_w64_win (wow64; machine=0x${PE_MACH:-?})"
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
+      ;;
+    wow64_direct)
+      # 0.1.87: bare wine C:/App/app.exe if start quick-exits
+      _w64_win="${APP_WIN:-C:/App/app.exe}"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=direct win=$_w64_win unix=${APP_UNIX:-}"
+      log "APP_LOAD cmdline: wine $_w64_win (wow64 direct; machine=0x${PE_MACH:-?})"
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
+      ;;
     wineconsole)
       # 0.1.79: user-backend console → CreateWindow HWND Present can see (CUI)
-      log "APP_LOAD cmdline: wine wineconsole --backend=user $APP_TARGET (CUI wrap; HWND)"
-      log "APP_CUI_WRAP=wineconsole backend=user target=$APP_TARGET"
+      # 0.1.87: i386 CUI also needs Windows path so WoW64 engages
+      if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
+        _wc_tgt="$APP_WIN"
+        log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=wineconsole win=$_wc_tgt"
+      else
+        _wc_tgt="$APP_TARGET"
+      fi
+      log "APP_LOAD cmdline: wine wineconsole --backend=user $_wc_tgt (CUI wrap; HWND)"
+      log "APP_CUI_WRAP=wineconsole backend=user target=$_wc_tgt"
       APP_CUI_WRAPPED=1
-      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineconsole --backend=user "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineconsole --backend=user "$_wc_tgt" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     *)
       log "APP_LOAD_FATAL unknown mode=$1"
@@ -2687,7 +2765,7 @@ app_load_spawn() {
       ;;
   esac
   APP_PID=$!
-  log "APP_LOAD pid=$APP_PID mode=$APP_LOAD_MODE target=$APP_TARGET cui_wrapped=${APP_CUI_WRAPPED:-0}"
+  log "APP_LOAD pid=$APP_PID mode=$APP_LOAD_MODE target=$APP_TARGET win=${APP_WIN:-none} wow64=${APP_WOW64:-0} cui_wrapped=${APP_CUI_WRAPPED:-0}"
 }
 
 # 0.1.79: classify why Loaded never produced CreateWindow / HWND
@@ -2734,18 +2812,20 @@ app_load_classify_nocreate() {
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   SEED="$WINEPREFIX/drive_c/App/app.exe"
   if [ -f "$SEED" ]; then
-    log "APP_SEED path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ') mode=${APP_MODE:-?} (seed kept; launch uses unix)"
+    log "APP_SEED path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ') mode=${APP_MODE:-?} (seed kept; 0.1.87 i386 uses C:/App)"
   else
-    log "APP_SEED MISSING path=$SEED — launch still uses unix=$APP_UNIX"
+    log "APP_SEED MISSING path=$SEED — will try unix=$APP_UNIX (i386 needs seed for WoW64)"
   fi
   sleep 3
   APP_TARGET="$APP_UNIX"
-  # PE machine + subsystem (0.1.77): 0x8664=amd64, 0x14c=i386; subsystem 2=GUI 3=CUI
+  # PE machine + subsystem (0.1.77): 0x8664=amd64, 0x14c/0x014c=i386; subsystem 2=GUI 3=CUI
   PE_OFF=$(od -An -t u4 -N 4 -j 60 "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo 0)
   PE_OFF=${PE_OFF:-0}
   PE_MACH="?"
   PE_MAGIC="?"
   PE_SUB="?"
+  APP_WOW64=0
+  PE_ARCH=unknown
   if [ "$PE_OFF" -gt 0 ] 2>/dev/null; then
     PE_MACH=$(od -An -t x2 -N 2 -j $((PE_OFF + 4)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
     PE_MAGIC=$(od -An -t x2 -N 2 -j $((PE_OFF + 24)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
@@ -2757,9 +2837,11 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       1) PE_SUB_NAME=NATIVE ;;
       *) PE_SUB_NAME=other ;;
     esac
-    log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} magic=0x${PE_MAGIC:-?} subsystem=${PE_SUB:-?} (${PE_SUB_NAME}) (8664=amd64 14c=i386; 2=GUI 3=CUI)"
+    log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} magic=0x${PE_MAGIC:-?} subsystem=${PE_SUB:-?} (${PE_SUB_NAME}) (8664=amd64 14c/014c=i386; 2=GUI 3=CUI)"
+    # 0.1.87: od -t x2 prints 014c for i386 — accept both 14c and 014c (was false WARN)
     case "${PE_MACH}" in
-      8664|14c) ;;
+      8664|08664) PE_ARCH=amd64 ;;
+      14c|014c|14C|014C) PE_ARCH=i386 ;;
       *) log "APP_PE WARN unexpected machine=0x${PE_MACH} — CreateProcess may fail (c000007b)" ;;
     esac
     if [ "${PE_SUB}" = "3" ]; then
@@ -2778,9 +2860,35 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     log "APP_LOAD WARN /proc/mounts hints noexec near /mnt/app — PE map may fail"
   fi
 
+  # 0.1.87: i386 under win64 → WoW64 Windows-path launch (unix absolute known-fail)
+  if [ "$PE_ARCH" = "i386" ]; then
+    APP_WOW64=1
+    ensure_wow64_seed
+    if [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ]; then
+      mkdir -p "$WINEPREFIX/drive_c/App" 2>/dev/null || true
+      if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
+        APP_WIN='C:/App/app.exe'
+        SEED="$WINEPREFIX/drive_c/App/app.exe"
+        log "APP_SEED wow64 re-copy path=$SEED"
+      fi
+    fi
+    if [ -n "${APP_WIN:-}" ] && [ -f "$SEED" ]; then
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=start_win win=$APP_WIN unix=$APP_UNIX (no unix absolute for i386)"
+    else
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH} WARN no C:/App seed — unix absolute likely fails (c000007b)"
+      APP_WOW64=0
+    fi
+  else
+    log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
+  fi
+
   # 0.1.79: decide CUI wrap (default on for subsystem=3; X86_CUI_WRAP=0/1 override)
   APP_CUI_WRAPPED=0
-  APP_SPAWN_MODE=absolute
+  if [ "${APP_WOW64:-0}" = "1" ]; then
+    APP_SPAWN_MODE=wow64_start
+  else
+    APP_SPAWN_MODE=absolute
+  fi
   _cui_wrap_mode="${X86_CUI_WRAP:-auto}"
   case "$_cui_wrap_mode" in
     0|off|no|false|FALSE) _do_cui_wrap=0 ;;
@@ -2791,7 +2899,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   esac
   if [ "$_do_cui_wrap" = "1" ]; then
     APP_SPAWN_MODE=wineconsole
-    log "APP_CUI_WRAP decide=yes pe_sub=${PE_SUB:-?} X86_CUI_WRAP=${_cui_wrap_mode} mode=wineconsole"
+    log "APP_CUI_WRAP decide=yes pe_sub=${PE_SUB:-?} X86_CUI_WRAP=${_cui_wrap_mode} mode=wineconsole wow64=${APP_WOW64:-0}"
   else
     log "APP_CUI_WRAP decide=no pe_sub=${PE_SUB:-?} X86_CUI_WRAP=${_cui_wrap_mode}"
   fi
@@ -2799,52 +2907,78 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   app_load_spawn "$APP_SPAWN_MODE"
   sleep 2
   if app_load_wait_rc; then
-    log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE target=$APP_TARGET"
-    log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.67)"
+    log "APP_LOAD failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE target=$APP_TARGET wow64=${APP_WOW64:-0}"
     app_load_dump_fail_sigs
-    # If wineconsole itself quick-exited (missing PE / bad backend), clear wrap so later
-    # paths / classify stay accurate; fall through bare absolute→relative→start_unix.
-    if [ "$APP_LOAD_MODE" = "wineconsole" ]; then
-      APP_CUI_WRAPPED=0
-      log "APP_CUI_WRAP WARN wineconsole quick-exit — falling back to bare unix spawn"
-      app_load_spawn absolute
-      sleep 2
-      if ! app_load_wait_rc; then
-        log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE (after wineconsole fail)"
-      fi
-    fi
-    if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
-      # step2: relative
-      APP_DIR=$(dirname "$APP_TARGET")
-      APP_BASE=$(basename "$APP_TARGET")
-      if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
-        app_load_spawn relative
+    if [ "${APP_WOW64:-0}" = "1" ]; then
+      # i386 ladder: wow64_start → wow64_direct (still C:/). Do NOT fall to unix absolute.
+      if [ "$APP_LOAD_MODE" = "wineconsole" ]; then
+        APP_CUI_WRAPPED=0
+        log "APP_CUI_WRAP WARN wineconsole quick-exit — falling back to wow64_start"
+        app_load_spawn wow64_start
         sleep 2
-        if app_load_wait_rc; then
-          log "APP_LOAD unix failed: relative exited quickly pid=$APP_PID rc=${APP_RC:-?}"
-          app_load_dump_fail_sigs
-          # step3: start /unix
-          app_load_spawn start_unix
+        if ! app_load_wait_rc; then
+          log "APP_LOAD wow64 alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE (after wineconsole fail)"
+        fi
+      fi
+      if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
+        if [ "$APP_LOAD_MODE" != "wow64_direct" ]; then
+          app_load_spawn wow64_direct
           sleep 2
           if app_load_wait_rc; then
-            log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (absolute+relative+start_unix all exited quickly; no Loaded)"
-            log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+            log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (wow64_start+direct exited quickly; no Loaded)"
+            log "APP_LOAD wow64 failed: FATAL — check APP_WOW64_SEED / wine-run.out (c0000135/c000007b)"
             app_load_dump_fail_sigs
           else
-            log "APP_LOAD retry alive after 2s pid=$APP_PID mode=start_unix"
+            log "APP_LOAD retry alive after 2s pid=$APP_PID mode=wow64_direct"
           fi
         else
-          log "APP_LOAD retry alive after 2s pid=$APP_PID mode=relative"
+          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (wow64_direct exited quickly; no Loaded)"
+          app_load_dump_fail_sigs
         fi
-      else
-        log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
+      fi
+    else
+      # amd64: keep 0.1.67 unix ladder — refuse C:/App
+      log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.67; amd64)"
+      if [ "$APP_LOAD_MODE" = "wineconsole" ]; then
+        APP_CUI_WRAPPED=0
+        log "APP_CUI_WRAP WARN wineconsole quick-exit — falling back to bare unix spawn"
+        app_load_spawn absolute
+        sleep 2
+        if ! app_load_wait_rc; then
+          log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE (after wineconsole fail)"
+        fi
+      fi
+      if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
+        APP_DIR=$(dirname "$APP_TARGET")
+        APP_BASE=$(basename "$APP_TARGET")
+        if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
+          app_load_spawn relative
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_LOAD unix failed: relative exited quickly pid=$APP_PID rc=${APP_RC:-?}"
+            app_load_dump_fail_sigs
+            app_load_spawn start_unix
+            sleep 2
+            if app_load_wait_rc; then
+              log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (absolute+relative+start_unix all exited quickly; no Loaded)"
+              log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+              app_load_dump_fail_sigs
+            else
+              log "APP_LOAD retry alive after 2s pid=$APP_PID mode=start_unix"
+            fi
+          else
+            log "APP_LOAD retry alive after 2s pid=$APP_PID mode=relative"
+          fi
+        else
+          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
+        fi
       fi
     fi
   else
-    log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE"
+    log "APP_LOAD alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE wow64=${APP_WOW64:-0}"
   fi
 elif [ -n "$APP_WIN" ]; then
-  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.67 no C:/ fallback)"
+  log "APP_LOAD WARN no unix file — have Windows path $APP_WIN only"
   log "APP_LOAD unix failed: APP_UNIX missing or not a file (argv had Windows-only seed)"
 fi
 
@@ -2956,6 +3090,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
         ensure_vs_crt_seed
         ensure_d3dcompiler_seed
         ensure_vulkan_seed
+        ensure_wow64_seed
         _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
         _scan_none=0
         case "$_scan_body" in
@@ -3009,6 +3144,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           ensure_vs_crt_seed
           ensure_d3dcompiler_seed
           ensure_vulkan_seed
+          ensure_wow64_seed
           log "APP_CRT_RELAUNCH once reason=${APP_MISS_REASON} sig=${APP_CRT_SIG:-none} scan_none=${_scan_none} pe_mach=0x${PE_MACH:-?}"
           if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
             kill -TERM "$APP_PID" 2>/dev/null || true
@@ -3016,9 +3152,11 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
             kill -KILL "$APP_PID" 2>/dev/null || true
             wait "$APP_PID" 2>/dev/null || true
           fi
-          # Respawn same mode (wineconsole if wrapped, else absolute)
+          # Respawn same mode (wineconsole if wrapped; else wow64_start for i386 / absolute for amd64)
           if [ "${APP_CUI_WRAPPED:-0}" = "1" ]; then
             app_load_spawn wineconsole
+          elif [ "${APP_WOW64:-0}" = "1" ]; then
+            app_load_spawn wow64_start
           else
             app_load_spawn absolute
           fi
@@ -3211,25 +3349,42 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     if [ "${APP_RELAUNCHED:-0}" = "0" ] && [ -n "${APP_TARGET:-}" ] && [ "$HB" -ge 15 ]; then
       if ! app_load_has_loaded; then
         if grep -qE 'ShellExecuteEx failed' /mnt/data/wine-run.out 2>/dev/null; then
-          log "APP_RELAUNCH note: ShellExecuteEx still in log — ensure unix path"
+          log "APP_RELAUNCH note: ShellExecuteEx still in log — wow64=${APP_WOW64:-0} (i386 uses C:/App; amd64 unix)"
         fi
         if [ "$APP_PATH_SEEN" = "1" ]; then
           log "APP_RELAUNCH note: path_seen=1 but no strict Loaded — relaunch anyway"
         fi
         APP_RELAUNCHED=1
-        log "APP_RELAUNCH once target=$APP_TARGET via start /unix (no strict Loaded by t=${HB}s)"
-        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch start /unix (still no C:/App)"
-        log "APP_LOAD retry: wine start /unix $APP_TARGET (APP_RELAUNCH)"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
-        APP_PID=$!
-        APP_LOAD_MODE=start_unix
-        log "APP_RELAUNCH pid=$APP_PID mode=start_unix"
-        sleep 2
-        if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
-          wait "$APP_PID" 2>/dev/null
-          APP_RC=$?
-          log "APP_LOAD unix failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=start_unix (no C:/ fallback)"
-          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (APP_RELAUNCH start_unix quick-exit)"
+        if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
+          log "APP_RELAUNCH once target=$APP_WIN via wow64_start (no strict Loaded by t=${HB}s; machine=0x${PE_MACH})"
+          log "APP_LOAD wow64=1 relaunch: wine start $APP_WIN (APP_RELAUNCH)"
+          app_load_spawn wow64_start
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_LOAD wow64 failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=wow64_start"
+            log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (APP_RELAUNCH wow64_start quick-exit)"
+            app_load_spawn wow64_direct
+            sleep 2
+            if app_load_wait_rc; then
+              log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (APP_RELAUNCH wow64_direct quick-exit)"
+            fi
+          fi
+          log "APP_RELAUNCH pid=$APP_PID mode=$APP_LOAD_MODE wow64=1"
+        else
+          log "APP_RELAUNCH once target=$APP_TARGET via start /unix (no strict Loaded by t=${HB}s)"
+          log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch start /unix (still no C:/App)"
+          log "APP_LOAD retry: wine start /unix $APP_TARGET (APP_RELAUNCH)"
+          "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+          APP_PID=$!
+          APP_LOAD_MODE=start_unix
+          log "APP_RELAUNCH pid=$APP_PID mode=start_unix"
+          sleep 2
+          if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+            wait "$APP_PID" 2>/dev/null
+            APP_RC=$?
+            log "APP_LOAD unix failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=start_unix (no C:/ fallback)"
+            log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (APP_RELAUNCH start_unix quick-exit)"
+          fi
         fi
       else
         APP_RELAUNCHED=1

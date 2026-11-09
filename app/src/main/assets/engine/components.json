@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.86-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu-vulkan-seed",
+  "runtimeId": "wine-gpustack-v0.1.87-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu-vulkan-seed-wow64-i386-load",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.86: ensure_vulkan_seed (vulkan-1+winevulkan); keep 0.1.85 awk POSIX + forceGpu / 084 d3dcompiler / 083 Present / 082 sync / 081 msgbox / 080 CRT"
+  "notes": "0.1.87: WoW64 i386 APP_LOAD (0x014c\u2192wine start C:/App; ensure_wow64_seed; 014c match); keep 0.1.86 vulkan seed / 085 awk+forceGpu / 084\u2013070"
 }

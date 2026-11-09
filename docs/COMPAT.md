@@ -1,3 +1,20 @@
+## 0.1.97 — MMAP32 parent=0 (096 SIGILL rollback)
+
+**Smoke (0.1.96-hot.1 / Path A 0.1.96):** BinaryType_host=SCS_32BIT_BINARY +
+decide=direct_start64 + C:/App OK, but `wine start //exec //wait` and ladder
+`wine cmd //c` under **BOX64_MMAP32=1** → parent **SIGILL rc=132**;
+ntcreate_app=none; 0× Loaded. 0.1.95 with MMAP32=0 reached NtCreateUserProcess(App).
+
+**P0:** APP_LOAD `wow64_direct` / `wow64_unix_seed` **no longer export**
+`BOX64_MMAP32=1` — 64-bit start/cmd parent inherits global `BOX64_MMAP32=0`.
+Stamp `mmap32_parent=0`. Keep C:/App, `start //exec //wait`, unset
+`WINELOADERNOEXEC` (64-bit MAIN), BinaryType_host + ntcreate_diag, RPCSS ready=1.
+Child-only MMAP32 (box64rc `[app.exe]` / wow64cpu) deferred — `BOX64_ENV_*` only
+adds guest env, not safe per-child box64 knobs without device smoke.
+
+**Expect:** no parent rc=132; NtCreateUserProcess App (+ started pid + Loaded);
+non-blue screen. DXVK x32 still deferred.
+
 ## 0.1.96 — NtCreateUserProcess i386 / MMAP32 / path
 
 **P0:** `wow64_direct` = `wine start //exec //wait C:/App/app.exe` with

@@ -15,7 +15,7 @@ log() {
 
 # 0.1.46: PREFIX_EXEC scratch on durable $WINEPREFIX/.pe-exec (not ephemeral /tmp);
 # verify exists+writable+mounted after mount; keep sys32 bind + STACK_HEAD mid>=0x1200000
-WINE_LAUNCH_STAMP=0.1.46
+WINE_LAUNCH_STAMP=0.1.47
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -500,22 +500,32 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC reuse tmpfs x86_64-windows copy scratch=$scratch"
   fi
 
-  if ! pe_ok; then
-    if ! path_is_mounted "$pe_dir"; then
-      if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
-         || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
-        log "PREFIX_EXEC bind x86_64-windows ok"
-        log_diag bind-x64w "$pe_dir"
-      else
-        log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
-        log_diag bindfail-x64w "$pe_dir"
-        exit 1
-      fi
+  bind_pe_from_scratch() {
+    if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
+       || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
+      log "PREFIX_EXEC bind x86_64-windows ok"
+      log_diag bind-x64w "$pe_dir"
+      return 0
+    fi
+    log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
+    log_diag bindfail-x64w "$pe_dir"
+    exit 1
+  }
+
+  if pe_ok; then
+    log "PREFIX_EXEC skip bind x86_64-windows (pe already exec)"
+  elif path_is_mounted "$pe_dir"; then
+    log "PREFIX_EXEC bind x86_64-windows already mounted — re-probe"
+    log_diag already-pe "$pe_dir"
+    if pe_ok; then
+      log "PREFIX_EXEC existing pe bind still exec"
     else
-      log "PREFIX_EXEC bind x86_64-windows already mounted"
+      log "PREFIX_EXEC pe stale/noexec on existing bind — umount+rebind"
+      umount "$pe_dir" 2>/dev/null || umount -l "$pe_dir" 2>/dev/null || true
+      bind_pe_from_scratch
     fi
   else
-    log "PREFIX_EXEC skip bind x86_64-windows (pe already exec)"
+    bind_pe_from_scratch
   fi
 
   # ALWAYS put system32 on tmpfs so wineboot copies / NT maps land on exec
@@ -531,39 +541,74 @@ ensure_prefix_exec() {
     || cp -f "$pe_ntdll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
   touch "$scratch/system32/.copied" 2>/dev/null || true
   ensure_dir "$sys32" || true
-  if ! path_is_mounted "$sys32"; then
+
+  bind_sys32_from_scratch() {
     if mount --bind "$scratch/system32" "$sys32" 2>/dev/null \
        || mount -o bind "$scratch/system32" "$sys32" 2>/dev/null; then
       log "PREFIX_EXEC bind system32 ok path=$sys32"
       log_diag bind-sys32 "$sys32"
-    else
-      log "FATAL: PREFIX_EXEC bind system32 failed path=$sys32 — C:\\windows\\system32 will stay noexec"
-      log_diag bindfail-sys32 "$sys32"
-      exit 1
+      return 0
     fi
-  else
-    log "PREFIX_EXEC bind system32 already mounted path=$sys32"
+    log "FATAL: PREFIX_EXEC bind system32 failed path=$sys32 — C:\\windows\\system32 will stay noexec"
+    log_diag bindfail-sys32 "$sys32"
+    exit 1
+  }
+
+  if path_is_mounted "$sys32"; then
+    log "PREFIX_EXEC bind system32 already mounted path=$sys32 — re-probe"
+    log_diag already-sys32 "$sys32"
     cp -f "$scratch/x86_64-windows/ntdll.dll" "$sys32/ntdll.dll" 2>/dev/null \
       || cp -f "$pe_ntdll" "$sys32/ntdll.dll" 2>/dev/null || true
+    if ! sys32_ok; then
+      log "PREFIX_EXEC sys32 stale/noexec on existing bind — umount+rebind"
+      umount "$sys32" 2>/dev/null || umount -l "$sys32" 2>/dev/null || true
+      bind_sys32_from_scratch
+    else
+      log "PREFIX_EXEC existing sys32 bind still exec"
+    fi
+  else
+    bind_sys32_from_scratch
   fi
 
   chmod -R u+x "$scratch/x86_64-windows" "$scratch/system32" "$sys32" 2>/dev/null || true
 
-  if sys32_ok; then
-    if pe_ok; then pe_state=yes; else pe_state=no; fi
-    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=$pe_state scratch=$scratch"
-    echo "mode=tmpfs+bind-sys32 scratch=$scratch" > "$ok_marker"
-    return 0
-  fi
-  if pe_ok; then
-    if [ ! -f "$sys32/ntdll.dll" ]; then
-      log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch (ntdll will land on exec tmpfs)"
-      echo "mode=tmpfs+bind-preseed scratch=$scratch" > "$ok_marker"
-      return 0
-    fi
+  # Nested tmpfs sticky check after binds (P0: mount claimed then vanish)
+  log_diag post-bind-scratch "$scratch"
+  grep -E 'pe-exec|wine-pe|system32|x86_64-windows' /proc/mounts 2>/dev/null | while read -r line; do
+    log "PREFIX_EXEC mountgrep[post-bind]: $line"
+  done || true
+  if ! scratch_verify "$scratch"; then
+    log "FATAL: PREFIX_EXEC scratch vanished after bind (nested tmpfs not sticky) path=$scratch"
+    log_diag fatal-post-bind "$scratch"
+    exit 1
   fi
 
-  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32 scratch=$scratch)"
+  # Require pe PROT_EXEC — pe_ok=no must NEVER print PREFIX_EXEC ok (false green)
+  if pe_ok; then pe_state=yes; else pe_state=no; fi
+  if sys32_ok; then sys32_state=yes; else sys32_state=no; fi
+  log "PREFIX_EXEC post-bind probe pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch pe=$pe_ntdll sys32=$sys32/ntdll.dll"
+
+  if [ "$pe_state" = "yes" ] && [ "$sys32_state" = "yes" ]; then
+    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=yes scratch=$scratch"
+    echo "mode=tmpfs+bind-sys32 scratch=$scratch pe_ok=yes" > "$ok_marker"
+    return 0
+  fi
+
+  # preseed only if pe truly exec AND sys32 is bound (ntdll may appear after wineboot)
+  if [ "$pe_state" = "yes" ] && [ ! -f "$sys32/ntdll.dll" ] && path_is_mounted "$sys32"; then
+    log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch pe_ok=yes (ntdll will land on exec tmpfs)"
+    echo "mode=tmpfs+bind-preseed scratch=$scratch pe_ok=yes" > "$ok_marker"
+    return 0
+  fi
+
+  if [ "$pe_state" = "no" ]; then
+    log "FATAL: PREFIX_EXEC pe_ok=no after tmpfs+bind — refusing false green (pe=$pe_ntdll scratch=$scratch)"
+    log_diag final-pe "$pe_dir"
+    log_diag final-scratch "$scratch"
+    exit 1
+  fi
+
+  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32 pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch)"
   log_diag final-sys32 "$sys32"
   log_diag final-scratch "$scratch"
   exit 1

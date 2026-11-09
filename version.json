@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.46",
-  "versionCode": 47,
-  "notes": "0.1.46: PREFIX_EXEC durable scratch under WINEPREFIX/.pe-exec; verify mount sticky"
+  "versionName": "0.1.47",
+  "versionCode": 48,
+  "notes": "0.1.47: PREFIX_EXEC require pe_ok after bind (no false green); re-verify scratch sticky; About GIT_SHA=tip"
 }

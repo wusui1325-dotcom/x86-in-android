@@ -1,3 +1,23 @@
+## 0.1.47 — PREFIX_EXEC pe_ok required (no false green) + scratch re-verify
+
+**Bug (0.1.46 dig):** `PREFIX_EXEC ok mode=tmpfs+bind … pe_ok=no` still returned success —
+Wine could later `map_image_into_view … ntdll.dll … noexec` while log looked green.
+Also nested tmpfs under `$WINEPREFIX/.pe-exec` needed post-bind sticky re-verify;
+About/GIT_SHA lagged tip when APK was built before commit.
+
+**Fix:**
+- After tmpfs+bind: require `probe_pe_exec` (mmap PROT_EXEC) on `$pe_ntdll` **and**
+  sys32 ntdll when present; `pe_ok=no` → **FATAL** (never print PREFIX_EXEC ok).
+- Stale "already mounted" pe/sys32 binds: re-probe; umount+rebind if noexec.
+- Post-bind: `scratch_verify` again + `mountgrep[post-bind]`.
+- Release order: **commit tip first, then assembleRelease** so About GIT_SHA matches tip.
+- Keep `$WINEPREFIX/.pe-exec` durable scratch + hole-fit mid≥`0x1200000`.
+- stamp `0.1.47`; `runtimeId` → `…v0.1.47…peok`.
+
+**Retest:** Cover-install **0.1.47** → `WINE_LAUNCH_STAMP=0.1.47` →
+`PREFIX_EXEC ok … pe_ok=yes` (or `FATAL: … pe_ok=no … refusing false green`) →
+`PREFIX_EXEC verify ok` after bind → `HOLEFIT addr≥0x1200000` → no noexec / `WINE_EXIT=0`.
+
 ## 0.1.46 — PREFIX_EXEC durable scratch (PRoot /tmp flake)
 
 **Bug (0.1.45):** `PREFIX_EXEC tmpfs scratch ok … path=/tmp/.wine-pe-exec` then

@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.46-box64-wine64k-holefit-peexec-durable",
+  "runtimeId": "wine-gpustack-v0.1.47-box64-wine64k-holefit-peexec-peok",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.46: PREFIX_EXEC durable scratch under $WINEPREFIX/.pe-exec (verify exists+writable+mounted); keep sys32 tmpfs+bind + mid>=0x1200000"
+  "notes": "0.1.47: PREFIX_EXEC require pe mmap(PROT_EXEC) after bind (pe_ok=no → FATAL); re-verify nested tmpfs sticky + mountgrep; keep .pe-exec durable + mid>=0x1200000"
 }

@@ -1,3 +1,14 @@
+## 0.1.95 — 64-bit cmd CreateProcess (no i386 MAIN / no SIGILL)
+
+**Smoke (0.1.94):** ready=1 + unix-seed MAIN → SIGILL rc=132; 0× Loaded App\\app.exe.
+
+- **P0:** `wow64_direct` = `wine cmd //c C:\\App\\app.exe` (KEEP WINELOADERNOEXEC);
+  ladder-2 `start //exec //wait`; WTERMSIG/BOX64_SHOWSEGV diagnostics
+- DXVK x32 still deferred; Path A unchanged; main tree untouched until FF
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.95`; `decide=direct_cmd64`; `Loaded L"…\\App\\app.exe"`;
+no rc=132.
+
 ## 0.1.92 — APP_LOAD /exec + orphan-reap + RPCSS crush + UX
 
 **Boss 0.1.91 藍屏：** K0–K3 過；`wine C:/App` → Loaded `start.exe` + ShellExecute「no application associated」；orphan-reap 誤殺 services.exe；RPCSS wall ~30s；舊工作區半殘。

@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.94",
-  "versionCode": 95,
-  "notes": "0.1.94: P0 unix-seed MAIN + unset WINELOADERNOEXEC (stop Wine→start.exe); inject-exe-assoc H4; RPCSS STATE RUNNING→ready=1 (wine-rpcss.out + quiet sc query); fail_hr drop section-flag false positives; DXVK x32 defer; GIT_SHA bake-after-commit",
+  "versionName": "0.1.95",
+  "versionCode": 96,
+  "notes": "0.1.95: P0 never i386 PE as wine MAIN (094 SIGILL); wow64_direct=wine cmd //c C:\\App\\app.exe (64-bit cmd CreateProcess, WINELOADERNOEXEC kept); ladder-2 start //exec //wait; WTERMSIG/BOX64_SHOWSEGV/SIGILL_PC stamp; RPCSS ready=1 kept; DXVK x32 defer; GIT_SHA bake-after-commit",
   "tipSha": ""
 }

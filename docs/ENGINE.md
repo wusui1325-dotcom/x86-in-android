@@ -1,3 +1,24 @@
+## 0.1.95 — 64-bit cmd CreateProcess (no i386 MAIN / no SIGILL)
+
+**Smoke (0.1.94):** RPCSS ready=1 + decide=direct_unix_seed OK, but
+`wine $SEED` (i386 PE as MAIN, WINELOADERNOEXEC unset) → **rc=132 SIGILL**;
+0× Loaded App\\app.exe; BOX64 never Detected app.exe.
+
+**Root:** On box64+win64, putting an i386 PE as wine MAIN argv makes the loader /
+arch-switch path try to execute 32-bit code as the process image → SIGILL. Keep
+`WINELOADERNOEXEC=1` and launch via a **64-bit** Windows PE that CreateProcesses
+the app (Wow64 NtCreateUserProcess). Also: unix argv `/exec`/`/c` is mangled into
+a DOS path — use `//exec` / `//c`.
+
+**Knife:**
+- `wow64_direct` = `wine cmd //c C:\\App\\app.exe` (64-bit cmd MAIN; NOEXEC kept)
+- ladder-2 = `wine start //exec //wait C:\\App\\app.exe`
+- APP_LOAD WTERMSIG / BOX64_SHOWSEGV / SIGILL_PC slice stamp
+- RPCSS ready=1 + exe assoc from 0.1.94 kept; DXVK x32 still deferred
+
+**Expect:** `decide=direct_cmd64` → `Loaded L"C:\\App\\app.exe"`; no rc=132;
+slice_first_pe ≠ start.exe (or start then App); RPCSS ready=1.
+
 ## 0.1.94 — unix-seed MAIN + RPCSS STATE→ready
 
 **Smoke (0.1.93):** decide=direct_win / `wine C:/App` still Loaded `start.exe` then

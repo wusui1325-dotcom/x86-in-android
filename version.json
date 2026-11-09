@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.70",
-  "versionCode": 71,
-  "notes": "0.1.70: Present stop GPUImage promote (keep GDI); forceGpu ahb_gpu on no-CPU AHB or guestBlack sticky (on top of 0.1.69 HUD sample)"
+  "versionName": "0.1.71",
+  "versionCode": 72,
+  "notes": "0.1.71: Turnip ICD library_path guest-absolute + DllOverrides reg + TURNIP_DLOPEN probe (vkCreate/DXGI create path)"
 }

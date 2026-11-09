@@ -360,17 +360,28 @@ object GpuStack {
     }
 
     /**
-     * ICD JSON 必須用客體相對路徑（同目錄 .so），不可寫宿主 filesDir 絕對路徑。
+     * ICD JSON library_path MUST be a **guest** path the Vulkan loader can resolve
+     * without relying on LD_LIBRARY_PATH.
+     *
+     * Bare filename (no slash) → dlopen system search only. Winlator puts the .so in
+     * /usr/lib so that works; we bind at /mnt/gpu/turnip, which is NOT a default
+     * search path — bare name silently fails when LD_LIBRARY_PATH is reshaped by
+     * Gladio/Box64/wine children → no vk physical device → DXVK black.
+     *
+     * Never write host filesDir absolute paths (PRoot guest cannot see them).
+     * 0.1.71: guest-absolute `/mnt/gpu/turnip/libvulkan_freedreno.so`.
      */
     private fun writeTurnipIcd(turnipDir: File) {
         val so = File(turnipDir, TURNIP_SO_NAME)
         if (!so.isFile) return
+        // Guest bind path (LaunchPipeline -b turnipDir:/mnt/gpu/turnip)
+        val guestLib = "/mnt/gpu/turnip/$TURNIP_SO_NAME"
         File(turnipDir, TURNIP_ICD_NAME).writeText(
             """
             {
               "file_format_version": "1.0.0",
               "ICD": {
-                "library_path": "$TURNIP_SO_NAME",
+                "library_path": "$guestLib",
                 "api_version": "1.3.278"
               }
             }

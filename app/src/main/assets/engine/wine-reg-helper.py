@@ -321,9 +321,65 @@ def cmd_patch_graphics(prefix):
     print("graphics set=x11 encoding=utf8")
     sys.exit(0)
 
+def cmd_patch_dll_overrides(prefix):
+    """Ensure D3D DLL overrides in user.reg so wineboot children keep DXVK/wined3d.
+    Usage: wine_reg_helper.py patch-dll-overrides <prefix> [native|builtin]
+    Default mode=native (= native,builtin for DXVK). builtin = wined3d bisect.
+    Never create user.reg from scratch before wineboot (same contract as patch-graphics).
+    """
+    mode = "native"
+    if len(sys.argv) >= 4 and sys.argv[3] in ("native", "builtin"):
+        mode = sys.argv[3]
+    elif os.environ.get("X86_DXWRAPPER", "").strip().lower() == "wined3d":
+        mode = "builtin"
+    value = "native,builtin" if mode == "native" else "builtin"
+    path = os.path.join(prefix, "user.reg")
+    info = detect(path)
+    if not info["exists"] or not info["valid"] or info["text"] is None:
+        print("dlloverrides skip user.reg ready=0")
+        sys.exit(3)
+    text = info["text"]
+    dlls = ("d3d8", "d3d9", "d3d10core", "d3d11", "dxgi")
+    # Wine user.reg section paths store doubled backslashes like Drivers.
+    section = "[Software\\\\Wine\\\\DllOverrides]"
+    lines = []
+    for ln in text.splitlines(True):
+        s = ln.strip()
+        drop = False
+        for d in dlls:
+            if s.startswith('"%s"=' % d):
+                drop = True
+                break
+        if not drop:
+            lines.append(ln if ln.endswith("\n") else ln + "\n")
+    text = "".join(lines)
+    block_lines = [section + "\n"] + ['"%s"="%s"\n' % (d, value) for d in dlls]
+    if section in text:
+        out = []
+        done = False
+        for ln in text.splitlines(True):
+            out.append(ln if ln.endswith("\n") else ln + "\n")
+            if (not done) and ln.strip() == section:
+                for b in block_lines[1:]:
+                    out.append(b)
+                done = True
+        if not done:
+            out.append("\n" + "".join(block_lines))
+        text = "".join(out)
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += "\n" + "".join(block_lines)
+    text = ensure_header_and_arch(text, "win64")
+    write_utf8(path, text)
+    print("dlloverrides mode=%s value=%s dlls=%s" % (mode, value, ",".join(dlls)))
+    sys.exit(0)
+
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|patch-graphics> <prefix>")
+        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|patch-graphics|patch-dll-overrides> <prefix> [native|builtin]")
         sys.exit(1)
     cmd, prefix = sys.argv[1], sys.argv[2]
     {
@@ -332,6 +388,7 @@ def main():
         "heal-arch": cmd_heal_arch,
         "inject-rpcss": cmd_inject_rpcss,
         "patch-graphics": cmd_patch_graphics,
+        "patch-dll-overrides": cmd_patch_dll_overrides,
     }[cmd](prefix)
 
 if __name__ == "__main__":

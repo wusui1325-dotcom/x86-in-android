@@ -105,7 +105,7 @@
 ## 更新 0.1.12 — Turnip glibc ICD 通路
 
 - **最短路**：Winlator 等價 `libvulkan_freedreno.so`（aarch64／glibc／KGSL），非 nihui bionic
-- `VK_ICD_FILENAMES`／`VK_DRIVER_FILES` → `/mnt/gpu/turnip/freedreno_icd.json`（`library_path` 相對同目錄）
+- `VK_ICD_FILENAMES`／`VK_DRIVER_FILES` → `/mnt/gpu/turnip/freedreno_icd.json`（0.1.71: `library_path` 客體絕對 `/mnt/gpu/turnip/libvulkan_freedreno.so`）
 - `ComponentInstaller`：GpuStack 亦拉取 **x11-overlay**（`libvulkan`／drm／xcb）
 - `wine-launch.sh`：記錄 ICD／KGSL／loader；`TU_DEBUG=noconform`
 - **0.1.68 診斷契約**：`DXVK_LOG_LEVEL=info`／`DXVK_HUD=devinfo,fps`／`DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache`；
@@ -118,6 +118,10 @@
   `VK_LOADER_DEBUG=error`＋`TURNIP_PROBE` 助 vkCreate／Adapter 指紋。
 - **0.1.70 像素路徑**：Present 停強升 GPUImage；DRI3 無 CPU／`guestBlack` sticky → `forceGpu`→`ahb_gpu`
   （EGLImage 顯示 AHB 真像素）。預設仍 CPU-first；`X86_PRESENT_GPU=1` 全程 GPU。
+- **0.1.71 create path：** ICD `library_path` **guest-absolute**
+  `/mnt/gpu/turnip/libvulkan_freedreno.so` (bare filename needs system search; Winlator
+  uses `/usr/lib`, we bind `/mnt/gpu/turnip`). wine-launch rewrites ICD every start +
+  `TURNIP_DLOPEN` probe. `DllOverrides` reg backup for d3d*/dxgi. No hard-block KGSL.
 - **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
 
 ### 還缺

@@ -14,6 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.71: Turnip ICD library_path guest-absolute + DllOverrides reg + TURNIP_DLOPEN probe.
 # 0.1.70: Present forceGpu ahb_gpu (no-CPU AHB / guestBlack sticky); keep 0.1.69 HUD sample + DXVK_DIAG.
 # 0.1.68: DXVK_LOG/HUD/cache + DXVK_DIAG (ICD/dll/kgsl) + guestBlack Present DIAG;
 # optional X86_DXWRAPPER=wined3d bisect (default stays DXVK). Soft WARN if no KGSL.
@@ -31,7 +32,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.70
+WINE_LAUNCH_STAMP=0.1.71
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -46,7 +47,7 @@ for _cand in \
   [ -n "$_cand" ] && [ -f "$_cand" ] && WINE_REG_HELPER="$_cand" && break
 done
 wine_reg_helper() {
-  # usage: wine_reg_helper <cmd>  — always targets $WINEPREFIX
+  # usage: wine_reg_helper <cmd> [extra…] — always targets $WINEPREFIX as argv2
   # Prefer /usr/local/bin/wine-reg-helper.py (installed with wine-launch.sh)
   if [ -z "$WINE_REG_HELPER" ] || [ ! -f "$WINE_REG_HELPER" ]; then
     _self=$(readlink -f "$0" 2>/dev/null || echo "")
@@ -59,7 +60,11 @@ wine_reg_helper() {
     log "FATAL: wine-reg-helper.py missing"
     return 127
   fi
-  python3 "$WINE_REG_HELPER" "$1" "$WINEPREFIX"
+  _cmd="$1"; shift
+  python3 "$WINE_REG_HELPER" "$_cmd" "$WINEPREFIX" "$@"
+  _rc=$?
+  unset _cmd
+  return $_rc
 }
 
 
@@ -139,12 +144,43 @@ if [ -d /mnt/gpu/dxvk/x64 ]; then
 fi
 
 # Turnip glibc ICD（KGSL）— 對齊 Winlator；非 bionic／adrenotools
-if [ -f /mnt/gpu/turnip/freedreno_icd.json ] && [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
-  export VK_ICD_FILENAMES="/mnt/gpu/turnip/freedreno_icd.json"
-  export VK_DRIVER_FILES="/mnt/gpu/turnip/freedreno_icd.json"
+# 0.1.71: rewrite ICD library_path to guest-absolute every launch.
+# Bare filename needs system search path (Winlator: /usr/lib). Our bind is
+# /mnt/gpu/turnip — bare name silently fails when LD_LIBRARY_PATH reshapes.
+if [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
+  _turnip_so=/mnt/gpu/turnip/libvulkan_freedreno.so
+  _turnip_icd=/mnt/gpu/turnip/freedreno_icd.json
+  chmod +x "$_turnip_so" 2>/dev/null || true
+  cat > "$_turnip_icd" <<'ICDEOF'
+{
+  "file_format_version": "1.0.0",
+  "ICD": {
+    "library_path": "/mnt/gpu/turnip/libvulkan_freedreno.so",
+    "api_version": "1.3.278"
+  }
+}
+ICDEOF
+  export VK_ICD_FILENAMES="$_turnip_icd"
+  export VK_DRIVER_FILES="$_turnip_icd"
   export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
   export TU_DEBUG="${TU_DEBUG:-noconform}"
-  chmod +x /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null || true
+  log "TURNIP_ICD library_path=/mnt/gpu/turnip/libvulkan_freedreno.so (guest-absolute; 0.1.71)"
+  # Early dlopen probe — fail-loud for missing NEEDED deps; do NOT hard-block Session
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "import ctypes; ctypes.CDLL('/mnt/gpu/turnip/libvulkan_freedreno.so')" >/mnt/data/turnip-dlopen.out 2>&1; then
+      log "TURNIP_DLOPEN=ok so=/mnt/gpu/turnip/libvulkan_freedreno.so"
+    else
+      log "TURNIP_DLOPEN=FAIL so=/mnt/gpu/turnip/libvulkan_freedreno.so (see /mnt/data/turnip-dlopen.out) — vkCreate will likely fail"
+      if [ -f /mnt/data/turnip-dlopen.out ]; then
+        while read -r _dl; do log "TURNIP_DLOPEN_ERR $_dl"; done < /mnt/data/turnip-dlopen.out || true
+      fi
+    fi
+  else
+    log "TURNIP_DLOPEN=skip (no python3)"
+  fi
+  unset _turnip_so _turnip_icd _dl
+elif [ -f /mnt/gpu/turnip/freedreno_icd.json ]; then
+  log "WARN: TURNIP_ICD json present but libvulkan_freedreno.so MISSING"
 fi
 
 export ANDROID_SYSVSHM_SERVER="${ANDROID_SYSVSHM_SERVER:-/tmp/.sysvshm/SM0}"
@@ -381,6 +417,15 @@ log "BOX64_WINE64K_STAMP=$(cat "$BOX64_WINE64K_STAMP" 2>/dev/null)"
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
 # 0.1.53: winex11.so needs aarch64 libX11/libXext via Box64 native wrap
 export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# 0.1.71: keep Turnip dir on LD_LIBRARY_PATH even after aarch64 prepend (ICD is absolute,
+# but NEEDED deps of libvulkan_freedreno.so still search LD_LIBRARY_PATH; also helps
+# any residual bare-name ICDs). Prepend so it wins over accidental same-named host so.
+if [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
+  case ":$LD_LIBRARY_PATH:" in
+    *:/mnt/gpu/turnip:*) ;;
+    *) export LD_LIBRARY_PATH="/mnt/gpu/turnip${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+  esac
+fi
 export BOX64_PREFER_WRAPPED="${BOX64_PREFER_WRAPPED:-1}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 # 關鍵：強制 WINELOADER＝unix wine ELF（覆寫 Kotlin／舊 env）
@@ -1320,10 +1365,23 @@ ensure_graphics_x11_reg() {
   if [ -f /mnt/data/wine-gfx.out ]; then
     while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-gfx.out || true
   fi
+  # 0.1.71: DllOverrides backup so wineboot children keep DXVK (or wined3d bisect)
+  _dll_mode=native
+  case "${X86_DXWRAPPER:-dxvk}" in
+    wined3d|WINED3D) _dll_mode=builtin ;;
+  esac
+  set +e
+  wine_reg_helper patch-dll-overrides "$_dll_mode" > /mnt/data/wine-dll.out 2>&1
+  DLL_RC=$?
+  set -e
+  if [ -f /mnt/data/wine-dll.out ]; then
+    while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-dll.out || true
+  fi
+  unset _dll_mode
   if [ "$GFX_RC" = "0" ]; then
     return 0
   fi
-  log "DRIVER_REG skip (user.reg not ready rc=$GFX_RC) — wineboot must create regs first"
+  log "DRIVER_REG skip (user.reg not ready rc=$GFX_RC dll_rc=${DLL_RC:-}) — wineboot must create regs first"
   return 0
 }
 

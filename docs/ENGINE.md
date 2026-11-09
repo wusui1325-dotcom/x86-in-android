@@ -1,3 +1,20 @@
+## 0.1.71 — Turnip ICD absolute library_path + DllOverrides (vkCreate)
+
+**Smoke risk (0.1.70):** Present `ahb_gpu` can be healthy while DXVK never gets a Vulkan
+device — ICD used bare `libvulkan_freedreno.so` (system search). Winlator puts the .so in
+`/usr/lib`; we bind `/mnt/gpu/turnip`, so bare name silently fails when `LD_LIBRARY_PATH`
+reshapes. Env-only `WINEDLLOVERRIDES` can also be lost by wineboot children.
+
+**Fix:**
+- ICD `library_path=/mnt/gpu/turnip/libvulkan_freedreno.so` (guest-absolute); rewrite each launch
+- `TURNIP_DLOPEN` probe (fail-loud, no hard-block)
+- `DllOverrides` reg `d3d*=native,builtin` (or builtin for wined3d bisect)
+- Keep Turnip on `LD_LIBRARY_PATH` after aarch64 prepend
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.71`; `TURNIP_ICD library_path=/mnt/gpu/turnip/…`;
+`TURNIP_DLOPEN=ok`; `DRIVER_REG dlloverrides=native`; `DXVK:` Adapter / no flood `err:vulkan`;
+`guestBlack=0` with real pixels.
+
 ## 0.1.70 — Present AHB GPU pixel path (guestBlack real fix)
 
 **Smoke risk (0.1.69):** HUD-band/`wined3d` bisect 可觀測，但 CPU-first `ahb_skip` 讓 DRI3

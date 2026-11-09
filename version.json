@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.88",
-  "versionCode": 89,
-  "notes": "0.1.88: InProcessX root GPUImage cpuAccess=false (align PresentExtension 0.1.83 / DRI3); keep pre-promote; keep 087 WoW64 / 086\u2013070"
+  "versionName": "0.1.89",
+  "versionCode": 90,
+  "notes": "0.1.89: WoW64 direct-first \u2014 i386 default wine C:/App/app.exe (CreateProcess); ladder direct\u2192explorer\u2192start; APP_SEED visible=; ShellExecute HRESULT dump; DXVK x32 defer; keep 088 InProcessX / 087 WoW64 seed / 086\u2013070"
 }

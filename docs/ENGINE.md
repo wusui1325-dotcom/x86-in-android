@@ -1,3 +1,21 @@
+## 0.1.89 — WoW64 direct-first (no start.exe ShellExecute)
+
+**Boss smoke (0.1.87 full log):** `APP_WOW64_SEED` / `decide=start_win` /
+`cmdline: wine start C:/App/app.exe` / `APP_SEED` 169MB all OK, but still
+`ShellExecuteEx failed` + `FormatMessage failed` → `APP_LOAD_FATAL missing-Loaded`
+t=60s; Present desktopOnly/guestBlack (app never started). `start.exe` ShellExecute
+can fail without quick-exit ≤2s → 087 ladder never reached `wow64_direct`.
+
+**Fix:**
+- i386 default `APP_SPAWN_MODE=wow64_direct` (`wine C:/App/app.exe` CreateProcess)
+- Ladder: direct → `explorer /desktop=x86,WxH,x11 C:/App` → `wine start` LAST (diag)
+- `decide=direct_win`; `APP_SEED visible=` + winepath/dir probe; ShellExecute HRESULT/hex dump
+- DXVK x32→SysWOW64 **defer** (not Loaded yet)
+- Keep 088 InProcessX cpuAccess=false / 087 WoW64 seed / 086–070
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.89`; `APP_LOAD wow64=1 … decide=direct_win`;
+`cmdline: wine C:/App/app.exe`; strict `Loaded L"…app.exe"` (not missing-Loaded).
+
 ## 0.1.88 — InProcessX root GPUImage cpuAccess=false
 
 **Dig (deferred from 087):** `GPUImage.createOrObtain` keeps the first GPUImage forever.

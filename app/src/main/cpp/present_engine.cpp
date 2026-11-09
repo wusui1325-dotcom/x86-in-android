@@ -51,6 +51,22 @@ PresentEngine& PresentEngine::instance() {
     return e;
 }
 
+void PresentEngine::markPresentPath(const char* path) {
+    // Only string literals / stable tokens — never store transient JNI pointers.
+    if (!path || !path[0]) { last_present_path_ = ""; return; }
+    if (path[0] == 'h') { last_present_path_ = "hud"; return; }
+    if (path[0] == 's') { last_present_path_ = "stub"; return; }
+    if (path[0] == 'b') { last_present_path_ = "bgra"; return; }
+    if (path[0] == 'a') {
+        // ahb_gpu / ahb_cpu / ahb_skip
+        if (path[4] == 'g') { last_present_path_ = "ahb_gpu"; return; }
+        if (path[4] == 'c') { last_present_path_ = "ahb_cpu"; return; }
+        last_present_path_ = "ahb_skip";
+        return;
+    }
+    last_present_path_ = "";
+}
+
 int PresentEngine::ensureAhb(int width, int height) {
     if (ahb_ && width_ == width && height_ == height) return 0;
     if (ahb_) {
@@ -480,6 +496,11 @@ int PresentEngine::blitBgraToWindow(
     }
     ANativeWindow_unlockAndPost(window_);
     last_present_rc_ = 0;
+    // 0.1.66 P1: DIAG path= on BGRA success (keep hud/stub if already marked)
+    if (!last_present_path_ || !last_present_path_[0] ||
+        (last_present_path_[0] != 'h' && last_present_path_[0] != 's')) {
+        last_present_path_ = "bgra";
+    }
     return 0;
 }
 
@@ -493,8 +514,10 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
     // 0.1.64: never fake-success without Surface
     if (!window_) return -EINVAL;
 
-    // 0.1.66: default CPU-first so ANativeWindow_lock is never stolen mid-frame.
-    // Opt-in GPU: env X86_PRESENT_GPU=1.
+    // 0.1.66: default CPU-first — do NOT call presentAhbCpu on GPUImage AHB.
+    // GPUImage.lockHardwareBuffer keeps AHardwareBuffer permanently locked for
+    // drawable life; a second AHardwareBuffer_lock in presentAhbCpu always fails.
+    // True CPU path is Java BGRA(virtualData). Opt-in GPU: X86_PRESENT_GPU=1.
     static bool logged_cpu = false;
     static bool logged_gpu = false;
     if (presentWantGpu()) {
@@ -509,21 +532,21 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
                 last_present_rc_ = 0;
                 return 0;
             }
-            LOGW("presentAhbGpu failed rc=%d — falling back to CPU", rc);
+            LOGW("presentAhbGpu failed rc=%d — skip AHB-CPU (GPUImage lock); use BGRA", rc);
         }
         releaseEglWindowSurfaceForCpu();
-        last_present_path_ = "ahb_cpu";
-    } else {
-        last_present_path_ = "ahb_cpu";
-        if (!logged_cpu) {
-            LOGI("PRESENT path=ahb_cpu (cpu-first default)");
-            logged_cpu = true;
-        }
-        releaseEglWindowSurfaceForCpu();
+        last_present_path_ = "ahb_skip";
+        last_present_rc_ = -EAGAIN;
+        return -EAGAIN;
     }
-    int rc = presentAhbCpu(external, width, height);
-    last_present_rc_ = rc;
-    return rc;
+    last_present_path_ = "ahb_skip";
+    if (!logged_cpu) {
+        LOGI("PRESENT path=ahb_cpu skipped (cpu-first; use BGRA virtualData; AHB locked by GPUImage)");
+        logged_cpu = true;
+    }
+    releaseEglWindowSurfaceForCpu();
+    last_present_rc_ = -EAGAIN;
+    return -EAGAIN;
 }
 
 int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int strideBytes) {
@@ -559,6 +582,11 @@ int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int s
         return 1; // staged only — not posted to Surface
     }
     // Fast path: one pass into window (no intermediate AHB write)
+    // Keep hud/stub if caller already tagged; else bgra
+    if (!last_present_path_ || !last_present_path_[0] ||
+        (last_present_path_[0] != 'h' && last_present_path_[0] != 's')) {
+        last_present_path_ = "bgra";
+    }
     int rc = blitBgraToWindow(bgra, width, height, strideBytes);
     last_present_rc_ = rc;
     return rc;
@@ -620,6 +648,7 @@ int PresentEngine::presentStub(int frameIndex) {
             rgba[i] = r; rgba[i + 1] = g; rgba[i + 2] = b; rgba[i + 3] = 255;
         }
     }
+    last_present_path_ = "stub";
     return presentRgba(rgba.data(), w, h, w * 4);
 }
 
@@ -709,4 +738,15 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_wusper_x86_engine_NativeEngine_nativePresentLastPath(JNIEnv* env, jclass) {
     const char* p = PresentEngine::instance().lastPresentPath();
     return env->NewStringUTF(p ? p : "");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_wusper_x86_engine_NativeEngine_nativePresentMarkPath(JNIEnv* env, jclass, jstring path) {
+    if (!path) {
+        PresentEngine::instance().markPresentPath("");
+        return;
+    }
+    const char* c = env->GetStringUTFChars(path, nullptr);
+    PresentEngine::instance().markPresentPath(c ? c : "");
+    env->ReleaseStringUTFChars(path, c);
 }

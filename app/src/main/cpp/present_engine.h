@@ -39,8 +39,9 @@ public:
     bool eglReady() const { return egl_ok_ && egl_surf_ != EGL_NO_SURFACE; }
     int lastPresentRc() const { return last_present_rc_; }
     int lockFailCount() const { return lock_fail_count_; }
-    /** 0.1.66: "ahb_cpu" | "ahb_gpu" | "" */
+    /** 0.1.66: "ahb_cpu"|"ahb_gpu"|"ahb_skip"|"bgra"|"hud"|"stub"|"" */
     const char* lastPresentPath() const { return last_present_path_; }
+    void markPresentPath(const char* path);
 
 private:
     PresentEngine() = default;
@@ -102,4 +103,6 @@ JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLock
         JNIEnv*, jclass);
 JNIEXPORT jstring JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLastPath(
         JNIEnv*, jclass);
+JNIEXPORT void JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentMarkPath(
+        JNIEnv*, jclass, jstring path);
 }

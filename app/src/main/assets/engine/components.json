@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.66: Present ahb CPU-first default; APP_LOAD unix harden; present-cpufirst"
+  "notes": "0.1.66: present-cpufirst ahb_skip + BGRA(virtualData); APP_LOAD_FATAL; no guest HUD mutate"
 }

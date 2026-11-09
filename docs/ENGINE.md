@@ -3,16 +3,19 @@
 **Smoke risk (0.1.65):** `presentAhb` still called `ensureEgl()` first (pump prefers AHB).
 GPU half-success / per-frame EGL rebuild could steal `ANativeWindow_lock` again.
 APP_LOAD unix may exit quickly with no Loaded fingerprint; no clear fail line.
+GPUImage permanently locks AHB → `presentAhbCpu` double-lock always fails.
+`paintHudBarBgra(data.duplicate())` corrupted guest SHM.
 
 **Fix:**
-- `presentAhb`: default `releaseEgl` → `presentAhbCpu`; `X86_PRESENT_GPU=1` for GPU-first
-- Log once: `PRESENT path=ahb_cpu` / `ahb_gpu`; DIAG `path=` via `nativePresentLastPath`
-- `postAhbToWindow`: never `ensureEgl`; GPU only if env + existing surface
-- APP_LOAD: unix-only; quick-exit / no Loaded → `APP_LOAD unix failed` (no C:/ fallback)
-- KEY_LOG: `ANativeWindow_lock` / `lockFail` / `APP_PE` / `PRESENT path` / `cpu-first`
+- `presentAhb`: default skip AHB-CPU (`path=ahb_skip` / `-EAGAIN`); `X86_PRESENT_GPU=1` for GPU
+- True CPU path = BGRA(`virtualData`); pump prefers BGRA when data present
+- Log: `PRESENT path=ahb_cpu skipped` / `ahb_gpu`; DIAG `path=bgra|hud|stub|ahb_skip`
+- HUD only via independent `hudScratch` — never write into guest SHM
+- APP_LOAD: unix-only; relative retry; `APP_LOAD_FATAL` / Loaded fingerprint (no C:/ fallback)
+- KEY_LOG: `ANativeWindow_lock` / `lockFail` / `APP_PE` / `APP_LOAD_FATAL` / `Loaded L"` / `PRESENT path`
 
-**Expect:** `WINE_LAUNCH_STAMP=0.1.66`; `PRESENT path=ahb_cpu`; `PRESENT_DIAG … path=ahb_cpu ok>0 lockFail=0`;
-`APP_LOAD cmdline: wine /mnt/app/app.exe`; no ShellExecuteEx / no C:/App launch.
+**Expect:** `WINE_LAUNCH_STAMP=0.1.66`; `PRESENT_DIAG … path=bgra ok>0 lockFail=0`;
+`APP_LOAD cmdline: wine /mnt/app/app.exe`; `Loaded L"…app.exe"` or clear `APP_LOAD_FATAL`.
 
 ## 0.1.65 — Present CPU-first (fix EGL/ANativeWindow) + APP_LOAD unix
 

@@ -21,8 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.64: only count presentOk when native returns 0 with Surface attached
  * ({@link NativeEngine#nativePresentReady()} == window_). Nearly-black frames get a
  * bright 8px HUD bar so Boss can see Present works.
- * 0.1.66: AHB path is CPU-first by default; DIAG includes path=; AHB ok may also
- * try BGRA once when drawable data is non-black (no double presentOk).
+ * 0.1.66: AHB CPU-first skips presentAhbCpu (GPUImage lock); true CPU = BGRA(virtualData).
+ * DIAG path=ahb_skip|bgra|hud|stub. HUD never mutates guest SHM.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -44,7 +44,6 @@ public final class PresentXFramePump extends Thread {
     private int presentFail;
     private int nonBlackHits;
     private int hudHits;
-    private int bgraAfterAhb;
     private int lastW;
     private int lastH;
     private int lastChildId;
@@ -154,35 +153,40 @@ public final class PresentXFramePump extends Thread {
         lastH = height;
         lastChildId = childId;
 
-        if (ahbPtr != 0) {
+        // 0.1.66 P0: GPUImage keeps AHB permanently locked → presentAhbCpu double-lock
+        // always fails. True CPU path = BGRA(virtualData). Only try AHB when no
+        // virtualData (rare) or when native GPU path is enabled (X86_PRESENT_GPU=1).
+        // presentAhb default now returns -EAGAIN (ahb_skip) without locking.
+        if (ahbPtr != 0 && data == null) {
             int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
             if (rc == 0) {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
-                boolean black = data == null || isNearlyBlack(data, width, height, strideBytes);
-                if (!black) {
-                    nonBlackHits++;
-                    // 0.1.66 optional: also push drawable CPU pixels once if AHB rc==0
-                    // but guest data is non-black (AHB buffer may be empty). No double ok.
-                    if (data != null && bgraAfterAhb < 2) {
-                        ByteBuffer dup = data.duplicate();
-                        dup.rewind();
-                        int brc = NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
-                        if (brc == 0) {
-                            bgraHits++;
-                        }
-                        bgraAfterAhb++;
-                    }
-                } else {
-                    // Prove Surface path with HUD when AHB frame is empty/black
-                    presentHudBar(width, height, frameIndex);
-                }
                 maybeLog(frameIndex, kids);
                 return;
             }
-            // AHB failed — fall through to BGRA (must not early-return)
+            // AHB failed / skipped — fall through (must not early-return)
             presentFail++;
+        } else if (ahbPtr != 0) {
+            // Have virtualData: skip useless presentAhbCpu; go BGRA below.
+            // Still allow one GPU attempt only if env opted in — native presentAhb
+            // itself gates on X86_PRESENT_GPU; call it at most to try GPU, ignore skip.
+            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
+            if (rc == 0) {
+                ahbHits++;
+                presentOk++;
+                emptyAfterReady = 0;
+                boolean black = isNearlyBlack(data, width, height, strideBytes);
+                if (!black) nonBlackHits++;
+                else presentHudBar(width, height, frameIndex);
+                maybeLog(frameIndex, kids);
+                return;
+            }
+            // rc != 0 (expected ahb_skip / GPU fail) — BGRA below; do not count as hard fail storm
+            if (rc != -11 /* EAGAIN */) {
+                presentFail++;
+            }
         }
 
         if (data != null && width > 1 && height > 1) {
@@ -193,8 +197,15 @@ public final class PresentXFramePump extends Thread {
             if (!black) {
                 nonBlackHits++;
             } else {
-                paintHudBarBgra(dup, width, height, strideBytes);
-                dup.rewind();
+                // 0.1.66 P1: NEVER paint HUD into guest SHM (duplicate shares backing).
+                // Use independent hudScratch via presentHudBar instead.
+                if (presentHudBar(width, height, frameIndex)) {
+                    presentOk++;
+                    emptyAfterReady = 0;
+                    maybeLog(frameIndex, kids);
+                    return;
+                }
+                // fall through to try raw (black) BGRA if HUD present failed
             }
             if (sink != null) {
                 ByteBuffer rgba = ByteBuffer.allocateDirect(width * height * 4);
@@ -215,12 +226,12 @@ public final class PresentXFramePump extends Thread {
                 maybeLog(frameIndex, kids);
                 return;
             } else {
+                NativeEngine.nativePresentMarkPath("bgra");
                 int rc = NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
                 if (rc == 0) {
                     bgraHits++;
                     presentOk++;
                     emptyAfterReady = 0;
-                    if (black) hudHits++;
                     maybeLog(frameIndex, kids);
                     return;
                 }
@@ -282,6 +293,7 @@ public final class PresentXFramePump extends Thread {
             }
         }
         hudScratch.flip();
+        NativeEngine.nativePresentMarkPath("hud");
         int rc = NativeEngine.nativePresentBgra(hudScratch, width, height, width * 4);
         if (rc == 0) {
             hudHits++;
@@ -290,6 +302,12 @@ public final class PresentXFramePump extends Thread {
         return false;
     }
 
+    /**
+     * Paint HUD into an independent buffer only. Do NOT pass Drawable.getData() /
+     * GPUImage.virtualData (duplicate shares backing → corrupts guest SHM).
+     * Prefer {@link #presentHudBar} which uses hudScratch.
+     */
+    @SuppressWarnings("unused")
     private static void paintHudBarBgra(ByteBuffer bgra, int width, int height, int strideBytes) {
         int stride = strideBytes > 0 ? strideBytes : width * 4;
         boolean pulse = (System.currentTimeMillis() / 500) % 2 == 0;

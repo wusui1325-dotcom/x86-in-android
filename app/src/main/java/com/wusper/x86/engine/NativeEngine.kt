@@ -67,7 +67,9 @@ object NativeEngine {
     external fun nativePresentLastRc(): Int
     @JvmStatic
     external fun nativePresentLockFails(): Int
-    /** 0.1.66: "ahb_cpu" | "ahb_gpu" | "" */
+    /** 0.1.66: "ahb_cpu"|"ahb_gpu"|"ahb_skip"|"bgra"|"hud"|"stub"|"" */
     @JvmStatic
     external fun nativePresentLastPath(): String
+    @JvmStatic
+    external fun nativePresentMarkPath(path: String)
 }

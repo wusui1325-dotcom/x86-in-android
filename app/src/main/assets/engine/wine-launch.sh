@@ -2120,17 +2120,40 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
   APP_PID=$!
   log "APP_LOAD pid=$APP_PID target=$APP_TARGET"
-  # 0.1.66: quick-exit / no Loaded → clear APP_LOAD unix failed (never fall back to C:/App)
+  # 0.1.66: quick-exit / no Loaded → FATAL fingerprints (never fall back to C:/App)
   sleep 2
   if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
     wait "$APP_PID" 2>/dev/null
     APP_RC=$?
     log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} target=$APP_TARGET"
     log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.66)"
-    if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null; then
-      grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
+    if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null; then
+      grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
         log "APP_LOAD unix failed: $ln"
       done || true
+    fi
+    # Retry once: cd to exe dir + relative path (no C:/App, no start.exe Windows path)
+    APP_DIR=$(dirname "$APP_TARGET")
+    APP_BASE=$(basename "$APP_TARGET")
+    if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
+      log "APP_LOAD retry: cd $APP_DIR && wine ./$APP_BASE (unix relative; no C:/)"
+      (
+        cd "$APP_DIR" || exit 1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "./$APP_BASE" >>/mnt/data/wine-run.out 2>&1
+      ) &
+      APP_PID=$!
+      log "APP_LOAD retry pid=$APP_PID"
+      sleep 2
+      if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+        wait "$APP_PID" 2>/dev/null
+        APP_RC=$?
+        log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (unix+relative both exited quickly; no Loaded)"
+        log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+      else
+        log "APP_LOAD retry alive after 2s pid=$APP_PID"
+      fi
+    else
+      log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
     fi
   else
     log "APP_LOAD unix alive after 2s pid=$APP_PID"
@@ -2254,6 +2277,13 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     fi
     if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
       log "WINE_HB note: ShellExecute/app-start failure still in wine-run.out"
+    fi
+    # 0.1.66: Loaded / APP_PE fingerprints — don't rely on absence of ShellExecuteEx alone
+    if [ "$HB" -ge 45 ] && [ -n "${APP_TARGET:-}" ]; then
+      if ! grep -qE 'Loaded L".*app\.exe"|/mnt/app/app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s target=${APP_TARGET}"
+        log "APP_LOAD_FATAL missing-Loaded t=${HB}s (desktop may paint; guest app content absent)"
+      fi
     fi
     ERR_N=$(grep -cE '^[0-9a-f]+:err:' /mnt/data/wine-run.out 2>/dev/null || echo 0)
     ERR_N=$(echo "$ERR_N" | tr -d ' \n')

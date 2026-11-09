@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.104",
-  "versionCode": 105,
-  "notes": "0.1.104: P0 Wow64/machine on App create + CPIW dblslash kill (103 dig A2 residual). Normalize APP_WIN to C:\\App\\app.exe (single BS) for cmd/start/explorer/stub; promote ladder direct→machine_x86 (start /machine x86 /wait) before explorer for TRACE machine 0x014c; fix /exec to /exec /unix $SEED (Windows path+/exec was FNF); dig create_fail=creator_detach_after_machine0 + ntstatus_hint + path_hygiene. KEEP 102/103 hard-gate/quiet RPCSS/soft-cap40/MAP_WAIT I*100ms/defer/TERM orphan/dwell/creator_hang/mmap32_creators/parent MMAP32=0/WINELOADERNOEXEC. No hot/no soft-continue/no Present rewrite/no DXVK x32/no FF.",
-  "tipSha": "ce6c5a5"
+  "versionName": "0.1.105",
+  "versionCode": 106,
+  "notes": "0.1.105: P0 actually SPAWN /machine x86 + CPIW dblslash kill for real (104 dig). PRIMARY decide=machine_x86 (start /machine x86 /wait) with spawn_evidence pid stamps; hang-ladder kill+SPAWN before heavy dig (set +e); order machine→direct→explorer→unix→start; cmd via quoted stub x86_launch.cmd to kill CPIW C:\\App\\\\app.exe; Secondary UX: blue-screen ≥50 zh-TW phrases (multi-line, ：（). KEEP 102/103/104 hard-gate/quiet RPCSS/soft-cap40/MAP_WAIT I*100ms/defer/TERM/dwell/creator_hang/mmap32_creators/parent MMAP32=0/WINELOADERNOEXEC. No hot/no soft-continue/no Present rewrite/no DXVK x32/no FF.",
+  "tipSha": "PENDING"
 }

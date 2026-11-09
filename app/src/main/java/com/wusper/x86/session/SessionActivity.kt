@@ -278,6 +278,9 @@ class SessionActivity : ComponentActivity() {
                 var guestPresented by remember { mutableStateOf(false) }
                 var presentDiagLines by remember { mutableIntStateOf(0) }
                 var lastPresentDiag by remember { mutableStateOf("") }
+                // 0.1.105: 藍屏人話錯誤（≥50 句庫；可多句；含：（）
+                var blueScreenLines by remember { mutableStateOf<List<String>>(emptyList()) }
+                var blueScreenSalt by remember { mutableIntStateOf(0) }
                 // 0.1.64: sticky UI lines survive session.log overwrite every 400ms
                 var uiStickyLog by remember { mutableStateOf("") }
                 fun appendSticky(line: String) {
@@ -580,6 +583,7 @@ class SessionActivity : ComponentActivity() {
                     ) {
                         status = "啟動進程內 X"
                         guestPresented = false
+                        blueScreenLines = emptyList()
                         presentDiagLines = 0
                         lastPresentDiag = ""
                         uiStickyLog = ""
@@ -787,6 +791,16 @@ class SessionActivity : ComponentActivity() {
                         val deskOnly = Regex("""\bdesktopOnly=(\d+)""").find(stats)
                             ?.groupValues?.getOrNull(1) == "1"
                         val presented = try { x.hasPresented() } catch (_: Throwable) { false }
+                        // 0.1.105 Secondary UX: 藍屏說明（desktopOnly／無 App）
+                        if (!guestPresented && (deskOnly || "create_fail=" in logText || "loaded_app=0" in logText)) {
+                            val pick = BlueScreenMessages.pick(logText, maxLines = 3, salt = blueScreenSalt)
+                            blueScreenSalt += 1
+                            if (pick.lines != blueScreenLines) {
+                                blueScreenLines = pick.lines
+                            }
+                        } else if (guestPresented) {
+                            blueScreenLines = emptyList()
+                        }
                         if (!guestPresented && ready && !deskOnly) {
                             val okMatch = Regex("""\bok=(\d+)""").find(stats)
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
@@ -1045,16 +1059,36 @@ class SessionActivity : ComponentActivity() {
                                 wineInitPhase || status.startsWith("執行中")
                             )
                             if (showSurfaceHint) {
-                                Text(
-                                    text = if (wineInitPhase) {
-                                        getString(com.wusper.x86.R.string.session_wine_init)
-                                    } else {
-                                        getString(com.wusper.x86.R.string.session_waiting_surface)
-                                    },
-                                    color = Color(0x99FFFFFF),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.align(Alignment.Center),
-                                )
+                                Column(
+                                    modifier = Modifier
+                                        .align(Alignment.Center)
+                                        .padding(24.dp)
+                                        .fillMaxWidth(0.92f),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Text(
+                                        text = if (wineInitPhase) {
+                                            getString(com.wusper.x86.R.string.session_wine_init)
+                                        } else if (blueScreenLines.isNotEmpty()) {
+                                            "啟動說明：（"
+                                        } else {
+                                            getString(com.wusper.x86.R.string.session_waiting_surface)
+                                        },
+                                        color = Color(0xCCFFFFFF),
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    if (!wineInitPhase && blueScreenLines.isNotEmpty()) {
+                                        Spacer(Modifier.height(10.dp))
+                                        blueScreenLines.forEach { line ->
+                                            Text(
+                                                text = line,
+                                                color = Color(0xE6FFFFFF),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                modifier = Modifier.padding(vertical = 2.dp),
+                                            )
+                                        }
+                                    }
+                                }
                             }
                             if (showErrorCard) {
                                 Card(

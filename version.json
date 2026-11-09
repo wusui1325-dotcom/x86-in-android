@@ -3,5 +3,5 @@
   "versionName": "0.1.105",
   "versionCode": 107,
   "notes": "0.1.105: P0 actually SPAWN /machine x86 + CPIW dblslash kill for real (104 dig). PRIMARY decide=machine_x86 (start /machine x86 /wait) with spawn_evidence pid stamps; hang-ladder kill+SPAWN before heavy dig (set +e); order machine→direct→explorer→unix→start; cmd via quoted stub x86_launch.cmd to kill CPIW C:\\App\\\\app.exe; Secondary UX: blue-screen ≥50 zh-TW phrases (multi-line, ：（). KEEP 102/103/104 hard-gate/quiet RPCSS/soft-cap40/MAP_WAIT I*100ms/defer/TERM/dwell/creator_hang/mmap32_creators/parent MMAP32=0/WINELOADERNOEXEC. No hot/no soft-continue/no Present rewrite/no DXVK x32/no FF. UX+: BSOD #0000AA + footer disclaimer + LaunchStatusLines≥100. vc107.",
-  "tipSha": "91537fc"
+  "tipSha": "a72b5db"
 }

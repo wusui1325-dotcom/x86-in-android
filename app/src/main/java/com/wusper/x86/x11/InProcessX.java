@@ -128,6 +128,27 @@ public final class InProcessX {
         Log.i(TAG, "stopped");
     }
 
+    public PresentXFramePump getFramePump() {
+        return framePump;
+    }
+
+    /** Session PRESENT_DIAG：委派 framePump.pathStats() */
+    public String pathStats() {
+        PresentXFramePump pump = framePump;
+        if (pump == null) {
+            return "ahb=0 bgra=0 stub=0 ok=0 fail=0 waitAttach=0 ready="
+                    + com.wusper.x86.engine.NativeEngine.nativePresentReady()
+                    + " egl=" + com.wusper.x86.engine.NativeEngine.nativePresentEglReady()
+                    + " pump=null";
+        }
+        return pump.pathStats();
+    }
+
+    public boolean hasPresented() {
+        PresentXFramePump pump = framePump;
+        return pump != null && pump.hasPresented();
+    }
+
     public boolean isStarted() {
         return started;
     }

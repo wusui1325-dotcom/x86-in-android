@@ -269,6 +269,9 @@ class SessionActivity : ComponentActivity() {
                 var presentBridge by remember { mutableStateOf<PresentSurfaceBridge?>(null) }
                 var inProcessAudio by remember { mutableStateOf<InProcessAudio?>(null) }
                 var inProcessX by remember { mutableStateOf<InProcessX?>(null) }
+                var guestPresented by remember { mutableStateOf(false) }
+                var presentDiagLines by remember { mutableIntStateOf(0) }
+                var lastPresentDiag by remember { mutableStateOf("") }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
                 val inProcessInputRef = remember { AtomicReference<InProcessXInput?>(null) }
@@ -563,6 +566,9 @@ class SessionActivity : ComponentActivity() {
                     ) {
                         status = "啟動進程內 X"
                         logText += "啟動 Winlator Java X → Present…\n"
+                        guestPresented = false
+                        presentDiagLines = 0
+                        lastPresentDiag = ""
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
                         x.start()
@@ -609,7 +615,7 @@ class SessionActivity : ComponentActivity() {
                         presentBridge?.shutdown()
                         frameBridge?.shutdown()
                         NativeEngine.nativePresentAttachSurface(surf)
-                        logText += "Present：進程內 X Drawable → AHB → Surface（已 attach）\n"
+                        logText += "Present：進程內 X Drawable → AHB → Surface（已 attach） ready=${NativeEngine.nativePresentReady()}\n"
                         val bridge = PresentSurfaceBridge(
                             dataDir = ws.dataDir,
                             surface = surf,
@@ -733,6 +739,36 @@ class SessionActivity : ComponentActivity() {
                 }
 
                 // GPU 單項重試（不整頁重跑 runtime install）
+                // 0.1.63: PRESENT_DIAG every 2s while running; clear overlay on first present
+                LaunchedEffect(inProcessX, status) {
+                    val x = inProcessX ?: return@LaunchedEffect
+                    while (true) {
+                        delay(2000)
+                        val runningNow = status.startsWith("執行中") || status.startsWith("正在初始化") ||
+                            status.startsWith("RpcSs") || status.startsWith("啟動")
+                        if (!runningNow && !status.startsWith("Present")) break
+                        val stats = try { x.pathStats() } catch (_: Throwable) { "pathStats-error" }
+                        val line = "PRESENT_DIAG $stats"
+                        if (line != lastPresentDiag && presentDiagLines < 15) {
+                            lastPresentDiag = line
+                            presentDiagLines++
+                            logText += line + "\n"
+                        } else if (line != lastPresentDiag) {
+                            lastPresentDiag = line
+                        }
+                        val ready = "ready=true" in stats
+                        val presented = try { x.hasPresented() } catch (_: Throwable) { false }
+                        if (!guestPresented && ready) {
+                            val okMatch = Regex("""\bok=(\d+)""").find(stats)
+                            val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                            if (presented || ok > 0) {
+                                guestPresented = true
+                                logText += "PRESENT_DIAG guestPresented=true ok=$ok (overlay clear)\n"
+                            }
+                        }
+                    }
+                }
+
                 LaunchedEffect(gpuRetryEpoch) {
                     if (gpuRetryEpoch == 0) return@LaunchedEffect
                     if (ws == null) return@LaunchedEffect
@@ -959,7 +995,8 @@ class SessionActivity : ComponentActivity() {
                             )
                             val wineInitPhase = status.startsWith("正在初始化") || status.startsWith("RpcSs") ||
                                 (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_START" !in logText)
-                            val showSurfaceHint = !showErrorCard && (
+                            // 0.1.63: clear 「等待客體」once Present posts (or stub-fallback)
+                            val showSurfaceHint = !showErrorCard && !guestPresented && (
                                 wineInitPhase || status.startsWith("執行中")
                             )
                             if (showSurfaceHint) {
@@ -1123,7 +1160,7 @@ class SessionActivity : ComponentActivity() {
                                 Text(getString(com.wusper.x86.R.string.btn_jump_key))
                             }
                         }
-                        if (running && !showLogPanelEffective && !wineInitPhasePanel) {
+                        if (running && !showLogPanelEffective && !wineInitPhasePanel && !guestPresented) {
                             Text(
                                 text = getString(com.wusper.x86.R.string.session_waiting_surface),
                                 style = MaterialTheme.typography.bodySmall,
@@ -1254,6 +1291,9 @@ class SessionActivity : ComponentActivity() {
             "NTDLL=",
             "WINE_EXIT=",
             "WINE_START",
+            "PRESENT_DIAG",
+            "guestPresented",
+            "stub-fallback",
             "WINELOADER=",
             "WINEPRELOADRESERVE",
             "could not load ntdll",

@@ -1,5 +1,7 @@
 package com.wusper.x86.x11;
 
+import android.util.Log;
+
 import com.winlator.renderer.GPUImage;
 import com.winlator.renderer.Texture;
 import com.winlator.xserver.Drawable;
@@ -10,6 +12,7 @@ import com.wusper.x86.engine.NativeEngine;
 import com.wusper.x86.graphics.DesktopLayout;
 
 import java.nio.ByteBuffer;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -18,9 +21,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 優先序（DRI3／零拷貝對齊）：
  * 1. {@link GPUImage} AHB → {@code nativePresentAhb}（EGL GPU_SAMPLED，無 CPU BGRA→RGBA）
  * 2. Drawable BGRA DirectBuffer → {@code nativePresentBgra}（單趟 native swizzle）
- * 3. stub
+ * 3. stub-fallback（attach 後仍無像素時，證明 Surface 通路）
  */
 public final class PresentXFramePump extends Thread {
+    private static final String TAG = "PresentXFramePump";
+
     public interface FrameSink {
         void onXFrame(ByteBuffer rgba, int width, int height, int strideBytes);
     }
@@ -32,6 +37,15 @@ public final class PresentXFramePump extends Thread {
     private boolean pulse;
     private int ahbHits;
     private int bgraHits;
+    private int stubHits;
+    private int waitingAttach;
+    private int presentOk;
+    private int presentFail;
+    private int lastW;
+    private int lastH;
+    private int lastChildId;
+    private int emptyAfterReady;
+    private String lastStatsLogged = "";
 
     public PresentXFramePump(XServer xServer, FrameSink sink) {
         super("x86-x-present-pump");
@@ -78,31 +92,51 @@ public final class PresentXFramePump extends Thread {
     }
 
     private void presentOnce(int frameIndex) {
+        // Attach 前 skip 重活；nativePresentAhb／Bgra 在無 window_ 時會假成功
+        if (!NativeEngine.nativePresentReady()) {
+            waitingAttach++;
+            if ((frameIndex % 30) == 0) {
+                logDiag(frameIndex, "waitingAttach");
+            }
+            return;
+        }
+
         Drawable drawable = null;
         int width = DesktopLayout.WIDTH;
         int height = DesktopLayout.HEIGHT;
         long ahbPtr = 0;
         ByteBuffer data = null;
         int strideBytes = width * 4;
+        int childId = 0;
+        int kids = 0;
 
         try (XLock lock = xServer.lock(XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.DRAWABLE_MANAGER)) {
             Window root = xServer.windowManager.rootWindow;
             if (root != null) {
-                for (int i = root.getChildren().size() - 1; i >= 0; i--) {
-                    Window child = root.getChildren().get(i);
-                    if (child != null && child.attributes.isMapped() && child.getContent() != null) {
-                        drawable = child.getContent();
-                        break;
-                    }
+                kids = root.getChildren() != null ? root.getChildren().size() : 0;
+                Pick best = pickLargestMapped(root, /*includeSelf=*/false);
+                if (best == null) {
+                    // fall back to root content
+                    best = pickFromWindow(root);
                 }
-                if (drawable == null) {
-                    drawable = root.getContent();
+                if (best != null) {
+                    drawable = best.drawable;
+                    childId = best.id;
+                    width = best.width;
+                    height = best.height;
                 }
             }
             if (drawable != null) {
-                width = drawable.width;
-                height = drawable.height;
+                // Best-effort promote child (and root) to GPUImage for AHB path
                 Texture tex = drawable.getTexture();
+                if (!(tex instanceof GPUImage)) {
+                    try {
+                        GPUImage.createOrObtain(xServer, drawable, true, true);
+                        tex = drawable.getTexture();
+                    } catch (Throwable ignored) {
+                        // GL queueEvent may not be ready; BGRA path still works
+                    }
+                }
                 if (tex instanceof GPUImage) {
                     GPUImage gpu = (GPUImage) tex;
                     ahbPtr = gpu.getHardwareBufferPtr();
@@ -114,19 +148,26 @@ public final class PresentXFramePump extends Thread {
             }
         }
 
+        lastW = width;
+        lastH = height;
+        lastChildId = childId;
+
         if (ahbPtr != 0) {
             int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
             if (rc == 0) {
                 ahbHits++;
+                presentOk++;
+                emptyAfterReady = 0;
+                maybeLog(frameIndex, kids);
                 return;
             }
-            // fall through to BGRA if AHB present failed (e.g. still CPU-locked)
+            presentFail++;
+            // fall through to BGRA if AHB present failed
         }
 
-        if (data != null) {
+        if (data != null && width > 1 && height > 1) {
             ByteBuffer dup = data.duplicate();
             dup.rewind();
-            // Legacy FrameSink still gets RGBA for tests；產品路徑走 nativePresentBgra
             if (sink != null) {
                 ByteBuffer rgba = ByteBuffer.allocateDirect(width * height * 4);
                 byte[] tmp = new byte[4];
@@ -140,19 +181,125 @@ public final class PresentXFramePump extends Thread {
                 }
                 rgba.flip();
                 sink.onXFrame(rgba, width, height, width * 4);
-            } else {
-                NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
                 bgraHits++;
+                presentOk++;
+                emptyAfterReady = 0;
+                maybeLog(frameIndex, kids);
+                return;
+            } else {
+                int rc = NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
+                if (rc == 0) {
+                    bgraHits++;
+                    presentOk++;
+                    emptyAfterReady = 0;
+                    maybeLog(frameIndex, kids);
+                    return;
+                }
+                presentFail++;
+            }
+        }
+
+        // No usable pixel data after attach — stub so Surface isn't pure black
+        emptyAfterReady++;
+        // After ~2s (~60 frames @33ms) or immediately if we have mapped kids with empty content
+        if (emptyAfterReady >= 60 || (kids > 0 && emptyAfterReady >= 15)) {
+            int rc = NativeEngine.nativePresentStub(frameIndex);
+            stubHits++;
+            if (rc == 0) {
+                presentOk++;
+            } else {
+                presentFail++;
+            }
+            if ((frameIndex % 30) == 0 || emptyAfterReady == 60 || emptyAfterReady == 15) {
+                logDiag(frameIndex, "stub-fallback kids=" + kids);
             }
             return;
         }
-
-        NativeEngine.nativePresentStub(frameIndex);
+        maybeLog(frameIndex, kids);
     }
 
-    /** 診斷：AHB／BGRA 命中次數（log 用） */
+    private void maybeLog(int frameIndex, int kids) {
+        if ((frameIndex % 30) == 0) {
+            logDiag(frameIndex, "kids=" + kids);
+        }
+    }
+
+    private void logDiag(int frameIndex, String extra) {
+        String stats = pathStats() + " frame=" + frameIndex + " " + extra;
+        if (!stats.equals(lastStatsLogged)) {
+            Log.i(TAG, stats);
+            lastStatsLogged = stats;
+        }
+    }
+
+    /** 選面積最大的 mapped 子視窗（遞迴；略過 1×1／無 content）。 */
+    private static Pick pickLargestMapped(Window root, boolean includeSelf) {
+        Pick best = includeSelf ? pickFromWindow(root) : null;
+        List<Window> children = root.getChildren();
+        if (children == null) return best;
+        // Prefer larger area; scan all (not only top of z-order)
+        for (int i = 0; i < children.size(); i++) {
+            Window child = children.get(i);
+            if (child == null || !child.attributes.isMapped()) continue;
+            Pick direct = pickFromWindow(child);
+            if (direct != null && (best == null || direct.area > best.area)) {
+                best = direct;
+            }
+            // Recurse into nested Wine desktop children
+            Pick nested = pickLargestMapped(child, /*includeSelf=*/false);
+            if (nested != null && (best == null || nested.area > best.area)) {
+                best = nested;
+            }
+        }
+        return best;
+    }
+
+    private static Pick pickFromWindow(Window w) {
+        if (w == null || !w.attributes.isMapped()) return null;
+        Drawable d = w.getContent();
+        if (d == null) return null;
+        int ww = d.width & 0xffff;
+        int hh = d.height & 0xffff;
+        if (ww <= 1 || hh <= 1) return null;
+        return new Pick(d, w.id, ww * hh, ww, hh);
+    }
+
+    private static final class Pick {
+        final Drawable drawable;
+        final int id;
+        final int area;
+        final int width;
+        final int height;
+
+        Pick(Drawable drawable, int id, int area, int width, int height) {
+            this.drawable = drawable;
+            this.id = id;
+            this.area = area;
+            this.width = width;
+            this.height = height;
+        }
+    }
+
+    /** 診斷：AHB／BGRA／stub 命中與 attach 狀態（log／Session PRESENT_DIAG） */
     public String pathStats() {
-        return "ahb=" + ahbHits + " bgra=" + bgraHits
+        return "ahb=" + ahbHits
+                + " bgra=" + bgraHits
+                + " stub=" + stubHits
+                + " ok=" + presentOk
+                + " fail=" + presentFail
+                + " waitAttach=" + waitingAttach
+                + " last=" + lastW + "x" + lastH
+                + " child=0x" + Integer.toHexString(lastChildId)
+                + " empty=" + emptyAfterReady
+                + " ready=" + NativeEngine.nativePresentReady()
                 + " egl=" + NativeEngine.nativePresentEglReady();
+    }
+
+    public int presentOkCount() {
+        return presentOk;
+    }
+
+    public boolean hasPresented() {
+        return presentOk > 0;
     }
 }

@@ -1,3 +1,19 @@
+## 0.1.63 — Present→Surface last mile (overlay + diag + APP_WIN)
+
+**Smoke (0.1.62):** NTDLL_ANON_PE / seed-copy / RpcSs ready / WINE_START explorer+app OK;
+winex11 SET_DRAWABLE hdc→drawable 0x1400007 dc_rect 1280×720 repeatedly — Wine **is**
+painting. UI still 「等待客體畫面（Present）…」; Surface black. Boss: 95%.
+
+**Fix:**
+- Overlay `guestPresented` clears 「等待客體」after first Present ok (AHB/BGRA/stub-fallback)
+- `PresentXFramePump`: waitAttach gate; largest mapped child (recursive); GPUImage promote;
+  pathStats (ahb/bgra/stub/ok/fail); stub-fallback when empty after attach
+- Session `PRESENT_DIAG` every 2s (cap 15)
+- `APP_WIN=C:/App/app.exe` + `log()` via printf — no BEL in session log
+
+**Expect:** `PRESENT_DIAG … ready=true` after attach; overlay clears; no `\a` in APP_WIN line;
+desktop pixels or stub band proving Surface path.
+
 ## 0.1.62 — real PE launch (no start.exe) + forced +x11drv
 
 **Smoke (0.1.61):** RpcSs ready=1 alive+ole-probe but `start.exe /unix /mnt/app/app.exe`

@@ -9,11 +9,13 @@ mkdir -p /mnt/data /tmp/.X11-unix /tmp/.sysvshm /tmp/.sound
 
 # 同時寫 session.log（stdout／stderr → nativeExec）與 gpu-stack.log
 log() {
-  echo "$@"
-  echo "$@" >> /mnt/data/gpu-stack.log
+  # printf: never interpret \a/\n in APP_WIN etc. (echo -e / busybox echo would)
+  printf '%s\n' "$*"
+  printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.62: launch PE via explorer/C:\\App (no start.exe); force +ole/+rpcss/+x11drv.
+# 0.1.63: Present→Surface diag + overlay clear; APP_WIN=C:/App/app.exe (no BEL in logs).
+# 0.1.62: launch PE via explorer/C:/App (no start.exe); force +ole/+rpcss/+x11drv.
 # 0.1.61: RpcSs ready requires alive process + OLE/sc4 (no false sc READY).
 # 0.1.60: RpcSs SCM-ready before WINE_START; soft-continue >=50KB (or >=30KB+boot markers) stable~15s; keep 0.1.59
 # reg path (never stub pre-create; Wine Version 2 UTF-8).
@@ -22,7 +24,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.62
+WINE_LAUNCH_STAMP=0.1.63
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -2045,8 +2047,9 @@ if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-
 fi
 
 # 0.1.53: /desktop=name,WxH,x11 — skip mac/wayland probe; LoadLibrary winex11.drv only
-# 0.1.62: NEVER start.exe /unix (ShellExecuteEx failed). Seed PE into C:\App\app.exe
+# 0.1.62: NEVER start.exe /unix (ShellExecuteEx failed). Seed PE into C:/App/app.exe
 # and pass Windows path to explorer /desktop=… (0.1.60 unix argv also kept as fallback).
+# 0.1.63: APP_WIN uses forward slashes so log()/echo never emits BEL (\a).
 # Force +ole/+rpcss/+x11drv until first Present / 60s (overrides earlier WINE_RUN default).
 export WINEARCH=win64
 export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+ole,+rpcss,+x11drv}"
@@ -2070,10 +2073,10 @@ APP_MODE="none"
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   mkdir -p "$WINEPREFIX/drive_c/App" 2>/dev/null || true
   if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
-    APP_WIN='C:\App\app.exe'
+    APP_WIN='C:/App/app.exe'
     APP_MODE="seed-copy"
   elif ln -sfn "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
-    APP_WIN='C:\App\app.exe'
+    APP_WIN='C:/App/app.exe'
     APP_MODE="seed-symlink"
   else
     APP_WIN=""

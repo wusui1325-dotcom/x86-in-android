@@ -29,8 +29,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
@@ -118,7 +119,8 @@ class SessionActivity : ComponentActivity() {
         setContent {
             X86Theme {
                 var logText by remember { mutableStateOf("準備啟動…\n") }
-                val logScroll = rememberScrollState()
+                val logListState = rememberLazyListState()
+                var userScrolledLog by remember { mutableStateOf(false) }
                 val scope = rememberCoroutineScope()
                 var logHighlightEpoch by remember { mutableIntStateOf(0) }
                 var logExpanded by remember { mutableStateOf(false) }
@@ -253,10 +255,9 @@ class SessionActivity : ComponentActivity() {
                         return
                     }
                     logHighlightEpoch++
-                    // approx 14sp monospace ≈ 42px per line
-                    val y = (idx * 42).coerceAtLeast(0)
+                    userScrolledLog = true
                     scope.launch {
-                        logScroll.animateScrollTo(y.coerceAtMost(logScroll.maxValue))
+                        logListState.animateScrollToItem(idx.coerceIn(0, (lines.size - 1).coerceAtLeast(0)))
                     }
                     Toast.makeText(this@SessionActivity, getString(com.wusper.x86.R.string.toast_jumped_key), Toast.LENGTH_SHORT).show()
                 }
@@ -274,6 +275,24 @@ class SessionActivity : ComponentActivity() {
 
                 var sessionEpoch by remember { mutableIntStateOf(0) }
                 var showErrorCard by remember { mutableStateOf(false) }
+                // Follow new log lines unless user scrolled away
+                LaunchedEffect(logText, logExpanded, showErrorCard) {
+                    val showPanel = logExpanded || showErrorCard
+                    if (!showPanel) return@LaunchedEffect
+                    if (userScrolledLog) return@LaunchedEffect
+                    val last = (logText.count { it == '\n' }).coerceAtLeast(0)
+                    runCatching { logListState.scrollToItem(last) }
+                }
+                LaunchedEffect(logListState.isScrollInProgress) {
+                    if (logListState.isScrollInProgress) {
+                        val info = logListState.layoutInfo
+                        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                        val total = info.totalItemsCount
+                        if (total > 0 && lastVisible < total - 3) {
+                            userScrolledLog = true
+                        }
+                    }
+                }
                 var errorTitle by remember { mutableStateOf("") }
                 var errorDetail by remember { mutableStateOf("") }
                 var errorRaw by remember { mutableStateOf("") }
@@ -655,12 +674,41 @@ class SessionActivity : ComponentActivity() {
                             } else {
                                 session
                             }
-                            // Surface status from WINE_HB so 「執行中」does not look frozen
-                            val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
-                            if (hb != null && status.startsWith("執行中")) {
-                                val tSec = hb.groupValues[1]
-                                val pidHb = hb.groupValues[2]
-                                status = "執行中 pid=$pidHb t=${tSec}s"
+                            // Prefer wineboot progress over generic 「執行中」/Present wait
+                            val sawWineStart = "WINE_START" in logText
+                            val wbHb = Regex("""WINEBOOT_INIT hb t=(\d+)s.*?system\.reg=(\d+)B""")
+                                .findAll(logText).lastOrNull()
+                            val softCont = Regex("""WINEBOOT_INIT soft-continue t=(\d+)s""")
+                                .findAll(logText).lastOrNull()
+                            val rpcBusy = "RPCSS_PRESTART" in logText && "WINE_START" !in logText
+                            when {
+                                !sawWineStart && rpcBusy -> {
+                                    status = if ("RpcSs ready" in logText) {
+                                        "RpcSs 就緒，即將啟動…"
+                                    } else {
+                                        "正在初始化 RpcSs…"
+                                    }
+                                }
+                                !sawWineStart && (wbHb != null || "WINEBOOT_INIT begin" in logText) -> {
+                                    val tSec = softCont?.groupValues?.getOrNull(1)
+                                        ?: wbHb?.groupValues?.getOrNull(1)
+                                        ?: "?"
+                                    val regB = wbHb?.groupValues?.getOrNull(2) ?: "?"
+                                    status = "正在初始化 Wine… t=${tSec}s reg=${regB}B"
+                                }
+                                else -> {
+                                    val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
+                                    if (hb != null && (
+                                            status.startsWith("執行中") ||
+                                                status.startsWith("正在初始化") ||
+                                                status.startsWith("RpcSs")
+                                            )
+                                    ) {
+                                        val tSec = hb.groupValues[1]
+                                        val pidHb = hb.groupValues[2]
+                                        status = "執行中 pid=$pidHb t=${tSec}s"
+                                    }
+                                }
                             }
                         }
                         if (wait != 1) {
@@ -909,9 +957,18 @@ class SessionActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.fillMaxSize(),
                             )
-                            if (status.startsWith("執行中") && !showErrorCard) {
+                            val wineInitPhase = status.startsWith("正在初始化") || status.startsWith("RpcSs") ||
+                                (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_START" !in logText)
+                            val showSurfaceHint = !showErrorCard && (
+                                wineInitPhase || status.startsWith("執行中")
+                            )
+                            if (showSurfaceHint) {
                                 Text(
-                                    text = getString(com.wusper.x86.R.string.session_waiting_surface),
+                                    text = if (wineInitPhase) {
+                                        getString(com.wusper.x86.R.string.session_wine_init)
+                                    } else {
+                                        getString(com.wusper.x86.R.string.session_waiting_surface)
+                                    },
                                     color = Color(0x99FFFFFF),
                                     style = MaterialTheme.typography.bodyMedium,
                                     modifier = Modifier.align(Alignment.Center),
@@ -1019,8 +1076,14 @@ class SessionActivity : ComponentActivity() {
                             }
                         }
                         // 執行中預設收合日誌，把版面留給 Surface；錯誤／安裝時自動展開
-                        val running = status.startsWith("執行中")
-                        val showLogPanel = logExpanded || showErrorCard || installing || !running
+                        // wineboot 階段強制展開日誌並顯示「正在初始化 Wine…」
+                        val running = status.startsWith("執行中") || status.startsWith("正在初始化") || status.startsWith("RpcSs")
+                        val wineInitPhasePanel = status.startsWith("正在初始化") || status.startsWith("RpcSs") ||
+                            (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) && "WINE_START" !in logText)
+                        val showLogPanel = logExpanded || showErrorCard || installing || !running || wineInitPhasePanel
+                        val showLogPanelEffective = showLogPanel
+                        val logLines = remember(logText, logHighlightEpoch) { logText.split('\n') }
+                        val keyLower = remember { KEY_LOG_PATTERNS.map { it.lowercase() } }
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -1060,26 +1123,57 @@ class SessionActivity : ComponentActivity() {
                                 Text(getString(com.wusper.x86.R.string.btn_jump_key))
                             }
                         }
-                        if (running && !showLogPanel) {
+                        if (running && !showLogPanelEffective && !wineInitPhasePanel) {
                             Text(
                                 text = getString(com.wusper.x86.R.string.session_waiting_surface),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                             )
+                        } else if (wineInitPhasePanel && !showLogPanel) {
+                            Text(
+                                text = status.ifBlank { getString(com.wusper.x86.R.string.session_wine_init) },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                            )
                         }
-                        if (showLogPanel) {
-                            SelectionContainer {
-                                Text(
-                                    text = annotatedLog(logText + if (logHighlightEpoch >= 0) "" else ""),
-                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .weight(if (running && !showErrorCard) 0.35f else 0.7f)
-                                        .padding(horizontal = 16.dp, vertical = 4.dp)
-                                        .verticalScroll(logScroll),
-                                )
+                        if (showLogPanelEffective) {
+                            // weight MUST be on Column child (not inside SelectionContainer) or scroll breaks
+                            SelectionContainer(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(if (running && !showErrorCard && !wineInitPhasePanel) 0.35f else 0.55f)
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                            ) {
+                                LazyColumn(
+                                    state = logListState,
+                                    modifier = Modifier.fillMaxSize(),
+                                ) {
+                                    itemsIndexed(logLines, key = { idx, _ -> idx }) { _, line ->
+                                        val hit = keyLower.any { it in line.lowercase() }
+                                        Text(
+                                            text = line.ifEmpty { " " },
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFamily = FontFamily.Monospace,
+                                                fontWeight = if (hit) FontWeight.SemiBold else FontWeight.Normal,
+                                            ),
+                                            color = if (hit) {
+                                                Color(0xFF1A1A1A)
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurfaceVariant
+                                            },
+                                            modifier = if (hit) {
+                                                Modifier
+                                                    .fillMaxWidth()
+                                                    .background(Color(0x66FFEB3B))
+                                                    .padding(horizontal = 2.dp)
+                                            } else {
+                                                Modifier.fillMaxWidth()
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

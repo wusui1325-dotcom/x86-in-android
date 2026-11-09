@@ -31,6 +31,8 @@
     <string name="btn_toggle_log_show">顯示日誌</string>
     <string name="btn_toggle_log_hide">隱藏日誌</string>
     <string name="session_waiting_surface">等待客體畫面（Present）…</string>
+    <string name="session_wine_init">正在初始化 Wine…</string>
+    <string name="session_wine_init_detail">正在初始化 Wine…（wineboot %1$ss · system.reg %2$sB）</string>
     <string name="toast_log_copied">已複製完整 log</string>
     <string name="toast_key_not_found">未找到關鍵參數行</string>
     <string name="toast_jumped_key">已跳轉並高亮關鍵行</string>

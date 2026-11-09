@@ -261,7 +261,7 @@ def cmd_inject_rpcss(prefix):
         text += "\n"
     text += "\n;; --- x86-in-android offline RpcSs/MountMgr inject ---\n"
     text += svc_block(
-        "RpcSs", 0x20, 0x3,
+        "RpcSs", 0x20, 0x2,  # AUTO_START so OpenService works
         "%SystemRoot%\\\\system32\\\\rpcss.exe",
         "Remote Procedure Call (RPC)",
         desc="RPC service",

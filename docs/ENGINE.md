@@ -1,3 +1,20 @@
+## 0.1.60 — RpcSs SCM-ready + soft-continue UX + log scroll
+
+**Smoke (0.1.59 full):** soft-continue OK, WINE_START alive, `app_seen=1`, but **no Present**.
+explorer hit `RPC_S_SERVER_UNAVAILABLE (0x6ba)` after actxprxy; wineboot
+`start_rpcss Failed to open RpcSs service`. Direct `rpcss.exe` `alive=1` was **not**
+enough — OLE `OpenService(RpcSs)` fails and gives up without talking to that pid.
+
+**Fix:**
+- `services.exe` (SCM) up first; `net`/`sc start RpcSs` (TERM-only, **no KILL**);
+  direct rpcss belt+suspenders; **probe** (`sc query` RUNNING / `regsvr32 actxprxy`)
+  up to ~30s before WINE_START
+- MountMgr fire-and-forget after probe (no wait/KILL)
+- RpcSs service Start=AUTO in offline inject
+- soft-continue `>=50KB` OR `>=30KB`+boot markers, stable ~15s
+- UI:「正在初始化 Wine… / RpcSs…」not Present wait during boot
+- Session log: LazyColumn scroll fix (weight outside SelectionContainer)
+
 ## 0.1.59 — valid Wine Version 2 regs (no UTF-8 stub pre-create)
 
 **Bug (0.1.58 smoke):** After heal+wipe, wineboot still failed with

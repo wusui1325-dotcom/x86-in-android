@@ -38,6 +38,9 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.94: P0 unix-seed MAIN + unset WINELOADERNOEXEC (stop Wine→start.exe rewrite);
+# inject .exe assoc (H4); RPCSS treat STATE RUNNING in wine-rpcss.out as ready=1;
+# fail_hr drop section-flag false positives (c0000040/c0000080). Keep 093 knives.
 # 0.1.93: P0 bare wine CreateProcess (drop start /exec primary); RPCSS wait sc
 # RUNNING (no early TERM on /proc appear); fail_hr no tid scrap; overlay after Loaded
 # 0.1.92: P0 orphan-reap whitelist (never kill services/rpcss); fail_sig per-mode
@@ -126,7 +129,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.93
+WINE_LAUNCH_STAMP=0.1.94
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -2333,6 +2336,24 @@ log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu}
 driver_diag
 
 # ---- 0.1.59: RpcSs/MountMgr offline inject on VALID Wine Version 2 regs only ------
+
+# 0.1.94 H4: offline .exe ProgId so ShellExecute/start fallback can open PE
+ensure_exe_assoc() {
+  mkdir -p /mnt/data 2>/dev/null || true
+  set +e
+  wine_reg_helper inject-exe-assoc > /mnt/data/wine-exe-assoc.out 2>&1
+  _ea_rc=$?
+  set -e
+  while read -r line; do log "EXE_ASSOC $line"; done < /mnt/data/wine-exe-assoc.out 2>/dev/null || true
+  if [ "$_ea_rc" = "0" ]; then
+    log "EXE_ASSOC ensure done ok=1"
+  else
+    log "WARN: EXE_ASSOC ensure rc=$_ea_rc (ShellExecute may still NOASSOC)"
+  fi
+  unset _ea_rc
+  return 0
+}
+
 ensure_rpcss_mountmgr_service_reg() {
   local sys32="$WINEPREFIX/drive_c/windows/system32"
   local drv="$sys32/drivers"
@@ -2522,6 +2543,13 @@ rpcss_prestart() {
     SC_RC=0
   fi
   unset SC_EARLY_RUNNING
+  # 0.1.94: sc start output often already has STATE RUNNING — remember it (probe may
+  # miss due to WINEDEBUG pollution / 3s kill before sc query prints).
+  SC_START_RUNNING=0
+  if grep -qE 'STATE[[:space:]]*:[[:space:]]*4|[[:space:]]RUNNING' /mnt/data/wine-rpcss.out 2>/dev/null; then
+    SC_START_RUNNING=1
+    log "RPCSS_PRESTART sc start output has STATE RUNNING (parser will treat ready)"
+  fi
 
   RPC_READY=0
   RPC_REASON="timeout"
@@ -2534,12 +2562,17 @@ rpcss_prestart() {
     SC_RUNNING=0
     OLE_OK=0
 
-    "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine sc.exe query RpcSs >>/mnt/data/wine-rpcss-probe.out 2>&1 &
+    # 0.1.94: quiet WINEDEBUG so sc query can print STATE before 3s soft-kill
+    WINEDEBUG=-all,-fix "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine sc.exe query RpcSs >>/mnt/data/wine-rpcss-probe.out 2>&1 &
     PQ=$!
     QT=0
-    while kill -0 "$PQ" 2>/dev/null && [ "$QT" -lt 3 ]; do
+    while kill -0 "$PQ" 2>/dev/null && [ "$QT" -lt 5 ]; do
       sleep 1
       QT=$((QT+1))
+      # early exit if STATE already visible
+      if grep -qE 'STATE[[:space:]]*:[[:space:]]*4|[[:space:]]RUNNING' /mnt/data/wine-rpcss-probe.out 2>/dev/null; then
+        break
+      fi
     done
     if kill -0 "$PQ" 2>/dev/null; then
       kill -TERM "$PQ" 2>/dev/null || true
@@ -2547,9 +2580,13 @@ rpcss_prestart() {
     else
       wait "$PQ" 2>/dev/null
     fi
-    # STATE 4 / RUNNING only — NOT START_PENDING (2) which caused 0.1.60 false-ready
-    if grep -qE 'RUNNING|STATE[[:space:]]*:[[:space:]]*4' /mnt/data/wine-rpcss-probe.out 2>/dev/null; then
+    # 0.1.94: STATE RUNNING from probe OR sc-start out OR sc_rc=0+alive — never stuck on ole_ok=0
+    if grep -qE 'RUNNING|STATE[[:space:]]*:[[:space:]]*4' /mnt/data/wine-rpcss-probe.out 2>/dev/null        || grep -qE 'STATE[[:space:]]*:[[:space:]]*4|[[:space:]]RUNNING' /mnt/data/wine-rpcss.out 2>/dev/null        || [ "${SC_START_RUNNING:-0}" = "1" ]; then
       SC_RUNNING=1
+    fi
+    if [ "$SC_RUNNING" != "1" ] && [ "${SC_RC:-1}" = "0" ] && [ "$PROC_ALIVE" = "1" ]; then
+      SC_RUNNING=1
+      log "RPCSS_PRESTART sc_running=1 via sc_rc=0+proc_alive (STATE probe quiet)"
     fi
 
     # 0.1.92: skip OLE probe when sc already RUNNING or rpcss alive (Boss: 3×10s ole wasted)
@@ -2662,6 +2699,7 @@ rpcss_prestart() {
 
 
 ensure_rpcss_mountmgr_service_reg
+ensure_exe_assoc
 # wineserver was killed during offline RpcSs patch — re-assert #arch=win64 before PRESTART
 ensure_win64_prefix "pre-prestart" || log "WARN: WINE_ARCH pre-prestart heal soft-fail"
 rpcss_diag
@@ -2867,8 +2905,8 @@ app_load_dump_fail_sigs() {
   fi
   # 0.1.92: real GetLastError / HRESULT only — no bare pointer scrap from wine traces
   # 0.1.93: do NOT match 'failed: 0118' wine tid (ShellExecuteEx failed: 0118:err:…)
-  _hr=$(printf '%s\n' "$_slice" | grep -E 'ShellExecuteEx failed|Application could not be started|err:start|err:module|err:process|FormatMessage|GetLastError|STATUS_|c0000' 2>/dev/null | \
-    grep -oE 'GetLastError[=: ]+[0-9]+|hr[=: ]+0x[89a-fA-F][0-9a-fA-F]{7}|HRESULT[=: ]+0x[0-9a-fA-F]+|status[=: ]+[cC][0-9a-fA-F]+|[cC]0000[0-9a-fA-F]{3}|SE_ERR_[A-Z_]+|0x8[0-9a-fA-F]{7}|STATUS_[A-Z_]+' 2>/dev/null | head -8 | tr '\n' ' ' || true)
+  # 0.1.94: exclude map_image section Characteristic false positives (flags c0000040/c0000080)
+  _hr=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null |     grep -E 'ShellExecuteEx failed|Application could not be started|err:start|err:module|err:process|FormatMessage|GetLastError|STATUS_' 2>/dev/null |     grep -oE 'GetLastError[=: ]+[0-9]+|hr[=: ]+0x[89a-fA-F][0-9a-fA-F]{7}|HRESULT[=: ]+0x[0-9a-fA-F]+|status[=: ]+[cC][0-9a-fA-F]+|SE_ERR_[A-Z_]+|0x8[0-9a-fA-F]{7}|STATUS_[A-Z_]+|c0000135|c000007b|c0000142|c0000005' 2>/dev/null | head -8 | tr '\n' ' ' || true)
   if [ -n "${_hr:-}" ]; then
     log "APP_LOAD fail_hr=[${_hr}] (slice GetLastError/HRESULT; not pointer dump)"
   else
@@ -2940,34 +2978,44 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     wow64_direct)
-      # 0.1.93: REAL CreateProcess — bare wine C:/App/app.exe (drop start /exec primary).
-      # 092 slice proved /exec still only Loaded start.exe + ShellExecute NOASSOC.
-      # Forward-slash APP_WIN (avoid BEL \a in logs); seed on drive_c, not /mnt/app.
-      app_load_seed_gate || log "APP_SEED gate=FAIL mode=direct — still try CreateProcess (A1 keep wow64)"
-      _w64_win="${APP_WIN:-C:/App/app.exe}"
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=direct_win win=$_w64_win unix=${APP_UNIX:-} seed=${SEED:-}"
-      log "APP_LOAD cmdline: wine $_w64_win (wow64 bare CreateProcess; no start.exe; machine=0x${PE_MACH:-?})"
-      stamp_wine_run "APP_LOAD cmdline: wine $_w64_win (wow64 direct_win)"
-      app_load_mark_slice
-      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
-      ;;
-    wow64_unix_seed)
-      # 0.1.93: if Windows-path CreateProcess still broken — start /unix against SEED
-      # (drive_c/App/app.exe), NEVER /mnt/app (noexec WARN).
-      app_load_seed_gate || log "APP_SEED gate=FAIL mode=unix_seed — still try"
+      # 0.1.94: Dig 093 — `wine C:/App/app.exe` maps App\app.exe then replaces MAIN with
+      # start.exe (WINELOADERNOEXEC blocks 32-bit arch re-exec); start CreateProcess of
+      # i386 fails; ShellExecute needs .exe assoc. Knife:
+      #   (1) unix-seed path as MAIN argv (drive_c only — never /mnt/app noexec)
+      #   (2) unset WINELOADERNOEXEC for this spawn so Wine can arch-switch into WoW64
+      #   (3) .exe assoc injected before APP_LOAD (ensure_exe_assoc)
+      app_load_seed_gate || log "APP_SEED gate=FAIL mode=direct — still try unix-seed MAIN (A1 keep wow64)"
       _seed_u="${SEED:-$WINEPREFIX/drive_c/App/app.exe}"
       case "$_seed_u" in
         /mnt/app/*)
-          log "APP_LOAD WARN unix_seed refused /mnt/app path=$_seed_u — remap to drive_c seed"
+          log "APP_LOAD WARN direct refused /mnt/app path=$_seed_u — remap to drive_c seed"
           _seed_u="$WINEPREFIX/drive_c/App/app.exe"
           ;;
       esac
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=unix_seed seed=$_seed_u"
-      log "APP_LOAD cmdline: wine start /unix $_seed_u (seed unix CreateProcess; not /mnt/app)"
-      stamp_wine_run "APP_LOAD cmdline: wine start /unix $_seed_u (wow64 unix_seed)"
+      _w64_win="${APP_WIN:-C:/App/app.exe}"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=direct_unix_seed win=$_w64_win seed=$_seed_u"
+      log "APP_LOAD cmdline: wine $_seed_u (wow64 unix-seed MAIN; no start.exe; WINELOADERNOEXEC unset; machine=0x${PE_MACH:-?})"
+      stamp_wine_run "APP_LOAD cmdline: wine $_seed_u (wow64 direct unix-seed MAIN)"
       app_load_mark_slice
-      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$_seed_u" >>/mnt/data/wine-run.out 2>&1 &
+      (
+        unset WINELOADERNOEXEC
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$_seed_u" >>/mnt/data/wine-run.out 2>&1
+      ) &
       unset _seed_u
+      ;;
+    wow64_unix_seed)
+      # 0.1.94: Windows-path bare wine + WINELOADERNOEXEC unset (after unix-seed MAIN failed).
+      # Avoid start /unix primary (always Loaded start.exe). Keep drive_c only.
+      app_load_seed_gate || log "APP_SEED gate=FAIL mode=unix_seed — still try"
+      _w64_win="${APP_WIN:-C:/App/app.exe}"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=win_path_noexec0 win=$_w64_win seed=${SEED:-}"
+      log "APP_LOAD cmdline: wine $_w64_win (wow64 Windows-path; WINELOADERNOEXEC unset; no start.exe)"
+      stamp_wine_run "APP_LOAD cmdline: wine $_w64_win (wow64 win_path WINELOADERNOEXEC unset)"
+      app_load_mark_slice
+      (
+        unset WINELOADERNOEXEC
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+      ) &
       ;;
     wow64_explorer)
       # 0.1.89 backup: explorer /desktop=… C:/App/app.exe (still Windows path / WoW64)
@@ -3167,8 +3215,9 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     if [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; then
       log "APP_SEED visible=no path=${SEED:-?} win=$APP_WIN — keep wow64=1 (no unix demote); CreateProcess may still fail"
     fi
-    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_win win=$APP_WIN unix=$APP_UNIX (bare wine CreateProcess; no start.exe; no /mnt/app mmap)"
-    stamp_wine_run "decide=direct_win win=$APP_WIN unix=$APP_UNIX"
+    ensure_exe_assoc || true
+    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_unix_seed win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} (unix-seed MAIN; WINELOADERNOEXEC unset; no start.exe; no /mnt/app mmap)"
+    stamp_wine_run "decide=direct_unix_seed win=$APP_WIN seed=${SEED:-}"
   else
     log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
   fi
@@ -3732,7 +3781,7 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         APP_LADDER_HANG_STEP=0
         if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
           log "APP_RELAUNCH once target=$APP_WIN via wow64_direct (no strict Loaded by t=${HB}s; machine=0x${PE_MACH})"
-          log "APP_LOAD wow64=1 relaunch: wine $APP_WIN (APP_RELAUNCH direct_win bare CreateProcess)"
+          log "APP_LOAD wow64=1 relaunch: wine $SEED (APP_RELAUNCH direct_unix_seed MAIN; WINELOADERNOEXEC unset)"
           app_load_dump_fail_sigs
           app_load_kill_app "APP_RELAUNCH"
           app_load_spawn wow64_direct

@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.93",
-  "versionCode": 94,
-  "notes": "0.1.93: P0 bare wine CreateProcess (drop start /exec) + wow64_unix_seed; RPCSS wait sc RUNNING (no early TERM on /proc appear); fail_hr no tid; overlay after Loaded/nonBlackGuest; GIT_SHA tipSha bake-after-commit; DXVK x32 defer",
+  "versionName": "0.1.94",
+  "versionCode": 95,
+  "notes": "0.1.94: P0 unix-seed MAIN + unset WINELOADERNOEXEC (stop Wine→start.exe); inject-exe-assoc H4; RPCSS STATE RUNNING→ready=1 (wine-rpcss.out + quiet sc query); fail_hr drop section-flag false positives; DXVK x32 defer; GIT_SHA bake-after-commit",
   "tipSha": ""
 }

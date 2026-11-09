@@ -1,3 +1,21 @@
+## 0.1.94 — unix-seed MAIN + RPCSS STATE→ready
+
+**Smoke (0.1.93):** decide=direct_win / `wine C:/App` still Loaded `start.exe` then
+ShellExecute NOASSOC (WINELOADERNOEXEC → Wine rewrites i386 MAIN to start.exe;
+NtCreateUserProcess of App\app.exe fails). RPCSS `STATE : 4 RUNNING` in
+wine-rpcss.out but probe ready=0 (WINEDEBUG pollution / ole_ok stuck).
+
+**Fix:**
+- `wow64_direct` = `wine $SEED` (drive_c unix-seed MAIN) with `WINELOADERNOEXEC` unset
+- ladder-2 = Windows-path bare wine + WINELOADERNOEXEC unset (no start /unix)
+- `inject-exe-assoc` offline (.exe→exefile→open\command + Wow6432Node)
+- RPCSS: STATE RUNNING in wine-rpcss.out / sc_rc=0+alive → sc_running=1 → ready=1;
+  sc query with `WINEDEBUG=-all`
+- fail_hr: drop map_image section-flag false positives
+
+**Expect:** `decide=direct_unix_seed` → `Loaded L"C:\App\app.exe"`;
+`RPCSS … ready=1` / `alive+sc-running`; slice_first_pe ≠ start.exe.
+
 ## 0.1.92 — APP_LOAD /exec + orphan-reap + RPCSS crush + UX
 
 **Boss 0.1.91 藍屏：** K0–K3 過；`wine C:/App` → Loaded `start.exe` + ShellExecute「no application associated」；orphan-reap 誤殺 services.exe；RPCSS wall ~30s；舊工作區半殘。

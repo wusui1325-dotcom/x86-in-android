@@ -27,3 +27,4 @@ google-services.json
 .kotlin/
 
 .cache/
+__pycache__/

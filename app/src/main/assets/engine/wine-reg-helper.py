@@ -284,6 +284,74 @@ def cmd_inject_rpcss(prefix):
         final["arch"], final["bytes"], ok))
     sys.exit(0 if ok else 2)
 
+
+def cmd_inject_exe_assoc(prefix):
+    """0.1.94 H4: ensure HKCR .exe -> exefile -> shell/open/command so ShellExecute
+    and start.exe fallbacks can CreateProcess the PE (wineboot soft-continue may
+    leave Classes incomplete)."""
+    path = os.path.join(prefix, "system.reg")
+    info = detect(path)
+    if not info["exists"] or not info["valid"] or info["text"] is None:
+        print("exeassoc skip system.reg ready=0")
+        sys.exit(3)
+    text = info["text"]
+    # Idempotent: strip prior inject marker blocks then append
+    marker = ";; --- x86-in-android offline .exe assoc inject ---"
+    if marker in text:
+        # remove previous inject tail (from marker to EOF or next ;; ---)
+        idx = text.find(marker)
+        # find end of our previous block: next ";; ---" after marker+len, else EOF
+        rest = text[idx + len(marker):]
+        nxt = rest.find("\n;; ---")
+        if nxt >= 0:
+            text = text[:idx] + rest[nxt+1:]
+        else:
+            text = text[:idx]
+    if not text.endswith("\n"):
+        text += "\n"
+    # Wine registry format: [Software\\Classes\\...] under HKLM is system.reg
+    block = """
+;; --- x86-in-android offline .exe assoc inject ---
+[Software\\\\Classes\\\\.exe]
+@="exefile"
+
+[Software\\\\Classes\\\\exefile]
+@="Application"
+
+[Software\\\\Classes\\\\exefile\\\\DefaultIcon]
+@="%%1"
+
+[Software\\\\Classes\\\\exefile\\\\shell]
+
+[Software\\\\Classes\\\\exefile\\\\shell\\\\open]
+
+[Software\\\\Classes\\\\exefile\\\\shell\\\\open\\\\command]
+@="\\"%1\\" %*"
+
+[Software\\\\Classes\\\\Wow6432Node\\\\.exe]
+@="exefile"
+
+[Software\\\\Classes\\\\Wow6432Node\\\\exefile]
+@="Application"
+
+[Software\\\\Classes\\\\Wow6432Node\\\\exefile\\\\shell\\\\open\\\\command]
+@="\\"%1\\" %*"
+"""
+    text += block
+    write_utf8(path, text)
+    final = detect(path)
+    ok = final["valid"] and ("Classes\\\\.exe]" in (final["text"] or "") or 'Classes\\.exe]' in (final["text"] or ""))
+    # Wine stores as Software\\Classes\\.exe] in the file
+    has = False
+    t = final["text"] or ""
+    if "Classes\\.exe]" in t or "Classes\\\\.exe]" in t or 'Classes\\.exe]' in t:
+        has = True
+    if ".exe]" in t and "exefile" in t:
+        has = True
+    print("exeassoc encoding=%s valid=%s has_exe=%s arch=%s bytes=%s ok=%s" % (
+        final["encoding"], final["valid"], has, final["arch"], final["bytes"], has and final["valid"]))
+    sys.exit(0 if (has and final["valid"]) else 2)
+
 def cmd_patch_graphics(prefix):
     """Set Graphics=x11 in user.reg only if file is valid Wine reg; never create from scratch before wineboot."""
     path = os.path.join(prefix, "user.reg")
@@ -452,7 +520,7 @@ def cmd_patch_present_knobs(prefix):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|patch-graphics|patch-dll-overrides|patch-present-knobs> <prefix> [native|builtin]")
+        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|inject-exe-assoc|patch-graphics|patch-dll-overrides|patch-present-knobs> <prefix> [native|builtin]")
         sys.exit(1)
     cmd, prefix = sys.argv[1], sys.argv[2]
     {
@@ -460,6 +528,7 @@ def main():
         "purge-invalid": cmd_purge_invalid,
         "heal-arch": cmd_heal_arch,
         "inject-rpcss": cmd_inject_rpcss,
+        "inject-exe-assoc": cmd_inject_exe_assoc,
         "patch-graphics": cmd_patch_graphics,
         "patch-dll-overrides": cmd_patch_dll_overrides,
         "patch-present-knobs": cmd_patch_present_knobs,

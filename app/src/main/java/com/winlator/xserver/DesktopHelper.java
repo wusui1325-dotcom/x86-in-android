@@ -84,6 +84,10 @@ public abstract class DesktopHelper {
                 // HWND / WM_CLASS may arrive after first MapWindow — refresh sticky + marker.
                 // 0.1.112: Wine often sets WM_STATE/_NET_WM_HWND without MapWindow — force-map
                 // so Present sees VIEWABLE App (NSIS dialog) instead of empty explorer desk.
+                // 0.1.113 Dig112: ALSO write .x86-x11-ready on explorer desk=1 WITHOUT App hwnd.
+                // 112 required nonzero App hwnd / kicked explorer from isApplicationWindow →
+                // property path skipped desk → marker never written → MAP_WAIT timeout →
+                // APP_LOAD_FATAL (chicken-egg). Present still excludes explorer from bestApp.
                 if (window == null) return;
                 try {
                     long hwnd = window.getHandle();
@@ -91,7 +95,27 @@ public abstract class DesktopHelper {
                     boolean app = window.isApplicationWindow();
                     boolean dialog = false;
                     try { dialog = window.isDialogLike(); } catch (Throwable ignored2) {}
-                    if (!desk && (app || hwnd != 0L || dialog)) {
+                    // P0-A: explorer desktop mapped (WM_STATE/SET_DRAWABLE/WM_CLASS) unlocks
+                    // APP_LOAD via marker; do NOT wait for app=1 or nonzero App hwnd.
+                    if (desk) {
+                        try {
+                            if (!window.attributes.isMapped()) {
+                                boolean mapped = xServer.windowManager.forceMapIfNeeded(window);
+                                if (mapped) {
+                                    Log.i(TAG, "MAP_RAISE forceMap-desk-on-prop id=0x"
+                                            + Integer.toHexString(window.id)
+                                            + " hwnd=0x" + Long.toHexString(hwnd)
+                                            + " atom=" + (property != null ? property.nameAsString() : "?")
+                                            + " (0.1.113 Dig112)");
+                                }
+                            }
+                        } catch (Throwable t) {
+                            Log.w(TAG, "forceMap-desk-on-prop: " + t.getMessage());
+                        }
+                        maybeWriteReadyMarker(window, null);
+                        return;
+                    }
+                    if (app || hwnd != 0L || dialog) {
                         try {
                             if (!window.attributes.isMapped()) {
                                 boolean mapped = xServer.windowManager.forceMapIfNeeded(window);
@@ -349,7 +373,8 @@ public abstract class DesktopHelper {
             }
             boolean dialog = false;
             try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
-            // Desktop map unlocks APP_LOAD; HWND/dialog map refreshes marker for DIAG.
+            // Desktop map unlocks APP_LOAD (desk=1 alone is enough — 0.1.113 Dig112).
+            // HWND/dialog map refreshes marker for APP_HWND_WAIT / Present DIAG.
             if (!(desk || app || hwnd != 0L || dialog || (nohwndScan != null && !nohwndScan.isEmpty()))) {
                 // Still allow sticky refresh when property updates an already-sticky window.
                 if (stickyAppId == 0 || window.id != stickyAppId) return;
@@ -397,7 +422,12 @@ public abstract class DesktopHelper {
                 fos.write(body.toString().getBytes(StandardCharsets.UTF_8));
             }
             if (desk && stickyAppId == 0) {
-                Log.i(TAG, "MAP_RAISE desktop ready marker=" + m.getName());
+                // 0.1.113: explicit desk=1 app=0 stamp body for MAP_WAIT dig
+                Log.i(TAG, "MAP_RAISE desktop ready marker=" + m.getName()
+                        + " desk=1 app=0 hwnd=0x" + Long.toHexString(outHwnd)
+                        + " id=0x" + Integer.toHexString(window.id)
+                        + " class=" + (outClass.isEmpty() ? "explorer.exe" : outClass.replace(' ', '_'))
+                        + " (0.1.113 Dig112 split desk marker from App hwnd)");
             } else if (outHwnd != 0L || outApp) {
                 Log.i(TAG, "MAP_RAISE app sticky marker hwnd=0x" + Long.toHexString(outHwnd)
                         + " app=" + (outApp ? 1 : 0)

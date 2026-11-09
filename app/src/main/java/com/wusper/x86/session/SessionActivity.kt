@@ -870,6 +870,13 @@ class SessionActivity : ComponentActivity() {
                                         "wmClass=$wmClass guestSample=$guestSample " +
                                         "overlay_keep=live_app_required (0.1.112)"
                                 )
+                                // 0.1.113 P1-D: clear sticky present_black ONLY on live App sample
+                                if ("present_black=1" in uiStickyLog && "present_black=0" !in uiStickyLog) {
+                                    appendSticky(
+                                        "PRESENT_DIAG present_black=0 cleared live_app " +
+                                            "desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok (0.1.113)"
+                                    )
+                                }
                             } else if ((presented || ok > 0) && loadedHint && !liveApp) {
                                 if ("overlay_keep=Loaded_without_live_app" !in uiStickyLog) {
                                     appendSticky(

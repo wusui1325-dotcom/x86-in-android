@@ -79,6 +79,8 @@ public final class PresentXFramePump extends Thread {
     /** 0.1.75: frames skipped waiting for HWND VIEWABLE / non-zero geom. */
     private int mapWaitHits;
     private int lastPendingHwnd;
+    /** 0.1.113: force-mapped App windows this frame (PRESENT_DIAG forceMap=). */
+    private int lastForceMapped;
     private int emptyAfterReady;
     private String lastStatsLogged = "";
     private ByteBuffer hudScratch;
@@ -174,6 +176,7 @@ public final class PresentXFramePump extends Thread {
                 lastHwnd = pr.hwnd;
                 lastMapState = pr.mapState != null ? pr.mapState : "-";
                 lastPendingHwnd = pr.pendingHwnd;
+                lastForceMapped = pr.forceMapped;
                 Pick best = pr.pick;
                 // 0.1.75: HWND exists but not VIEWABLE / zero-geom — wait; do not steal desktop.
                 if (best == null && pr.pendingHwnd > 0) {
@@ -519,7 +522,7 @@ public final class PresentXFramePump extends Thread {
                         }
                         if (fp != null) {
                             return new PickResult(fp, focused, hold.mappedKids, false, classOf(focused),
-                                    hwndOf(focused), mapStateName(focused), hold.pendingHwnd);
+                                    hwndOf(focused), mapStateName(focused), hold.pendingHwnd, hold.forceMapped);
                         }
                     }
                 }
@@ -530,45 +533,45 @@ public final class PresentXFramePump extends Thread {
         if (hold.bestAppHwnd != null) {
             return new PickResult(hold.bestAppHwnd, hold.bestAppHwndWin, hold.mappedKids, false,
                     classOf(hold.bestAppHwndWin), hwndOf(hold.bestAppHwndWin),
-                    mapStateName(hold.bestAppHwndWin), hold.pendingHwnd);
+                    mapStateName(hold.bestAppHwndWin), hold.pendingHwnd, hold.forceMapped);
         }
         if (hold.bestApp != null) {
             return new PickResult(hold.bestApp, hold.bestAppWin, hold.mappedKids, false,
                     classOf(hold.bestAppWin), hwndOf(hold.bestAppWin),
-                    mapStateName(hold.bestAppWin), hold.pendingHwnd);
+                    mapStateName(hold.bestAppWin), hold.pendingHwnd, hold.forceMapped);
         }
         if (hold.bestDialogHwnd != null) {
             return new PickResult(hold.bestDialogHwnd, hold.bestDialogHwndWin, hold.mappedKids, false,
                     classOf(hold.bestDialogHwndWin), hwndOf(hold.bestDialogHwndWin),
-                    mapStateName(hold.bestDialogHwndWin), hold.pendingHwnd);
+                    mapStateName(hold.bestDialogHwndWin), hold.pendingHwnd, hold.forceMapped);
         }
         if (hold.bestDialog != null) {
             return new PickResult(hold.bestDialog, hold.bestDialogWin, hold.mappedKids, false,
                     classOf(hold.bestDialogWin), hwndOf(hold.bestDialogWin),
-                    mapStateName(hold.bestDialogWin), hold.pendingHwnd);
+                    mapStateName(hold.bestDialogWin), hold.pendingHwnd, hold.forceMapped);
         }
         if (hold.bestNonDeskHwnd != null) {
             return new PickResult(hold.bestNonDeskHwnd, hold.bestNonDeskHwndWin, hold.mappedKids, false,
                     classOf(hold.bestNonDeskHwndWin), hwndOf(hold.bestNonDeskHwndWin),
-                    mapStateName(hold.bestNonDeskHwndWin), hold.pendingHwnd);
+                    mapStateName(hold.bestNonDeskHwndWin), hold.pendingHwnd, hold.forceMapped);
         }
         if (hold.bestNonDesktop != null) {
             return new PickResult(hold.bestNonDesktop, hold.bestNonDeskWin, hold.mappedKids, false,
                     classOf(hold.bestNonDeskWin), hwndOf(hold.bestNonDeskWin),
-                    mapStateName(hold.bestNonDeskWin), hold.pendingHwnd);
+                    mapStateName(hold.bestNonDeskWin), hold.pendingHwnd, hold.forceMapped);
         }
         // Pending HWND: no presentable pick yet — signal wait (do not steal desktop).
         if (hold.pendingHwnd > 0) {
             return new PickResult(null, hold.pendingWin, hold.mappedKids, false,
                     classOf(hold.pendingWin), hwndOf(hold.pendingWin),
                     hold.pendingMapState != null ? hold.pendingMapState : "UNVIEWABLE",
-                    hold.pendingHwnd);
+                    hold.pendingHwnd, hold.forceMapped);
         }
         boolean deskOnly = hold.bestAnyWin != null && hold.bestAnyWin.isDesktopWindow();
         if (hold.bestAny == null) deskOnly = true;
         return new PickResult(hold.bestAny, hold.bestAnyWin, hold.mappedKids, deskOnly,
                 classOf(hold.bestAnyWin), hwndOf(hold.bestAnyWin),
-                mapStateName(hold.bestAnyWin), 0);
+                mapStateName(hold.bestAnyWin), 0, hold.forceMapped);
     }
 
     private static String mapStateName(Window w) {
@@ -870,9 +873,16 @@ public final class PresentXFramePump extends Thread {
         final long hwnd;
         final String mapState;
         final int pendingHwnd;
+        /** 0.1.113: forceMapped count from Hold for live PRESENT_DIAG forceMap=. */
+        final int forceMapped;
 
         PickResult(Pick pick, Window win, int mappedKids, boolean desktopOnly, String wmClass,
                    long hwnd, String mapState, int pendingHwnd) {
+            this(pick, win, mappedKids, desktopOnly, wmClass, hwnd, mapState, pendingHwnd, 0);
+        }
+
+        PickResult(Pick pick, Window win, int mappedKids, boolean desktopOnly, String wmClass,
+                   long hwnd, String mapState, int pendingHwnd, int forceMapped) {
             this.pick = pick;
             this.win = win;
             this.mappedKids = mappedKids;
@@ -881,6 +891,7 @@ public final class PresentXFramePump extends Thread {
             this.hwnd = hwnd;
             this.mapState = mapState != null ? mapState : "-";
             this.pendingHwnd = pendingHwnd;
+            this.forceMapped = forceMapped;
         }
     }
 
@@ -953,6 +964,7 @@ public final class PresentXFramePump extends Thread {
                 + " mapState=" + lastMapState
                 + " mapWait=" + mapWaitHits
                 + " pendingHwnd=" + lastPendingHwnd
+                + " forceMap=" + lastForceMapped
                 + " empty=" + emptyAfterReady
                 + " ready=" + NativeEngine.nativePresentReady()
                 + " egl=" + NativeEngine.nativePresentEglReady()

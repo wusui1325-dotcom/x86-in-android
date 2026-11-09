@@ -285,7 +285,11 @@ path_is_mounted() {
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
 # 0.1.112: Present retarget App HWND + dig gate kill latch FP; seed crypt32/comdlg32;
 #   APP_HWND_WAIT requires nonzero hwnd (explorer app=1 hwnd=0x0 was false-ready).
-WINE_LAUNCH_STAMP=0.1.112
+# 0.1.113 Dig112: split desktop marker from App hwnd — explorer desk=1 writes
+#   .x86-x11-ready WITHOUT app hwnd (112 chicken-egg killed MAP_WAIT→APP_LOAD);
+#   APP_HWND_WAIT + Present force-map ONLY after APP_LOAD; APP_LOAD_RETRY on late marker.
+#   KEEP 112 anti-FP guestPresented + NSIS seed + GRAN_ALIGN/amd64_wow64/mmap32_guest=0.
+WINE_LAUNCH_STAMP=0.1.113
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -3278,6 +3282,8 @@ log "WINE_START pid=$WINE_PID (explorer desktop; app via APP_LOAD)"
 # so APP_LOAD CreateSwapChain does not race explorer desktop UNMAPPED.
 # 0.1.102: NO "APP_LOAD anyway" on timeout (101 dig: timeout→APP_LOAD into wedged
 # prefix; creators stall at ntdll wrap). Long-retry once; then DESKTOP_READY=0 gate.
+# 0.1.113: marker must write on explorer desk=1 alone (app=0 hwnd=0x0 OK for MAP_WAIT);
+# App HWND wait is APP_HWND_WAIT AFTER APP_LOAD. Late marker → APP_LOAD_RETRY.
 MAP_WAIT_MAX="${X86_MAP_WAIT_MAX:-150}"
 MAP_WAIT_EXTEND="${X86_MAP_WAIT_EXTEND:-300}"
 MAP_WAIT_I=0
@@ -4077,13 +4083,42 @@ if [ "${DESKTOP_READY:-0}" != "1" ] && [ -f /mnt/data/.x86-x11-ready ]; then
 fi
 
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
+  # 0.1.113 P0-C: Dig112 — explorer WM_STATE/map often AFTER first MAP_WAIT timeout when
+  # desk marker was suppressed. Re-arm: poll late .x86-x11-ready before one-shot FATAL.
+  if [ "${DESKTOP_READY:-0}" != "1" ]; then
+    APP_LOAD_RETRY_MAX="${X86_APP_LOAD_RETRY_MAX:-300}"
+    _retry=0
+    log "APP_LOAD_RETRY wait late desktop marker max=${APP_LOAD_RETRY_MAX}x0.1s map_wait_t=$((MAP_WAIT_I * 100))ms (0.1.113 Dig112)"
+    stamp_wine_run "APP_LOAD_RETRY begin desktop_ready=0 map_wait_t=$((MAP_WAIT_I * 100))ms"
+    while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$_retry" -lt "$APP_LOAD_RETRY_MAX" ]; do
+      if ! kill -0 "$WINE_PID" 2>/dev/null; then
+        log "APP_LOAD_RETRY abort explorer dead pid=$WINE_PID t_retry=$((_retry * 100))ms"
+        break
+      fi
+      sleep 0.1
+      _retry=$((_retry + 1))
+      if [ $((_retry % 50)) -eq 0 ]; then
+        log "APP_LOAD_RETRY heartbeat t_retry=$((_retry * 100))ms map_wait_t=$((MAP_WAIT_I * 100))ms explorer_alive=1"
+      fi
+    done
+    if [ -f /mnt/data/.x86-x11-ready ]; then
+      DESKTOP_READY=1
+      log "APP_LOAD_RETRY ok DESKTOP_READY=1 t_retry=$((_retry * 100))ms map_wait_t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '
+' ' ')"
+      stamp_wine_run "APP_LOAD_RETRY ok DESKTOP_READY=1 t_retry=$((_retry * 100))ms map_wait_t=$((MAP_WAIT_I * 100))ms"
+    else
+      log "APP_LOAD_RETRY exhausted desktop_ready=0 t_retry=$((_retry * 100))ms map_wait_t=$((MAP_WAIT_I * 100))ms"
+      stamp_wine_run "APP_LOAD_RETRY fail desktop_ready=0 t_retry=$((_retry * 100))ms"
+    fi
+    unset _retry APP_LOAD_RETRY_MAX
+  fi
   if [ "${RPC_READY:-0}" != "1" ] || [ "${DESKTOP_READY:-0}" != "1" ]; then
     APP_LOAD_GATED=1
     log "APP_LOAD gate=refuse rpc_ready=${RPC_READY:-0} desktop_ready=${DESKTOP_READY:-0} unix=$APP_UNIX (0.1.102: no APP_LOAD into wedged prefix; restore 100 baseline requires both ready)"
     stamp_wine_run "APP_LOAD_GATE refuse rpc_ready=${RPC_READY:-0} desktop_ready=${DESKTOP_READY:-0}"
     log "APP_LOAD_FATAL gate rpc_ready=${RPC_READY:-0} desktop_ready=${DESKTOP_READY:-0} — skipped spawn (wait next session / fix RPCSS+desktop)"
   else
-  log "APP_LOAD gate=pass rpc_ready=1 desktop_ready=1 — enter APP_LOAD (0.1.102)"
+  log "APP_LOAD gate=pass rpc_ready=1 desktop_ready=1 — enter APP_LOAD (0.1.102/0.1.113)"
   stamp_wine_run "APP_LOAD_GATE pass rpc_ready=1 desktop_ready=1"
   SEED="$WINEPREFIX/drive_c/App/app.exe"
   if [ -f "$SEED" ]; then
@@ -4355,6 +4390,8 @@ fi
 
 # 0.1.77/78: after APP_LOAD, wait for app HWND in .x86-x11-ready (Loaded-but-no-HWND)
 # 0.1.78: on timeout after strict Loaded → write .x86-nohwnd-req, backoff wait, AppActivate nudge
+# 0.1.113 P0-B: APP_HWND_WAIT + force-map/Present retarget ONLY after APP_LOAD gate=pass;
+# never conflate with MAP_WAIT desktop (desk=1 app=0 is enough for desktop_ready).
 app_load_nohwnd_request() {
   # $1 = basename hint (PE file name)
   _bn="${1:-app.exe}"

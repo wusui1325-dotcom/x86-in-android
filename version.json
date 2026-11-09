@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.112",
-  "versionCode": 114,
-  "notes": "0.1.112: Dig111 Boss纯黑 — Present stuck on empty explorer desk (mappedKids=0 desktopOnly=1) despite App HWND/Xid SET_DRAWABLE; guestPresented latch FP. Knives: (A) force-map+SparseArray scan+retarget Present to App drawable; explorer never bestApp; (B) guestPresented requires live desktopOnly=0+(mappedKids>=1|hwnd!=0); sticky present_black; (C) seed syswow64 crypt32+comdlg32; APP_HWND_WAIT requires nonzero hwnd. KEEP 111 GRAN_ALIGN/amd64_wow64/mmap32_guest=0/NOEXEC/cmdline. No trampoline/hot/FF/DXVK x32. vc114.",
-  "tipSha": "fb1e475"
+  "versionName": "0.1.113",
+  "versionCode": 115,
+  "notes": "0.1.113: Dig112 REGRESSION — 112 kicked explorer from isApplicationWindow + required App hwnd for marker → .x86-x11-ready never written → MAP_WAIT desktop_ready=0 → APP_LOAD_FATAL → 0× Loaded (Boss pure black). Knives: (A) write desk marker on explorer desk=1 WITHOUT App hwnd (Present still excludes explorer); (B) APP_HWND_WAIT+force-map ONLY after APP_LOAD; (C) APP_LOAD_RETRY on late marker; (D) PRESENT_DIAG forceMap= + clear present_black only on live App. KEEP 112 anti-FP dig/NSIS seed/GRAN_ALIGN/amd64_wow64/mmap32_guest=0/NOEXEC/cmdline. No trampoline/hot/FF. vc115.",
+  "tipSha": "PENDING"
 }

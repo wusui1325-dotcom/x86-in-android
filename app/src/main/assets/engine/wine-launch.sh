@@ -38,6 +38,16 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.101: P0-A start ladder option delivery + P0-B real create-fail dig
+# (100 dig: creators MMAP32 applied; start //exec,//machine i386 → 6× Unknown
+# option — this Wine start help wants /exec /wait /machine x86; App NtCreate
+# still no started pid; dig NTSTATUS_tokens were PE Characteristic scrape noise).
+# Knives: (1) start argv = /exec /wait /machine x86 (FORBIDDEN //exec,//machine,
+# arch i386); (2) real create-fail stamps — exclude map_image flags c0000040/
+# c0000080; stamp App CPIW without started pid + nearby warn/err:process /
+# GetLastError / STATUS_*; (3) keep mmap32_creators=cmd,start / mmap32_parent=0 /
+# mmap32_child=1 / WINELOADERNOEXEC kept; (4) never i386 MAIN; no hot bake;
+# DXVK x32 defer. machine TRACE 0 alone is NOT fail (amd64 creates also 0).
 # 0.1.100: P0 expand child-only MMAP32 to NtCreate *creators* (099 dig: A2 config
 # PASS — mmap32_child=1 / parent=0 / noexec=kept / 0×SIGILL — but App NtCreate
 # still TRACE machine 0 / never started pid / 0× Loaded; [app.exe] RCFILE too late).
@@ -165,7 +175,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.100
+WINE_LAUNCH_STAMP=0.1.101
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -3014,15 +3024,33 @@ app_load_dump_fail_sigs() {
   _wow64cpu=$(printf '%s\n' "$_slice" | grep -iE 'wow64cpu|Wow64Transition|load_wow64|init_wow64|L"wow64' 2>/dev/null | head -6 | tr '\n' '|' || true)
   _rc_apply=$(printf '%s\n' "$_slice" | grep -iE 'Applied settings from rcfile|BOX64_MMAP32|Looking for \[(app|cmd|start)\.exe\]|Apply RC |rcfile' 2>/dev/null | head -8 | tr '\n' '|' || true)
   _cp_app=$(printf '%s\n' "$_slice" | grep -E 'CreateProcessInternalW app .*App|CreateProcessInternalW app L"C:\\\\App' 2>/dev/null | head -4 | tr '\n' '|' || true)
-  # 0.1.100: GetLastError / NTSTATUS near App NtCreate (always log counts)
-  _gle=$(printf '%s\n' "$_slice" | grep -oE 'GetLastError[=: ]+[0-9]+' 2>/dev/null | head -8 | tr '\n' '|' || true)
-  _ntstatus_raw=$(printf '%s\n' "$_slice" | grep -oE 'STATUS_[A-Z_]+|status[=: ]+[cC][0-9a-fA-F]+|c00000[0-9a-fA-F]{2}|returning status[=: ]+[0-9a-fxA-F]+|NtCreateUserProcess.*status[=: ]+[0-9a-fxA-F]+' 2>/dev/null | head -10 | tr '\n' '|' || true)
+  # 0.1.101 P0-B: REAL create-fail dig — never scrape PE section Characteristic
+  # flags (map_image_into_view … flags c0000040/c0000080) as NTSTATUS.
+  # Prefer warn/err:process + GetLastError + STATUS_* + returning status near App CPIW.
+  _gle=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'GetLastError[=: ]+[0-9]+' 2>/dev/null | head -8 | tr '\n' '|' || true)
+  # Exclude map_image / Characteristic flag noise from NTSTATUS token scrape
+  _ntstatus_raw=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'STATUS_[A-Z_]+|status[=: ]+[cC][0-9a-fA-F]{6,8}|returning status[=: ]+[0-9a-fxA-F]+|NtCreateUserProcess.*status[=: ]+[0-9a-fxA-F]+|CreateProcess(InternalW)?.*(failed|status 0x|error )' 2>/dev/null | head -10 | tr '\n' '|' || true)
+  # Lines immediately after App CPIW that are NOT "started process pid" — real fail trail
+  _cp_fail=$(printf '%s\n' "$_slice" | awk '
+    /CreateProcessInternalW app .*App|CreateProcessInternalW app L"C:\\App/ {pending=1; next}
+    pending && /started process pid/ {pending=0; next}
+    pending && /(warn:process|err:process|err:module|err:start|GetLastError|STATUS_|returning status|failed with status|create_process failed|Application could not)/ {
+      print; n++; if (n>=6) exit
+    }
+  ' 2>/dev/null | head -6 | tr '\n' '|' || true)
   if [ -n "${_nt_app:-}" ]; then
     log "APP_LOAD ntcreate_app mode=${APP_LOAD_MODE:-?}: $_nt_app"
   else
     log "APP_LOAD ntcreate_app=none mode=${APP_LOAD_MODE:-?} (no NtCreateUserProcess for App\\app.exe in slice)"
   fi
   log "APP_LOAD ntcreate_diag started_pid_lines=${_nt_started} started_pid_after_app=${_nt_started_after_app} loaded_app=${_loaded_app} machine_014c=${_mach_014c} machine_zero=${_mach_zero} mscoree_hits=${_msc} dblslash_hits=${_dbl} mode=${APP_LOAD_MODE:-?} mmap32_child=1 mmap32_creators=cmd,start"
+  if [ -n "${_nt_app:-}" ] && [ "${_nt_started_after_app:-0}" = "0" ]; then
+    log "APP_LOAD create_fail=no_started_pid mode=${APP_LOAD_MODE:-?} (App NtCreateUserProcess seen; no CreateProcessInternalW started process after App — real A2 fail)"
+  fi
+  if [ -n "${_cp_app:-}" ] && [ "${_nt_started_after_app:-0}" = "0" ] && [ "${_loaded_app:-0}" = "0" ]; then
+    log "APP_LOAD create_fail=cpiw_no_start mode=${APP_LOAD_MODE:-?} (CreateProcessInternalW app seen; started_pid_after_app=0 loaded_app=0)"
+  fi
+  [ -n "${_cp_fail:-}" ] && log "APP_LOAD create_fail_near_app=[${_cp_fail}] mode=${APP_LOAD_MODE:-?}" || log "APP_LOAD create_fail_near_app=[] mode=${APP_LOAD_MODE:-?} (no warn/err/STATUS trail after App CPIW without started)"
   if [ -n "${_nt_mach:-}" ]; then
     log "APP_LOAD ntcreate_machine slice: $_nt_mach"
   else
@@ -3037,12 +3065,12 @@ app_load_dump_fail_sigs() {
   else
     log "APP_LOAD box64_rcfile=[] mode=${APP_LOAD_MODE:-?} (no Looking for [cmd|start|app.exe] / Applied settings in slice)"
   fi
-  # Prefer explicit NTSTATUS / GetLastError / warn:process near App create
-  _nst=$(printf '%s\n' "$_slice" | grep -iE 'warn:process|err:process|err:module|STATUS_INVALID_IMAGE|STATUS_DLL_NOT_FOUND|STATUS_ACCESS|c000007b|c0000135|c0000142|c0000005|invalid image|machine 014c|machine 0x14c|GetLastError[=: ]|[Nn][Tt][Ss]tatus|returning status|create_process failed|NtCreateUserProcess.*status' 2>/dev/null | head -10 | tr '\n' '|' || true)
+  # Prefer explicit NTSTATUS / GetLastError / warn:process near App create (exclude PE flags)
+  _nst=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -iE 'warn:process|err:process|err:module|err:start|STATUS_INVALID_IMAGE|STATUS_DLL_NOT_FOUND|STATUS_ACCESS|STATUS_|c000007b|c0000135|c0000142|c0000005|invalid image|machine 014c|machine 0x14c|GetLastError[=: ]|[Nn][Tt][Ss]tatus|returning status|create_process failed|NtCreateUserProcess.*status|Unknown option' 2>/dev/null | head -10 | tr '\n' '|' || true)
   [ -n "${_nst:-}" ] && log "APP_LOAD ntstatus_slice: $_nst" || log "APP_LOAD ntstatus_slice=[] mode=${APP_LOAD_MODE:-?}"
-  # 0.1.100: always stamp extracted GetLastError + NTSTATUS tokens (even if empty)
-  log "APP_LOAD GetLastError_tokens=[${_gle:-}] NTSTATUS_tokens=[${_ntstatus_raw:-}] mode=${APP_LOAD_MODE:-?} loaded_app=${_loaded_app} started_pid_after_app=${_nt_started_after_app}"
-  unset _hr _slice _first_pe _nt_app _nt_started _nt_started_app _nt_started_after_app _nt_mach _bt_w _bt_ret _msc _dbl _nst _wow64cpu _rc_apply _cp_app _mach_014c _mach_zero _loaded_app _gle _ntstatus_raw
+  # 0.1.101: always stamp GetLastError + NTSTATUS tokens (PE-flag-filtered; may still be empty)
+  log "APP_LOAD GetLastError_tokens=[${_gle:-}] NTSTATUS_tokens=[${_ntstatus_raw:-}] mode=${APP_LOAD_MODE:-?} loaded_app=${_loaded_app} started_pid_after_app=${_nt_started_after_app} create_fail_near_app=$([ -n "${_cp_fail:-}" ] && echo 1 || echo 0)"
+  unset _hr _slice _first_pe _nt_app _nt_started _nt_started_app _nt_started_after_app _nt_mach _bt_w _bt_ret _msc _dbl _nst _wow64cpu _rc_apply _cp_app _mach_014c _mach_zero _loaded_app _gle _ntstatus_raw _cp_fail
 }
 app_load_alive() {
   [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
@@ -3165,13 +3193,14 @@ app_load_spawn() {
       unset _stub _bt
       ;;
     wow64_unix_seed)
-      # 0.1.98 ladder-2: 64-bit start //exec //wait CreateProcess; NOEXEC kept.
+      # 0.1.101 P0-A: 64-bit start /exec /wait CreateProcess; NOEXEC kept.
+      # 100 dig: //exec → Unknown option (this Wine start wants single-slash /exec).
       # (primary is cmd //c; start is backup). Forward-slash path; never i386 MAIN.
       app_load_seed_gate || log "APP_SEED gate=FAIL mode=start_exec — still try"
       _w64_win='C:/App/app.exe'
       log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_exec64 win=$_w64_win seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
-      log "APP_LOAD cmdline: wine start //exec //wait $_w64_win (64-bit start CreateProcess; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept; //exec; machine=0x${PE_MACH:-?})"
-      stamp_wine_run "APP_LOAD cmdline: wine start //exec //wait $_w64_win (wow64 start_exec64 mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept)"
+      log "APP_LOAD cmdline: wine start /exec /wait $_w64_win (64-bit start CreateProcess; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept; /exec; machine=0x${PE_MACH:-?})"
+      stamp_wine_run "APP_LOAD cmdline: wine start /exec /wait $_w64_win (wow64 start_exec64 mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept)"
       app_load_mark_slice
       (
         # Keep WINELOADERNOEXEC=1 — do NOT unset (097 SIGILL)
@@ -3179,7 +3208,7 @@ app_load_spawn() {
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
         export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start //exec //wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /exec /wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
       ;;
     wow64_explorer)
@@ -3194,19 +3223,20 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$_w64_win" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     wow64_machine_i386)
-      # 0.1.99 optional ladder probe (NOT primary): start //machine i386 C:/App/app.exe
-      # Dig aid if [app.exe] MMAP32 alone does not yield started pid / Loaded.
-      app_load_seed_gate || log "APP_SEED gate=FAIL mode=machine_i386 — still try"
+      # 0.1.101 P0-A/B: start /machine x86 /wait — PROC_THREAD_ATTRIBUTE_MACHINE_TYPE
+      # path (Wine start.c). 100 dig: //machine + arch i386 → Unknown option; help
+      # wants /machine + arch=x86 (not i386). Case name kept for hang-ladder wiring.
+      app_load_seed_gate || log "APP_SEED gate=FAIL mode=machine_x86 — still try"
       _w64_win='C:/App/app.exe'
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_machine_i386 win=$_w64_win seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
-      log "APP_LOAD cmdline: wine start //machine i386 //wait $_w64_win (optional ladder probe; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
-      stamp_wine_run "APP_LOAD cmdline: wine start //machine i386 //wait $_w64_win (wow64 machine_i386 mmap32_child=1 mmap32_creators=cmd,start)"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_machine_x86 win=$_w64_win seed=${SEED:-} mmap32_parent=0 mmap32_child=1 mmap32_creators=cmd,start noexec=kept"
+      log "APP_LOAD cmdline: wine start /machine x86 /wait $_w64_win (machine-type attribute path; mmap32_parent=0; mmap32_child=1; mmap32_creators=cmd,start; WINELOADERNOEXEC kept)"
+      stamp_wine_run "APP_LOAD cmdline: wine start /machine x86 /wait $_w64_win (wow64 machine_x86 mmap32_child=1 mmap32_creators=cmd,start)"
       app_load_mark_slice
       (
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
         export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start //machine i386 //wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /machine x86 /wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
       ;;
     wow64_start)
@@ -3457,7 +3487,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
         fi
         if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
           if [ "$APP_LOAD_MODE" = "wow64_explorer" ]; then
-            log "APP_LOAD wow64 explorer quick-exit — trying optional start //machine i386 probe"
+            log "APP_LOAD wow64 explorer quick-exit — trying start /machine x86 probe"
             app_load_spawn wow64_machine_i386
             sleep 2
           fi

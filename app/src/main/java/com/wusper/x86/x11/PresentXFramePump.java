@@ -394,7 +394,9 @@ public final class PresentXFramePump extends Thread {
                 + " child=0x" + Integer.toHexString(lastChildId)
                 + " empty=" + emptyAfterReady
                 + " ready=" + NativeEngine.nativePresentReady()
-                + " egl=" + NativeEngine.nativePresentEglReady();
+                + " egl=" + NativeEngine.nativePresentEglReady()
+                + " lastRc=" + NativeEngine.nativePresentLastRc()
+                + " lockFail=" + NativeEngine.nativePresentLockFails();
     }
 
     public int presentOkCount() {

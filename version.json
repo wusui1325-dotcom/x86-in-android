@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.64",
-  "versionCode": 65,
-  "notes": "0.1.64: ready=window only (no fake presentOk); sticky PRESENT_DIAG; explorer then APP_LOAD; HUD bar on black"
+  "versionName": "0.1.65",
+  "versionCode": 66,
+  "notes": "0.1.65: Present CPU-first (fix EGL steal of ANativeWindow); APP_LOAD unix path (no start.exe/ShellExecute)"
 }

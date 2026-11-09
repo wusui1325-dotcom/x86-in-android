@@ -36,7 +36,9 @@ public:
     /** 0.1.64: ready = Surface attached (window_). AHB alone is NOT ready. */
     bool ready() const { return window_ != nullptr; }
     bool hasWindow() const { return window_ != nullptr; }
-    bool eglReady() const { return egl_ok_; }
+    bool eglReady() const { return egl_ok_ && egl_surf_ != EGL_NO_SURFACE; }
+    int lastPresentRc() const { return last_present_rc_; }
+    int lockFailCount() const { return lock_fail_count_; }
 
 private:
     PresentEngine() = default;
@@ -44,6 +46,8 @@ private:
     int postAhbToWindow();
     int ensureEgl();
     void destroyEgl();
+    /** 0.1.65: drop EGL window surface so ANativeWindow_lock can own the queue */
+    void releaseEglWindowSurfaceForCpu();
     int presentAhbGpu(AHardwareBuffer* ahb, int width, int height);
     int presentAhbCpu(AHardwareBuffer* ahb, int width, int height);
     int blitBgraToWindow(const uint8_t* bgra, int width, int height, int strideBytes);
@@ -54,6 +58,8 @@ private:
     int width_ = 0;
     int height_ = 0;
     int stride_ = 0;
+    int last_present_rc_ = 0;
+    int lock_fail_count_ = 0;
 
     EGLDisplay egl_dpy_ = EGL_NO_DISPLAY;
     EGLContext egl_ctx_ = EGL_NO_CONTEXT;
@@ -86,5 +92,9 @@ JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentStub
 JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentReady(
         JNIEnv*, jclass);
 JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentEglReady(
+        JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLastRc(
+        JNIEnv*, jclass);
+JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLockFails(
         JNIEnv*, jclass);
 }

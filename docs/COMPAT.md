@@ -1,3 +1,20 @@
+## 0.1.65 — Present CPU-first (fix EGL/ANativeWindow) + APP_LOAD unix
+
+**Smoke (0.1.64):** PRESENT_DIAG `nonBlack` rising but `ok=0 fail` rising, `egl=true`,
+`hud=0`. EGL window surface from attachSurface owned the buffer queue →
+`ANativeWindow_lock` failed for BGRA/CPU. APP_LOAD `C:/App/app.exe` → start.exe +
+ShellExecuteEx failed.
+
+**Fix:**
+- attachSurface: no ensureEgl; CPU path default
+- Before ANativeWindow_lock: release EGL window surface
+- presentAhb: GPU on demand; tear down EGL before CPU fallback
+- pathStats: lastRc / lockFail
+- APP_LOAD / APP_RELAUNCH: unix `/mnt/app/app.exe` only (seed C:/App kept)
+
+**Expect:** `PRESENT_DIAG … bgra>0 ok>0 lastRc=0 egl=false` (or ahb); overlay clears;
+`APP_LOAD cmdline: wine /mnt/app/app.exe`; no ShellExecuteEx.
+
 ## 0.1.64 — real Present (window-ready) + APP_LOAD + sticky diag
 
 **Smoke (0.1.63):** overlay 「等待客體」cleared but Surface pure black. Export had

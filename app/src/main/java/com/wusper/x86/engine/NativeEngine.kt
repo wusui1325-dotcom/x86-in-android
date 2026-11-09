@@ -62,4 +62,9 @@ object NativeEngine {
     external fun nativePresentReady(): Boolean
     @JvmStatic
     external fun nativePresentEglReady(): Boolean
+    /** Last present return code (0=posted). Lock fails when EGL held the Surface. */
+    @JvmStatic
+    external fun nativePresentLastRc(): Int
+    @JvmStatic
+    external fun nativePresentLockFails(): Int
 }

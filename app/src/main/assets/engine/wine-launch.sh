@@ -14,7 +14,8 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.64: explorer desktop alone then APP_LOAD C:/App/app.exe; APP_RELAUNCH; no fake Present.
+# 0.1.65: APP_LOAD unix path (no C:/ → start.exe/ShellExecute); Present CPU-first (no EGL steal).
+# 0.1.64: explorer desktop alone then APP_LOAD; APP_RELAUNCH; no fake Present.
 # 0.1.63: Present→Surface diag + overlay clear; APP_WIN=C:/App/app.exe (no BEL in logs).
 # 0.1.62: launch PE via explorer/C:/App (no start.exe); force +ole/+rpcss/+x11drv.
 # 0.1.61: RpcSs ready requires alive process + OLE/sc4 (no false sc READY).
@@ -25,7 +26,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.64
+WINE_LAUNCH_STAMP=0.1.65
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -2096,20 +2097,30 @@ log "WINE_START pid=$WINE_PID (explorer desktop; app via APP_LOAD)"
 
 APP_PID=""
 APP_RELAUNCHED=0
-if [ -n "$APP_WIN" ] || { [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; }; then
+APP_TARGET=""
+# 0.1.65: launch via UNIX path only. C:/App/app.exe → wine wraps start.exe → ShellExecuteEx failed.
+if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   SEED="$WINEPREFIX/drive_c/App/app.exe"
   if [ -f "$SEED" ]; then
-    log "APP_SEED path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ') mode=${APP_MODE:-?}"
+    log "APP_SEED path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ') mode=${APP_MODE:-?} (seed kept; launch uses unix)"
   else
-    log "APP_SEED MISSING path=$SEED — will try unix/fallback"
+    log "APP_SEED MISSING path=$SEED — launch still uses unix=$APP_UNIX"
   fi
-  # Let desktop / winex11 settle before launching PE
   sleep 3
-  APP_TARGET="${APP_WIN:-$APP_UNIX}"
-  log "APP_LOAD cmdline: $APP_TARGET"
+  APP_TARGET="$APP_UNIX"
+  # PE machine (optional diag): 0x8664=amd64, 0x14c=i386
+  PE_OFF=$(od -An -t u4 -N 4 -j 60 "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo 0)
+  PE_OFF=${PE_OFF:-0}
+  if [ "$PE_OFF" -gt 0 ] 2>/dev/null; then
+    PE_MACH=$(od -An -t x2 -N 2 -j $((PE_OFF + 4)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
+    log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} (8664=amd64 14c=i386)"
+  fi
+  log "APP_LOAD cmdline: wine $APP_TARGET (unix CreateProcess; no C:/App, no start.exe)"
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
   APP_PID=$!
   log "APP_LOAD pid=$APP_PID target=$APP_TARGET"
+elif [ -n "$APP_WIN" ]; then
+  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.64 ShellExecuteEx)"
 fi
 
 # X window tree diagnostic (best-effort) after a short settle
@@ -2129,8 +2140,11 @@ fi
 if grep -qE 'ShellExecuteEx failed|Application could not be started' /mnt/data/wine-run.out 2>/dev/null; then
   log "WARN: WINE_START app launch failure signature in wine-run.out"
 fi
-if grep -qE 'App\\app\.exe|App/app\.exe|/mnt/app/app\.exe|Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then
+if grep -qE '/mnt/app/app\.exe|Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then
   log "APP_LOAD fingerprint seen early"
+fi
+if grep -qE 'ShellExecuteEx failed|start\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+  log "WARN: APP_LOAD still hit start.exe/ShellExecute — should be unix path"
 fi
 # Early 32-bit detect (2s) — repair once rather than silent WINE_EXIT=1
 sleep 2
@@ -2149,10 +2163,10 @@ if grep -qE "is a 32-bit installation|not a valid registry file" /mnt/data/wine-
     "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
     WINE_PID=$!
     log "WINE_START retry-after-arch-repair pid=$WINE_PID (desktop only)"
-    if [ -n "${APP_WIN:-}" ] || { [ -n "${APP_UNIX:-}" ] && [ -f "$APP_UNIX" ]; }; then
+    if [ -n "${APP_UNIX:-}" ] && [ -f "$APP_UNIX" ]; then
       sleep 3
-      APP_TARGET="${APP_WIN:-$APP_UNIX}"
-      log "APP_LOAD retry cmdline: $APP_TARGET"
+      APP_TARGET="$APP_UNIX"
+      log "APP_LOAD retry cmdline: wine $APP_TARGET (unix)"
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       APP_PID=$!
       log "APP_LOAD retry pid=$APP_PID"
@@ -2198,10 +2212,14 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
        || grep -qE 'Loaded L".*app\.exe"' /mnt/data/wine-run.out 2>/dev/null; then APP_ALIVE=1; fi
     # 0.1.64: if app never Loaded by 15s, relaunch once
     if [ "${APP_RELAUNCHED:-0}" = "0" ] && [ -n "${APP_TARGET:-}" ] && [ "$HB" -ge 15 ]; then
-      if ! grep -qE 'Loaded L".*App[/\\]+app\.exe"|Loaded L"C:/App/app\.exe"|Loaded L"C:\\App\\app\.exe"' /mnt/data/wine-run.out 2>/dev/null \
-         && ! grep -qE 'App/app\.exe|C:/App/app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+      if ! grep -qE 'Loaded L".*(App[/\\]+app\.exe|/mnt/app/app\.exe)"' /mnt/data/wine-run.out 2>/dev/null \
+         && ! grep -qE '/mnt/app/app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+        # Also bail if ShellExecute path still somehow used
+        if grep -qE 'ShellExecuteEx failed' /mnt/data/wine-run.out 2>/dev/null; then
+          log "APP_RELAUNCH note: ShellExecuteEx still in log — ensure unix path"
+        fi
         APP_RELAUNCHED=1
-        log "APP_RELAUNCH once target=$APP_TARGET (no Loaded fingerprint by t=${HB}s)"
+        log "APP_RELAUNCH once target=$APP_TARGET (unix; no Loaded fingerprint by t=${HB}s)"
         "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
         APP_PID=$!
         log "APP_RELAUNCH pid=$APP_PID"

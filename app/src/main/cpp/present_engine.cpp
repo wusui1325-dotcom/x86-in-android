@@ -91,6 +91,22 @@ void PresentEngine::destroyEgl() {
     egl_ok_ = false;
 }
 
+void PresentEngine::releaseEglWindowSurfaceForCpu() {
+    if (egl_surf_ == EGL_NO_SURFACE && !egl_ok_) return;
+    if (egl_dpy_ != EGL_NO_DISPLAY) {
+        eglMakeCurrent(egl_dpy_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        if (egl_surf_ != EGL_NO_SURFACE) {
+            eglDestroySurface(egl_dpy_, egl_surf_);
+            egl_surf_ = EGL_NO_SURFACE;
+            LOGI("EGL window surface released for CPU ANativeWindow_lock");
+        }
+    }
+    // Keep display/context/shaders if any — but mark not ready until ensureEgl
+    // recreates window surface. Safer: full destroy so next GPU path is clean.
+    destroyEgl();
+    egl_tried_ = false; // allow ensureEgl again for AHB GPU path
+}
+
 int PresentEngine::ensureEgl() {
     if (egl_ok_) {
         // recreate window surface if needed
@@ -224,9 +240,10 @@ int PresentEngine::attachSurface(JNIEnv* env, jobject surface) {
         ANativeWindow_setBuffersGeometry(
                 window_, width_, height_, WINDOW_FORMAT_RGBA_8888);
     }
-    // try EGL once; failure leaves CPU path
-    ensureEgl();
-    LOGI("Surface attached egl=%d", egl_ok_ ? 1 : 0);
+    // 0.1.65: do NOT create EGL window surface here — it owns the buffer queue
+    // and makes ANativeWindow_lock fail for BGRA/CPU present. GPU path creates
+    // EGL on demand in presentAhb / ensureEgl.
+    LOGI("Surface attached cpu-first (egl deferred)");
     return 0;
 }
 
@@ -256,26 +273,40 @@ void PresentEngine::destroy() {
 }
 
 int PresentEngine::postAhbToWindow() {
-    if (!window_ || !ahb_) return -EINVAL;
-    // Prefer GPU path for our own RGBA AHB
-    if (ensureEgl() == 0) {
+    if (!window_ || !ahb_) {
+        last_present_rc_ = -EINVAL;
+        return -EINVAL;
+    }
+    // 0.1.65: CPU path first — do not ensureEgl here (would steal buffer queue).
+    // Optional GPU: only if already have window surface from presentAhb.
+    if (egl_ok_ && egl_surf_ != EGL_NO_SURFACE) {
         int rc = presentAhbGpu(ahb_, width_, height_);
-        if (rc == 0) return 0;
+        if (rc == 0) {
+            last_present_rc_ = 0;
+            return 0;
+        }
+        releaseEglWindowSurfaceForCpu();
+    } else {
+        releaseEglWindowSurfaceForCpu();
     }
     void* ahbPixels = nullptr;
     int rc = AHardwareBuffer_lock(
             ahb_, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &ahbPixels);
     if (rc != 0 || !ahbPixels) {
         LOGE("AHB lock read failed rc=%d", rc);
-        return rc != 0 ? rc : -1;
+        last_present_rc_ = rc != 0 ? rc : -1;
+        return last_present_rc_;
     }
     ANativeWindow_setBuffersGeometry(
             window_, width_, height_, WINDOW_FORMAT_RGBA_8888);
     ANativeWindow_Buffer winBuf{};
-    if (ANativeWindow_lock(window_, &winBuf, nullptr) != 0) {
+    int lockRc = ANativeWindow_lock(window_, &winBuf, nullptr);
+    if (lockRc != 0) {
         AHardwareBuffer_unlock(ahb_, nullptr);
-        LOGE("ANativeWindow_lock failed");
-        return -1;
+        lock_fail_count_++;
+        last_present_rc_ = lockRc;
+        LOGE("ANativeWindow_lock(AHB-CPU) failed rc=%d fails=%d", lockRc, lock_fail_count_);
+        return lockRc;
     }
     AHardwareBuffer_Desc d{};
     AHardwareBuffer_describe(ahb_, &d);
@@ -290,6 +321,7 @@ int PresentEngine::postAhbToWindow() {
     }
     AHardwareBuffer_unlock(ahb_, nullptr);
     ANativeWindow_unlockAndPost(window_);
+    last_present_rc_ = 0;
     return 0;
 }
 
@@ -375,11 +407,15 @@ int PresentEngine::presentAhbCpu(AHardwareBuffer* ahb, int width, int height) {
     if (isBgra) {
         out = blitBgraToWindow(static_cast<const uint8_t*>(pixels), width, height, srcStride);
     } else {
+        releaseEglWindowSurfaceForCpu();
         ANativeWindow_setBuffersGeometry(window_, width, height, WINDOW_FORMAT_RGBA_8888);
         ANativeWindow_Buffer winBuf{};
-        if (ANativeWindow_lock(window_, &winBuf, nullptr) != 0) {
+        int lockRc = ANativeWindow_lock(window_, &winBuf, nullptr);
+        if (lockRc != 0) {
             AHardwareBuffer_unlock(ahb, nullptr);
-            return -1;
+            lock_fail_count_++;
+            LOGE("ANativeWindow_lock(AHB-RGBA) failed rc=%d", lockRc);
+            return lockRc;
         }
         auto* dst = static_cast<uint8_t*>(winBuf.bits);
         const auto* src = static_cast<const uint8_t*>(pixels);
@@ -398,10 +434,21 @@ int PresentEngine::presentAhbCpu(AHardwareBuffer* ahb, int width, int height) {
 
 int PresentEngine::blitBgraToWindow(
         const uint8_t* bgra, int width, int height, int strideBytes) {
-    if (!window_ || !bgra || width <= 0 || height <= 0) return -EINVAL;
+    if (!window_ || !bgra || width <= 0 || height <= 0) {
+        last_present_rc_ = -EINVAL;
+        return -EINVAL;
+    }
+    // EGL window surface and ANativeWindow_lock cannot share the queue
+    releaseEglWindowSurfaceForCpu();
     ANativeWindow_setBuffersGeometry(window_, width, height, WINDOW_FORMAT_RGBA_8888);
     ANativeWindow_Buffer winBuf{};
-    if (ANativeWindow_lock(window_, &winBuf, nullptr) != 0) return -1;
+    int lockRc = ANativeWindow_lock(window_, &winBuf, nullptr);
+    if (lockRc != 0) {
+        lock_fail_count_++;
+        last_present_rc_ = lockRc != 0 ? lockRc : -1;
+        LOGE("ANativeWindow_lock(BGRA) failed rc=%d fails=%d", lockRc, lock_fail_count_);
+        return last_present_rc_;
+    }
     const int srcStride = strideBytes > 0 ? strideBytes : width * 4;
     const int dstStride = winBuf.stride * 4;
     auto* dst = static_cast<uint8_t*>(winBuf.bits);
@@ -419,6 +466,7 @@ int PresentEngine::blitBgraToWindow(
         }
     }
     ANativeWindow_unlockAndPost(window_);
+    last_present_rc_ = 0;
     return 0;
 }
 
@@ -431,11 +479,19 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
     }
     // 0.1.64: never fake-success without Surface
     if (!window_) return -EINVAL;
+    // Try GPU on demand; on failure release EGL window surface before CPU lock
     if (ensureEgl() == 0) {
         int rc = presentAhbGpu(external, width, height);
-        if (rc == 0) return 0;
+        if (rc == 0) {
+            last_present_rc_ = 0;
+            return 0;
+        }
+        LOGW("presentAhbGpu failed rc=%d — falling back to CPU", rc);
     }
-    return presentAhbCpu(external, width, height);
+    releaseEglWindowSurfaceForCpu();
+    int rc = presentAhbCpu(external, width, height);
+    last_present_rc_ = rc;
+    return rc;
 }
 
 int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int strideBytes) {
@@ -471,7 +527,9 @@ int PresentEngine::presentBgra(const uint8_t* bgra, int width, int height, int s
         return 1; // staged only — not posted to Surface
     }
     // Fast path: one pass into window (no intermediate AHB write)
-    return blitBgraToWindow(bgra, width, height, strideBytes);
+    int rc = blitBgraToWindow(bgra, width, height, strideBytes);
+    last_present_rc_ = rc;
+    return rc;
 }
 
 int PresentEngine::presentRgba(const uint8_t* rgba, int width, int height, int strideBytes) {
@@ -603,4 +661,14 @@ Java_com_wusper_x86_engine_NativeEngine_nativePresentReady(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_wusper_x86_engine_NativeEngine_nativePresentEglReady(JNIEnv*, jclass) {
     return PresentEngine::instance().eglReady() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_wusper_x86_engine_NativeEngine_nativePresentLastRc(JNIEnv*, jclass) {
+    return PresentEngine::instance().lastPresentRc();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_wusper_x86_engine_NativeEngine_nativePresentLockFails(JNIEnv*, jclass) {
+    return PresentEngine::instance().lockFailCount();
 }

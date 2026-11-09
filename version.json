@@ -1,6 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.92",
-  "versionCode": 93,
-  "notes": "0.1.92: P0 orphan-reap whitelist + fail_sig slice + fail_hr + start /exec; P1 RPCSS crush; UX 新建工作區／裝置exe全掃／＋精確匯入; DXVK x32 defer"
+  "versionName": "0.1.93",
+  "versionCode": 94,
+  "notes": "0.1.93: P0 bare wine CreateProcess (drop start /exec) + wow64_unix_seed; RPCSS wait sc RUNNING (no early TERM on /proc appear); fail_hr no tid; overlay after Loaded/nonBlackGuest; GIT_SHA tipSha bake-after-commit; DXVK x32 defer",
+  "tipSha": ""
 }

@@ -39,13 +39,21 @@ android {
         targetSdk = 35
         versionCode = appVersionCode
         versionName = appVersionName
-        val gitSha = runCatching {
-            ProcessBuilder("git", "rev-parse", "--short", "HEAD")
-                .directory(rootProject.projectDir)
-                .redirectErrorStream(true)
-                .start()
-                .inputStream.bufferedReader().readText().trim()
-        }.getOrDefault("unknown").ifBlank { "unknown" }
+        // 0.1.93: prefer tipSha from version.json / GIT_SHA_OVERRIDE (bake-after-commit),
+        // else git rev-parse — avoids 092 stale BuildConfig when assemble ran before commit.
+        val tipShaFromJson = Regex("\"tipSha\"\\s*:\\s*\"([^\"]+)\"")
+            .find(versionJson)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        val gitShaOverride = System.getenv("GIT_SHA_OVERRIDE")?.trim().orEmpty()
+        val gitSha = when {
+            gitShaOverride.isNotBlank() -> gitShaOverride
+            tipShaFromJson.isNotBlank() -> tipShaFromJson
+            else -> runCatching {
+                ProcessBuilder("git", "-C", rootProject.projectDir.absolutePath, "rev-parse", "--short", "HEAD")
+                    .redirectErrorStream(true)
+                    .start()
+                    .inputStream.bufferedReader().readText().trim()
+            }.getOrDefault("unknown").ifBlank { "unknown" }
+        }
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
         ndk {
             abiFilters += listOf("arm64-v8a")

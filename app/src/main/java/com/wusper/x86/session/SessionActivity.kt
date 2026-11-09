@@ -781,6 +781,8 @@ class SessionActivity : ComponentActivity() {
                         }
                         // 0.1.64: ready=true means window_ attached; only then honor presentOk
                         // 0.1.90: do NOT clear overlay on explorer desktopOnly (masks missing-Loaded)
+                        // 0.1.93: require nonBlackGuest>0 OR strict Loaded fingerprint
+                        // (092 cleared empty blue desk when desktopOnly flipped 0 without app)
                         val ready = "ready=true" in stats
                         val deskOnly = Regex("""\bdesktopOnly=(\d+)""").find(stats)
                             ?.groupValues?.getOrNull(1) == "1"
@@ -788,9 +790,25 @@ class SessionActivity : ComponentActivity() {
                         if (!guestPresented && ready && !deskOnly) {
                             val okMatch = Regex("""\bok=(\d+)""").find(stats)
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                            if (presented || ok > 0) {
+                            val nbg = Regex("""\bnonBlackGuest=(\d+)""").find(stats)
+                                ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+                            val loadedHint =
+                                ("APP_LOAD fingerprint seen" in logText) ||
+                                    (
+                                        ("Loaded L\"" in logText) &&
+                                            (
+                                                ("App\\app.exe" in logText) ||
+                                                    ("App/app.exe" in logText) ||
+                                                    Regex("""Loaded L".*[\\/]App[\\/]app\.exe""")
+                                                        .containsMatchIn(logText)
+                                                )
+                                        )
+                            if ((presented || ok > 0) && (nbg > 0 || loadedHint)) {
                                 guestPresented = true
-                                appendSticky("PRESENT_DIAG guestPresented=true ok=$ok desktopOnly=0 (overlay clear)")
+                                appendSticky(
+                                    "PRESENT_DIAG guestPresented=true ok=$ok nonBlackGuest=$nbg " +
+                                        "loadedHint=${if (loadedHint) 1 else 0} desktopOnly=0 (overlay clear)"
+                                )
                             }
                         }
                     }

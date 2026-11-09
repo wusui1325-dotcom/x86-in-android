@@ -1,3 +1,28 @@
+## 0.1.100 — A2 expand MMAP32 to NtCreate creators (cmd/start)
+
+**Smoke (0.1.99 mainline):** A2 **config PASS** — `mmap32_child=1` /
+`mmap32_parent=0` / `NORCFILES=0` / `BOX64_RCFILE` / `noexec=kept` / **0× SIGILL**.
+A2 **outcome FAIL**: every App `NtCreateUserProcess` TRACE `machine 0`, never
+`started process pid`, **0× Loaded App**. `[app.exe]` RCFILE never applies
+because App never becomes a running Box64 process; creator cmd still env
+`MMAP32=0`.
+
+**P0:** Expand box64rc `BOX64_MMAP32=1` from only `[app.exe]` to **creators**
+`[cmd.exe]` + `[start.exe]` (ladder `direct_cmd64` / `start_exec64` /
+`machine_i386`). Keep `[app.exe]` + `/wow64cpu.dll` sections. **Parent
+wine64 / explorer stay env `BOX64_MMAP32=0`** — no `[explorer.exe]` section;
+never parent `export BOX64_MMAP32=1` (096 SIGILL). KEEP WINELOADERNOEXEC.
+Stamp `mmap32_creators=cmd,start` / `mmap32_child=1` / `mmap32_parent=0` /
+`noexec=kept`. Stronger dig: always stamp `machine_014c` / `machine_zero` /
+`loaded_app` / `GetLastError_tokens` / `NTSTATUS_tokens` / creator rcfile
+apply; early dig dump at HB=8/12 when `path_seen=1` && no Loaded. Never i386
+MAIN; no hot bake; DXVK x32 deferred until Loaded.
+
+**Expect:** creator rcfile apply (`Looking for [cmd.exe]`); App NtCreate →
+`machine 0x014c` or explicit NTSTATUS; `started process pid` +
+`Loaded L"C:\App\app.exe"`; then non-blue. If still `machine 0` — dig
+NTSTATUS/GetLastError stamps decide next knife.
+
 ## 0.1.99 — A2 child-only MMAP32 (box64rc [app.exe])
 
 **Smoke (0.1.98 mainline):** A1 PASS — `noexec=kept` / `mmap32_parent=0` /

@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.99",
-  "versionCode": 100,
-  "notes": "0.1.99: P0 A2 child-only BOX64_MMAP32 via BOX64_RCFILE [app.exe] (mmap32_child=1); parent mmap32_parent=0; NORCFILES=0; KEEP WINELOADERNOEXEC; stronger App NtCreate dig; optional ladder start //machine i386; never parent MMAP32=1; never i386 MAIN; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "8caa06e"
+  "versionName": "0.1.100",
+  "versionCode": 101,
+  "notes": "0.1.100: P0 expand child-only MMAP32 to NtCreate creators [cmd.exe]/[start.exe] (keep [app.exe]/wow64cpu); mmap32_creators=cmd,start; mmap32_parent=0; noexec=kept; NEVER parent MMAP32=1 / NEVER [explorer.exe]; stronger dig machine_014c/NTSTATUS/GetLastError/Loaded/early_dig; never i386 MAIN; no hot bake; DXVK x32 defer; GIT_SHA bake-after-commit",
+  "tipSha": "PENDING"
 }

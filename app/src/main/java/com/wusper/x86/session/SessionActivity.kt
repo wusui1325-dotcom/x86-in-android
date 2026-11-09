@@ -1022,6 +1022,7 @@ class SessionActivity : ComponentActivity() {
         private val KEY_LOG_PATTERNS = listOf(
             "FATAL:",
             "WINE_LAUNCH_STAMP",
+            "NTDLL_ANON_PE",
             "HOLEFIT",
             "PREFIX_EXEC",
             "noexec",

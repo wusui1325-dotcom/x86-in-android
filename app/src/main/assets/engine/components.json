@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.47-box64-wine64k-holefit-peexec-peok",
+  "runtimeId": "wine-gpustack-v0.1.49-box64-wine64k-holefit-anonpe",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.47: PREFIX_EXEC require pe mmap(PROT_EXEC) after bind (pe_ok=no → FATAL); re-verify nested tmpfs sticky + mountgrep; keep .pe-exec durable + mid>=0x1200000"
+  "notes": "0.1.49: NTDLL_ANON_PE binary-patch Kron4ek ntdll.so force removable/anon PE (Android W^X); wine_wx diagnostic; keep pe_ok FATAL + plain-dir scratch"
 }

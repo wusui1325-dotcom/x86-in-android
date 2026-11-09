@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.48",
-  "versionCode": 49,
-  "notes": "0.1.48: PREFIX_EXEC plain rootfs scratch (no guest tmpfs; PRoot mount vanish fix); keep pe_ok FATAL; About GIT_SHA=tip"
+  "versionName": "0.1.49",
+  "versionCode": 50,
+  "notes": "0.1.49: NTDLL_ANON_PE — force Wine PE anon/pread (fix pe_ok vs W^X mprotect noexec); keep plain-dir scratch + pe_ok FATAL"
 }

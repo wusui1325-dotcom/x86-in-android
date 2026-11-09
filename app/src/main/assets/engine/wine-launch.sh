@@ -13,10 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.48: PREFIX_EXEC scratch = plain rootfs dir (NO guest mount -t tmpfs).
-# PRoot mount -t tmpfs claims success then path ENOENT vanishes — never rely on it.
-# Scratch under /opt|/var (same FS as pe_ok /opt/wine); bind over sys32/pe. Keep pe_ok FATAL.
-WINE_LAUNCH_STAMP=0.1.48
+# 0.1.49: pe_ok mmap(RX) was false green vs Wine RW→mprotect(RX) (Android W^X).
+# Patch Kron4ek ntdll.so virtual_map_image to force removable/anon pread (GameNative).
+# Keep plain-dir scratch + pe_ok FATAL; require NTDLL_ANON_PE before Wine.
+WINE_LAUNCH_STAMP=0.1.49
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -298,6 +298,102 @@ PY
   fi
   return 1
 }
+
+# Wine-like diagnostic: file MAP_PRIVATE RW then mprotect RX (Android W^X often denies).
+probe_pe_wine_wx() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$f" <<'PY'
+import os, sys, ctypes
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY)
+libc = ctypes.CDLL(None, use_errno=True)
+try:
+    sz = os.fstat(fd).st_size
+    if sz <= 0:
+        sys.exit(1)
+    length = min(65536, sz) & ~0xfff
+    if length < 4096:
+        length = min(sz, 4096)
+    PROT_READ, PROT_WRITE, PROT_EXEC = 1, 2, 4
+    MAP_PRIVATE = 2
+    libc.mmap.restype = ctypes.c_void_p
+    addr = libc.mmap(None, length, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0)
+    bad = addr is None or addr == ctypes.c_void_p(-1).value or addr == 0xffffffffffffffff
+    if bad:
+        sys.stderr.write("probe_pe_wine_wx: mmap RW failed errno=%s\n" % ctypes.get_errno())
+        sys.exit(1)
+    rc = libc.mprotect(ctypes.c_void_p(addr), length, PROT_READ | PROT_EXEC)
+    libc.munmap(ctypes.c_void_p(addr), length)
+    if rc != 0:
+        sys.stderr.write("probe_pe_wine_wx: mprotect RX failed errno=%s\n" % ctypes.get_errno())
+        sys.exit(1)
+except Exception as e:
+    sys.stderr.write("probe_pe_wine_wx: %s\n" % e)
+    sys.exit(1)
+finally:
+    os.close(fd)
+sys.exit(0)
+PY
+    return $?
+  fi
+  return 1
+}
+
+# Kron4ek wine-11.21 ntdll.so virtual_map_image @ 0x7a7a8: force removable=1 → pread anon.
+# ORIG mov removable; mov ptr; test; jne pread  →  NEW movl $1; mov ptr; jmp pread; nop
+patch_ntdll_anon_pe() {
+  local ntdll=/opt/wine/lib/wine/x86_64-unix/ntdll.so
+  local marker=/opt/wine/lib/wine/x86_64-unix/.ntdll-anon-pe-0.1.49
+  local off=501672
+  local orig_hex=448b6c24704d8b67204585ed0f8596000000
+  local new_hex=c7442470010000004d8b6720e99700000090
+  if [ ! -f "$ntdll" ]; then
+    log "FATAL: NTDLL_ANON_PE missing $ntdll"
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "FATAL: NTDLL_ANON_PE needs python3"
+    exit 1
+  fi
+  local result
+  result=$(python3 - "$ntdll" "$off" "$orig_hex" "$new_hex" "$marker" <<'PY'
+import sys, os
+from pathlib import Path
+path = Path(sys.argv[1])
+off = int(sys.argv[2])
+orig = bytes.fromhex(sys.argv[3])
+new = bytes.fromhex(sys.argv[4])
+marker = Path(sys.argv[5])
+data = bytearray(path.read_bytes())
+chunk = bytes(data[off:off + len(orig)])
+if chunk == new:
+    marker.write_text("anon-pe=1 stamp=0.1.49 already\n")
+    print("already")
+    sys.exit(0)
+if chunk != orig:
+    sys.stderr.write("unexpected bytes at 0x%x got=%s\n" % (off, chunk.hex()))
+    sys.exit(2)
+bak = path.with_suffix(".so.pre-anon-pe")
+if not bak.exists():
+    bak.write_bytes(path.read_bytes())
+data[off:off + len(new)] = new
+tmp = path.with_suffix(".so.anon-pe-tmp")
+tmp.write_bytes(data)
+os.replace(str(tmp), str(path))
+marker.write_text("anon-pe=1 stamp=0.1.49 off=0x%x\n" % off)
+print("patched")
+sys.exit(0)
+PY
+) || {
+    log "FATAL: NTDLL_ANON_PE patch failed path=$ntdll"
+    exit 1
+  }
+  log "NTDLL_ANON_PE ok mode=$result path=$ntdll off=0x7a7a8 (force removable/anon PE)"
+  return 0
+}
+
 
 ensure_prefix_exec() {
   local p="${WINEPREFIX:-/home/xuser/.wine}"
@@ -625,7 +721,9 @@ ensure_prefix_exec() {
   # Require pe PROT_EXEC — pe_ok=no must NEVER print PREFIX_EXEC ok (false green)
   if pe_ok; then pe_state=yes; else pe_state=no; fi
   if sys32_ok; then sys32_state=yes; else sys32_state=no; fi
-  log "PREFIX_EXEC post-bind probe pe_ok=$pe_state sys32_ok=$sys32_state scratch=$scratch pe=$pe_ntdll sys32=$sys32/ntdll.dll"
+  if probe_pe_wine_wx "$sys32/ntdll.dll" 2>/dev/null; then wine_wx=yes; else wine_wx=no; fi
+  log "PREFIX_EXEC post-bind probe pe_ok=$pe_state sys32_ok=$sys32_state wine_wx=$wine_wx scratch=$scratch pe=$pe_ntdll sys32=$sys32/ntdll.dll"
+  log "PREFIX_EXEC note wine_wx=no expected on Android W^X; NTDLL_ANON_PE makes Wine use anon/pread"
 
   if [ "$pe_state" = "yes" ] && [ "$sys32_state" = "yes" ]; then
     log "PREFIX_EXEC ok mode=scratch+bind sys32=$sys32/ntdll.dll pe_ok=yes scratch=$scratch"
@@ -652,6 +750,8 @@ ensure_prefix_exec() {
   log_diag final-scratch "$scratch"
   exit 1
 }
+
+patch_ntdll_anon_pe
 
 ensure_prefix_exec
 

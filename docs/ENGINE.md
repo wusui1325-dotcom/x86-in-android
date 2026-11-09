@@ -1,3 +1,20 @@
+## 0.1.49 — NTDLL_ANON_PE (Wine W^X / false pe_ok green)
+
+**Bug (0.1.48 smoke):** `pe_ok=yes` / `PREFIX_EXEC ok` / HOLEFIT ok, but Wine still
+`map_image_into_view … ntdll.dll … noexec filesystem?` then stack overflow on mid.
+Root cause: `probe_pe_exec` does file `mmap(PROT_READ|PROT_EXEC)` (allowed). Stock Wine
+maps PE **RW then mprotect→RX** on file-backed pages; Android W^X/execmod denies that.
+Bind/scratch cannot fix mount-flag inheritance under PRoot for this path.
+
+**Fix:** Binary-patch Kron4ek `x86_64-unix/ntdll.so` `virtual_map_image` @ `0x7a7a8` to
+force `removable=1` and jump to the existing **pread→anonymous** path (GameNative
+`force_anon` equivalent). Then `mprotect(PROT_EXEC)` on anon pages works (same as Box64
+dynarec). Log `NTDLL_ANON_PE ok`; add `wine_wx` diagnostic (expected `no` on filesDir).
+Keep plain-dir scratch + `pe_ok` FATAL.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.49` → `NTDLL_ANON_PE ok` → `PREFIX_EXEC ok … pe_ok=yes`
+→ `HOLEFIT ok addr≥0x1200000` → **no** `map_image … noexec` → `WINE_EXIT=0` (or next unmuted err).
+
 ## 0.1.48 — PREFIX_EXEC plain rootfs scratch (no guest tmpfs)
 
 **Bug (0.1.47 smoke):** `tmpfs mount claimed` on `.wine/.pe-exec` / `.wine-pe-exec` / `/tmp/.wine-pe-exec`

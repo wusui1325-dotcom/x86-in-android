@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.78",
-  "versionCode": 79,
-  "notes": "0.1.78: Loaded-but-no-HWND — sticky .x86-x11-ready (desk cannot wipe app hwnd); guest .x86-nohwnd-req → host force map+raise + nohwnd_scan=; APP_HWND_WAIT backoff; desk-steal-block"
+  "versionName": "0.1.79",
+  "versionCode": 80,
+  "notes": "0.1.79: CUI/CreateWindow — seed wineconsole.exe; PE subsystem=3 → wineconsole --backend=user; after nohwnd scan=none classify APP_CREATEWINDOW_MISS + one CUI relaunch; keep 078 sticky/nohwnd"
 }

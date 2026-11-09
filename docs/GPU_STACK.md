@@ -125,6 +125,9 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.79 CUI / CreateWindow：** seed `wineconsole.exe`; PE subsystem=3 →
+  `wineconsole --backend=user`; `APP_CREATEWINDOW_MISS reason=` + one CUI relaunch after
+  `nohwnd_scan=none`; `X86_CUI_WRAP=0|1|auto`.
 - **0.1.78 Loaded-but-no-HWND map：** sticky `.x86-x11-ready` (desk cannot wipe app hwnd);
   guest `.x86-nohwnd-req` → host force map+raise + `nohwnd_scan=`; APP_HWND_WAIT backoff;
   desk-steal-block. Keep 077 fingerprint / 076 Smart TU_GMEM / 075 map+raise.

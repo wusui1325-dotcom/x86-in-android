@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.79: CUI / CreateWindow — seed wineconsole.exe; PE subsystem=3 →
+# wineconsole --backend=user (HWND); after nohwnd scan=none classify + one CUI relaunch;
+# APP_CREATEWINDOW_MISS reason=. Keep 078 sticky/nohwnd / 077 fingerprint / 076 TU_GMEM.
 # 0.1.78: Loaded-but-no-HWND — sticky ready marker (desk cannot wipe app hwnd);
 # guest .x86-nohwnd-req → host force map+raise + nohwnd_scan=; APP_HWND_WAIT backoff;
 # desk-steal-block. Keep 077 fingerprint / 076 Smart TU_GMEM / 075 map+raise.
@@ -49,7 +52,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.78
+WINE_LAUNCH_STAMP=0.1.79
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -141,7 +144,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.78 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.79 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -836,7 +839,7 @@ ensure_prefix_exec() {
   # MountMgr needs drivers\\mountmgr.sys — GetBinaryTypeW err 2 without it)
   # winedevice.exe hosts kernel drivers (MountMgr); without it StartService → err 2
   for d in wineboot.exe start.exe services.exe explorer.exe rundll32.exe \
-           rpcss.exe svchost.exe plugplay.exe conhost.exe cmd.exe sc.exe \
+           rpcss.exe svchost.exe plugplay.exe conhost.exe wineconsole.exe cmd.exe sc.exe \
            msiexec.exe reg.exe regsvr32.exe rundll32.exe lsass.exe \
            winedevice.exe ntoskrnl.exe \
            winemenubuilder.exe winebrowser.exe; do
@@ -2465,7 +2468,7 @@ app_load_wait_rc() {
   return 1
 }
 app_load_spawn() {
-  # $1 = mode tag: absolute|relative|start_unix
+  # $1 = mode tag: absolute|relative|start_unix|wineconsole
   APP_LOAD_MODE="$1"
   case "$1" in
     absolute)
@@ -2486,13 +2489,50 @@ app_load_spawn() {
       log "APP_LOAD retry: wine start /unix $APP_TARGET (unix start; no C:/App)"
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       ;;
+    wineconsole)
+      # 0.1.79: user-backend console → CreateWindow HWND Present can see (CUI)
+      log "APP_LOAD cmdline: wine wineconsole --backend=user $APP_TARGET (CUI wrap; HWND)"
+      log "APP_CUI_WRAP=wineconsole backend=user target=$APP_TARGET"
+      APP_CUI_WRAPPED=1
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineconsole --backend=user "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+      ;;
     *)
       log "APP_LOAD_FATAL unknown mode=$1"
       return 1
       ;;
   esac
   APP_PID=$!
-  log "APP_LOAD pid=$APP_PID mode=$APP_LOAD_MODE target=$APP_TARGET"
+  log "APP_LOAD pid=$APP_PID mode=$APP_LOAD_MODE target=$APP_TARGET cui_wrapped=${APP_CUI_WRAPPED:-0}"
+}
+
+# 0.1.79: classify why Loaded never produced CreateWindow / HWND
+app_load_classify_nocreate() {
+  APP_MISS_REASON=no_createwindow
+  if [ "${PE_SUB:-}" = "3" ] || [ "${PE_SUB_NAME:-}" = "CUI" ]; then
+    if [ "${APP_CUI_WRAPPED:-0}" = "1" ]; then
+      APP_MISS_REASON=cui_wrapped_no_hwnd
+    else
+      APP_MISS_REASON=cui
+    fi
+  fi
+  if [ -f /mnt/data/wine-run.out ]; then
+    if grep -qEi 'MessageBox[AW]?|TaskDialog' /mnt/data/wine-run.out 2>/dev/null; then
+      APP_MISS_REASON=messagebox
+    elif grep -qEi 'err:module:|c0000135|STATUS_DLL_NOT_FOUND|Cannot load|Module not found|msvcp|vcruntime|ucrtbase' /mnt/data/wine-run.out 2>/dev/null; then
+      APP_MISS_REASON=missing_dll
+    elif grep -qEi 'Application could not be started|ShellExecuteEx failed|entry point' /mnt/data/wine-run.out 2>/dev/null; then
+      APP_MISS_REASON=launch_fail
+    fi
+  fi
+  if [ -n "${APP_PID:-}" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+    # Prefer early_exit unless a stronger signature already set
+    case "$APP_MISS_REASON" in
+      no_createwindow|cui|cui_wrapped_no_hwnd) APP_MISS_REASON=early_exit ;;
+    esac
+  fi
+  _alive=0
+  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then _alive=1; fi
+  log "APP_CREATEWINDOW_MISS reason=$APP_MISS_REASON pe_sub=${PE_SUB:-?} (${PE_SUB_NAME:-?}) cui_wrapped=${APP_CUI_WRAPPED:-0} alive=${_alive} target=${APP_TARGET:-}"
 }
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   SEED="$WINEPREFIX/drive_c/App/app.exe"
@@ -2526,7 +2566,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       *) log "APP_PE WARN unexpected machine=0x${PE_MACH} — CreateProcess may fail (c000007b)" ;;
     esac
     if [ "${PE_SUB}" = "3" ]; then
-      log "APP_PE WARN subsystem=3 CUI — no HWND expected (console); Present may stay desktopOnly"
+      log "APP_PE WARN subsystem=3 CUI — bare wine has no HWND; will wrap wineconsole --backend=user unless X86_CUI_WRAP=0"
     fi
   else
     log "APP_PE WARN pe_off invalid path=$APP_TARGET — not a PE?"
@@ -2541,36 +2581,67 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     log "APP_LOAD WARN /proc/mounts hints noexec near /mnt/app — PE map may fail"
   fi
 
-  app_load_spawn absolute
+  # 0.1.79: decide CUI wrap (default on for subsystem=3; X86_CUI_WRAP=0/1 override)
+  APP_CUI_WRAPPED=0
+  APP_SPAWN_MODE=absolute
+  _cui_wrap_mode="${X86_CUI_WRAP:-auto}"
+  case "$_cui_wrap_mode" in
+    0|off|no|false|FALSE) _do_cui_wrap=0 ;;
+    1|on|yes|true|TRUE|wineconsole) _do_cui_wrap=1 ;;
+    *)
+      if [ "${PE_SUB}" = "3" ]; then _do_cui_wrap=1; else _do_cui_wrap=0; fi
+      ;;
+  esac
+  if [ "$_do_cui_wrap" = "1" ]; then
+    APP_SPAWN_MODE=wineconsole
+    log "APP_CUI_WRAP decide=yes pe_sub=${PE_SUB:-?} X86_CUI_WRAP=${_cui_wrap_mode} mode=wineconsole"
+  else
+    log "APP_CUI_WRAP decide=no pe_sub=${PE_SUB:-?} X86_CUI_WRAP=${_cui_wrap_mode}"
+  fi
+
+  app_load_spawn "$APP_SPAWN_MODE"
   sleep 2
   if app_load_wait_rc; then
     log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE target=$APP_TARGET"
     log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.67)"
     app_load_dump_fail_sigs
-    # step2: relative
-    APP_DIR=$(dirname "$APP_TARGET")
-    APP_BASE=$(basename "$APP_TARGET")
-    if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
-      app_load_spawn relative
+    # If wineconsole itself quick-exited (missing PE / bad backend), clear wrap so later
+    # paths / classify stay accurate; fall through bare absolute→relative→start_unix.
+    if [ "$APP_LOAD_MODE" = "wineconsole" ]; then
+      APP_CUI_WRAPPED=0
+      log "APP_CUI_WRAP WARN wineconsole quick-exit — falling back to bare unix spawn"
+      app_load_spawn absolute
       sleep 2
-      if app_load_wait_rc; then
-        log "APP_LOAD unix failed: relative exited quickly pid=$APP_PID rc=${APP_RC:-?}"
-        app_load_dump_fail_sigs
-        # step3: start /unix
-        app_load_spawn start_unix
+      if ! app_load_wait_rc; then
+        log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE (after wineconsole fail)"
+      fi
+    fi
+    if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
+      # step2: relative
+      APP_DIR=$(dirname "$APP_TARGET")
+      APP_BASE=$(basename "$APP_TARGET")
+      if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
+        app_load_spawn relative
         sleep 2
         if app_load_wait_rc; then
-          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (absolute+relative+start_unix all exited quickly; no Loaded)"
-          log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+          log "APP_LOAD unix failed: relative exited quickly pid=$APP_PID rc=${APP_RC:-?}"
           app_load_dump_fail_sigs
+          # step3: start /unix
+          app_load_spawn start_unix
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (absolute+relative+start_unix all exited quickly; no Loaded)"
+            log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+            app_load_dump_fail_sigs
+          else
+            log "APP_LOAD retry alive after 2s pid=$APP_PID mode=start_unix"
+          fi
         else
-          log "APP_LOAD retry alive after 2s pid=$APP_PID mode=start_unix"
+          log "APP_LOAD retry alive after 2s pid=$APP_PID mode=relative"
         fi
       else
-        log "APP_LOAD retry alive after 2s pid=$APP_PID mode=relative"
+        log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
       fi
-    else
-      log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
     fi
   else
     log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE"
@@ -2585,7 +2656,7 @@ fi
 app_load_nohwnd_request() {
   # $1 = basename hint (PE file name)
   _bn="${1:-app.exe}"
-  printf 'basename=%s\nwant=mapraise\nstamp=0.1.78\n' "$_bn" > /mnt/data/.x86-nohwnd-req
+  printf 'basename=%s\nwant=mapraise\nstamp=0.1.79\n' "$_bn" > /mnt/data/.x86-nohwnd-req
   log "NOHWND_MAP req written basename=$_bn path=/mnt/data/.x86-nohwnd-req"
 }
 app_load_marker_nohwnd_scan() {
@@ -2672,6 +2743,58 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           log "APP_LOAD WARN Loaded-but-no-HWND after NOHWND_MAP scan=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
         else
           log "APP_LOAD WARN Loaded-but-no-HWND after NOHWND_MAP (no host scan response)"
+        fi
+        # 0.1.79: classify CreateWindow miss; one CUI wineconsole relaunch if not yet wrapped
+        app_load_classify_nocreate
+        _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
+        _scan_none=0
+        case "$_scan_body" in
+          *"nohwnd_scan=none"*|*"nohwnd_scan=NONE"*) _scan_none=1 ;;
+        esac
+        if ! app_load_marker_nohwnd_scan; then _scan_none=1; fi
+        if [ "${APP_CUI_RELAUNCHED:-0}" = "0" ] && [ "${APP_CUI_WRAPPED:-0}" != "1" ] \
+            && { [ "${PE_SUB}" = "3" ] || [ "${APP_MISS_REASON}" = "cui" ] || [ "${X86_CUI_WRAP:-}" = "1" ]; }; then
+          APP_CUI_RELAUNCHED=1
+          log "APP_CUI_WRAP relaunch once reason=${APP_MISS_REASON} scan_none=${_scan_none}"
+          if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+            kill -TERM "$APP_PID" 2>/dev/null || true
+            sleep 1
+            kill -KILL "$APP_PID" 2>/dev/null || true
+            wait "$APP_PID" 2>/dev/null || true
+          fi
+          app_load_spawn wineconsole
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_CUI_WRAP relaunch quick-exit rc=${APP_RC:-?}"
+            app_load_classify_nocreate
+          else
+            log "APP_CUI_WRAP relaunch alive pid=$APP_PID"
+            HWND_CUI_I=0
+            HWND_CUI_MAX="${X86_HWND_CUI_WAIT_MAX:-50}"
+            while [ "$HWND_CUI_I" -lt "$HWND_CUI_MAX" ]; do
+              if app_load_marker_app_hwnd; then
+                APP_HWND_SEEN=1
+                log "APP_HWND_WAIT ready after CUI wineconsole t=${HWND_CUI_I}x0.2s marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+                break
+              fi
+              if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+                log "APP_HWND_WAIT CUI abort app dead"
+                break
+              fi
+              # Re-request host map if console HWND created unmapped
+              if [ $((HWND_CUI_I % 10)) -eq 0 ]; then
+                app_load_nohwnd_request "$APP_BASE_NAME"
+              fi
+              sleep 0.2
+              HWND_CUI_I=$((HWND_CUI_I + 1))
+            done
+            if [ "$APP_HWND_SEEN" != "1" ]; then
+              app_load_classify_nocreate
+              log "APP_LOAD WARN Loaded-but-no-HWND after CUI wineconsole relaunch"
+            fi
+          fi
+        elif [ "$_scan_none" = "1" ]; then
+          log "APP_CREATEWINDOW_MISS scan=none (no X candidates) — not a Present/Turnip map miss"
         fi
       fi
     elif app_load_path_seen; then

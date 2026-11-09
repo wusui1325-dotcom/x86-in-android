@@ -1,3 +1,18 @@
+## 0.1.79 — CUI / CreateWindow (wineconsole wrap)
+
+**Smoke risk (0.1.78):** sticky/nohwnd map can still leave Loaded-but-no-HWND when
+`nohwnd_scan=none` — the PE never CreateWindow (CUI subsystem=3 with bare `wine`,
+MessageBox-only, missing CRT, or early exit). Present/Turnip cannot paint a missing HWND.
+
+**Fix:**
+- Seed `wineconsole.exe` into system32
+- PE `subsystem=3` (or `X86_CUI_WRAP=1`) → `wine wineconsole --backend=user` (user32 HWND)
+- After NOHWND_MAP still miss: `APP_CREATEWINDOW_MISS reason=` + one CUI relaunch if not wrapped
+- `X86_CUI_WRAP=0` disables wrap; keep 078 sticky/nohwnd / 077 fingerprint
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.79`; CUI → `APP_CUI_WRAP=wineconsole`;
+`APP_HWND_WAIT ready`; Present `desktopOnly=0`. GUI miss → `APP_CREATEWINDOW_MISS reason=…`.
+
 ## 0.1.78 — Loaded-but-no-HWND / winex11 map deeper
 
 **Smoke risk (0.1.77):** strict Loaded + APP_HWND_WAIT can still WARN Loaded-but-no-HWND when

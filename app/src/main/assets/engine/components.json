@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.78-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map",
+  "runtimeId": "wine-gpustack-v0.1.79-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.78: Loaded-but-no-HWND sticky marker + host nohwnd map/raise; keep 0.1.77 fingerprint"
+  "notes": "0.1.79: CUI wineconsole --backend=user + APP_CREATEWINDOW_MISS; keep 0.1.78 sticky/nohwnd"
 }

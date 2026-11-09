@@ -1,3 +1,21 @@
+## 0.1.54 — RpcSs / MountMgr (Failed to open RpcSs + MountMgr err 2)
+
+**Bug (0.1.53 smoke):** winex11 loads (`DRIVER_DIAG` all yes, no nodrv); explorer hangs on
+`err:ole:start_rpcss` / **Failed to open RpcSs service** for 120s+; services.exe
+`Auto-start service L"MountMgr" failed to start: 2` (`GetBinaryTypeW` on
+`drivers\mountmgr.sys`). Root cause: 0.1.52 seed-copy + skip-wineboot left a bind-era
+`system.reg` (~1.6MB) over a real system32 with only ~36 seeded DLLs — **no**
+`rpcss.exe` / `drivers/mountmgr.sys`.
+
+**Fix:** Seed service PE (`rpcss.exe`, `svchost`, `plugplay`, …) + copy `*.sys` into
+`system32/drivers` (esp. `mountmgr.sys`); `prefix_is_complete` requires those bins +
+RpcSs in `system.reg`; `RPCSS_DIAG` + `RPCSS_PRESTART` (`net start RpcSs` then
+`rpcss.exe`); default `WINEDEBUG` drops `+module` (keep `err+all,+seh,+loaddll`).
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.54` → `rpcss=yes mountmgr=yes` →
+`RPCSS_DIAG … reg_rpcss=yes` → `RPCSS_PRESTART … alive=1` → no endless
+`Failed to open RpcSs` → `app.exe` loaddll / Present / next clear err.
+
 ## 0.1.51 — WINE_START hang + full log export + speed
 
 **Bug (0.1.50 smoke):** Soft-pass OK; `WINEBOOT_INIT skip (system.reg present)` then stuck at

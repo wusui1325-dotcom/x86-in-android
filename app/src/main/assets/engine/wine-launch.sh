@@ -13,11 +13,12 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.53: nodrv / missing graphics driver — seed winex11.drv + force desktop,x11;
-# ensure aarch64 libX11 on LD_LIBRARY_PATH + BOX64_PREFER_WRAPPED; DRIVER_DIAG;
-# expand OLE seed (actxprxy). Keep 0.1.52 seed-copy (no system32 bind) + NTDLL_ANON_PE.
-# 0.1.52: kernel32 c0000135 — stop bind-over system32; seed PE; wipe incomplete.
-WINE_LAUNCH_STAMP=0.1.53
+# 0.1.54: RpcSs / MountMgr — seed rpcss.exe + drivers/mountmgr.sys (+ service PE);
+# prefix_is_complete requires RpcSs reg + bins; RPCSS_DIAG + optional rpcss prestart;
+# drop +module from default WINE_RUN debug (keep err+all,+seh,+loaddll).
+# 0.1.53: nodrv — seed winex11.drv + desktop,x11; DRIVER_DIAG; actxprxy.
+# 0.1.52: kernel32 c0000135 — seed-copy (no system32 bind) + NTDLL_ANON_PE.
+WINE_LAUNCH_STAMP=0.1.54
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -496,12 +497,15 @@ ensure_prefix_exec() {
   # Wineboot will add more; child start.exe needs kernel32.dll visible as a file
   # under C:\windows\system32 (builtin-only was flaky after half-init + bind).
   # 0.1.53: + winex11.drv (explorer LoadLibrary) + actxprxy/oleaut32/comctl32/uxtheme
+  # 0.1.54: + service PE (rpcss/svchost/plugplay) + drivers/mountmgr.sys (MountMgr err 2)
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
     shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll
     actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll
-    comctl32.dll uxtheme.dll winex11.drv winewayland.drv"
+    comctl32.dll uxtheme.dll winex11.drv winewayland.drv
+    winmm.dll version.dll wsock32.dll iphlpapi.dll netapi32.dll secur32.dll
+    authz.dll"
   local seeded=0
   local skipped=0
   local d
@@ -515,10 +519,29 @@ ensure_prefix_exec() {
       fi
     fi
   done
-  # Also seed common wine boot PE exes so start.exe / wineboot.exe resolve as files
-  for d in wineboot.exe start.exe services.exe explorer.exe rundll32.exe; do
+  # Boot + SCM service PE exes (OpenService RpcSs needs rpcss.exe on disk for StartService;
+  # MountMgr needs drivers\\mountmgr.sys — GetBinaryTypeW err 2 without it)
+  for d in wineboot.exe start.exe services.exe explorer.exe rundll32.exe \
+           rpcss.exe svchost.exe plugplay.exe conhost.exe cmd.exe sc.exe \
+           msiexec.exe reg.exe regsvr32.exe rundll32.exe lsass.exe \
+           winemenubuilder.exe winebrowser.exe; do
     if [ -f "$pe_dir/$d" ]; then
       cp -f "$pe_dir/$d" "$sys32/$d" 2>/dev/null && seeded=$((seeded+1)) || true
+    fi
+  done
+  # Drivers: %12% = system32\\drivers — MountMgr ServiceBinary
+  local drv="$sys32/drivers"
+  ensure_dir "$drv" || mkdir -p "$drv" 2>/dev/null || true
+  local sys_seeded=0
+  for d in mountmgr.sys winebus.sys winehid.sys wineusb.sys hidclass.sys hidparse.sys \
+           nsiproxy.sys ndis.sys netio.sys win32k.sys cng.sys ksecdd.sys \
+           dxgkrnl.sys dxgmms1.sys fltmgr.sys; do
+    if [ -f "$pe_dir/$d" ]; then
+      if cp -f "$pe_dir/$d" "$drv/$d" 2>/dev/null; then
+        seeded=$((seeded+1)); sys_seeded=$((sys_seeded+1))
+      fi
+      # Also keep a copy in system32 for loaders that probe both
+      cp -f "$pe_dir/$d" "$sys32/$d" 2>/dev/null || true
     fi
   done
   chmod -R u+rx "$sys32" 2>/dev/null || true
@@ -530,10 +553,12 @@ ensure_prefix_exec() {
   local ndll
   ndll=$(ls "$sys32"/*.dll 2>/dev/null | wc -l | tr -d ' \n')
   ndll=${ndll:-0}
-  local wx=no
+  local wx=no rpc=no mm=no
   [ -f "$sys32/winex11.drv" ] && wx=yes
-  log "PREFIX_EXEC seed pe→sys32 seeded=$seeded skip=$skipped kernel32=$k32 ntdll=$n32 kernelbase=$kb winex11=$wx dlls=$ndll sys32=$sys32"
-  ls -l "$sys32/kernel32.dll" "$sys32/ntdll.dll" "$sys32/kernelbase.dll" "$sys32/winex11.drv" 2>&1 | while read -r line; do
+  [ -f "$sys32/rpcss.exe" ] && rpc=yes
+  [ -f "$drv/mountmgr.sys" ] && mm=yes
+  log "PREFIX_EXEC seed pe→sys32 seeded=$seeded skip=$skipped kernel32=$k32 ntdll=$n32 kernelbase=$kb winex11=$wx rpcss=$rpc mountmgr=$mm sys_files=$sys_seeded dlls=$ndll sys32=$sys32"
+  ls -l "$sys32/kernel32.dll" "$sys32/ntdll.dll" "$sys32/kernelbase.dll" "$sys32/winex11.drv" "$sys32/rpcss.exe" "$drv/mountmgr.sys" 2>&1 | while read -r line; do
     log "PREFIX_EXEC ls[seed]: $line"
   done || true
 
@@ -1018,7 +1043,7 @@ pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 sleep 0.3
 # 0.1.51: light WINE_RUN debug — err+all,fix+all + BOX64_LOG=1 made explorer glacial
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+module}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export BOX64_SHOWSEGV=0
@@ -1140,7 +1165,7 @@ fi
 # 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+module}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX DISPLAY=${DISPLAY:-unset}"
 
@@ -1238,6 +1263,13 @@ prefix_is_complete() {
   [ "$ndll" -ge 15 ] || return 1
   # Wine writes .update-timestamp when wineboot finishes
   [ -f "$p/.update-timestamp" ] || return 1
+  # 0.1.54: SCM service bins + RpcSs registration (bind-umount era left 1.6MB
+  # system.reg but empty real system32 → MountMgr err2 + Failed to open RpcSs)
+  [ -f "$p/drive_c/windows/system32/rpcss.exe" ] || return 1
+  [ -f "$p/drive_c/windows/system32/drivers/mountmgr.sys" ] || return 1
+  grep -qE 'Services\\RpcSs\]|Services\\RpcSs"' "$p/system.reg" 2>/dev/null \
+    || grep -q 'rpcss.exe' "$p/system.reg" 2>/dev/null \
+    || return 1
   return 0
 }
 
@@ -1398,13 +1430,97 @@ fi
 if [ -f /opt/wine/lib/wine/x86_64-windows/actxprxy.dll ]; then
   cp -f /opt/wine/lib/wine/x86_64-windows/actxprxy.dll "$WINEPREFIX/drive_c/windows/system32/actxprxy.dll" 2>/dev/null || true
 fi
-log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) winex11=$([ -f "$WINEPREFIX/drive_c/windows/system32/winex11.drv" ] && echo yes || echo NO) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
+# 0.1.54: ensure RpcSs / MountMgr binaries even on skip-wineboot path
+if [ -f /opt/wine/lib/wine/x86_64-windows/rpcss.exe ]; then
+  cp -f /opt/wine/lib/wine/x86_64-windows/rpcss.exe "$WINEPREFIX/drive_c/windows/system32/rpcss.exe" 2>/dev/null || true
+fi
+mkdir -p "$WINEPREFIX/drive_c/windows/system32/drivers" 2>/dev/null || true
+if [ -f /opt/wine/lib/wine/x86_64-windows/mountmgr.sys ]; then
+  cp -f /opt/wine/lib/wine/x86_64-windows/mountmgr.sys "$WINEPREFIX/drive_c/windows/system32/drivers/mountmgr.sys" 2>/dev/null || true
+fi
+for _svc in svchost.exe plugplay.exe services.exe sc.exe; do
+  if [ -f "/opt/wine/lib/wine/x86_64-windows/$_svc" ]; then
+    cp -f "/opt/wine/lib/wine/x86_64-windows/$_svc" "$WINEPREFIX/drive_c/windows/system32/$_svc" 2>/dev/null || true
+  fi
+done
+log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) winex11=$([ -f "$WINEPREFIX/drive_c/windows/system32/winex11.drv" ] && echo yes || echo NO) rpcss=$([ -f "$WINEPREFIX/drive_c/windows/system32/rpcss.exe" ] && echo yes || echo NO) mountmgr=$([ -f "$WINEPREFIX/drive_c/windows/system32/drivers/mountmgr.sys" ] && echo yes || echo NO) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
 
 # Display + driver diagnose before START
 X0_STATE=missing
 if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then X0_STATE=ok; fi
 log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu} desktop=${W}x${H}"
 driver_diag
+
+# ---- 0.1.54: RpcSs / MountMgr diagnose + prestart --------------------------------
+rpcss_diag() {
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local drv="$sys32/drivers"
+  local rpc=no mm=no svc=no reg_rpc=no
+  [ -f "$sys32/rpcss.exe" ] && rpc=yes
+  [ -f "$drv/mountmgr.sys" ] && mm=yes
+  [ -f "$sys32/services.exe" ] && svc=yes
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    if grep -qE 'Services\\RpcSs\]|rpcss\.exe' "$WINEPREFIX/system.reg" 2>/dev/null; then
+      reg_rpc=yes
+    fi
+  fi
+  local img="(none)"
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    img=$(grep -E 'ImagePath.*rpcss|rpcss\.exe' "$WINEPREFIX/system.reg" 2>/dev/null | head -3 | tr '\n' '|' | head -c 200)
+    img=${img:-"(no ImagePath line)"}
+  fi
+  log "RPCSS_DIAG rpcss=$rpc mountmgr=$mm services_exe=$svc reg_rpcss=$reg_rpc dlls=$(ls "$sys32"/*.dll 2>/dev/null | wc -l | tr -d ' ') drivers=$(ls "$drv"/*.sys 2>/dev/null | wc -l | tr -d ' ')"
+  log "RPCSS_DIAG imagepath_snip=$img"
+  ls -l "$sys32/rpcss.exe" "$drv/mountmgr.sys" "$sys32/services.exe" 2>&1 | while read -r line; do
+    log "RPCSS_DIAG ls: $line"
+  done || true
+}
+
+rpcss_prestart() {
+  # Explorer combase start_rpcss → OpenService("RpcSs") then StartService.
+  # Do NOT spawn a second services.exe (wineserver owns SCM). Try net start,
+  # then direct rpcss.exe so IRPCSS is up even if SCM OpenService races.
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  : > /mnt/data/wine-rpcss.out
+  if [ ! -f "$sys32/rpcss.exe" ]; then
+    log "RPCSS_PRESTART skip (rpcss.exe missing)"
+    return 0
+  fi
+  log "RPCSS_PRESTART begin (net start RpcSs → rpcss.exe)"
+  set +e
+  # net start will autostart services.exe via wineserver if needed
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine net.exe start RpcSs >>/mnt/data/wine-rpcss.out 2>&1 &
+  NET_PRE_PID=$!
+  # Wait up to 8s for net start to finish or progress
+  NT=0
+  while kill -0 "$NET_PRE_PID" 2>/dev/null && [ "$NT" -lt 8 ]; do
+    sleep 1
+    NT=$((NT+1))
+  done
+  if kill -0 "$NET_PRE_PID" 2>/dev/null; then
+    kill -TERM "$NET_PRE_PID" 2>/dev/null || true
+    sleep 0.5
+    kill -KILL "$NET_PRE_PID" 2>/dev/null || true
+  fi
+  wait "$NET_PRE_PID" 2>/dev/null
+  NET_RC=$?
+  # Direct rpcss.exe — registers the RPCSS endpoint used by COM
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine rpcss.exe >>/mnt/data/wine-rpcss.out 2>&1 &
+  RPCSS_PID=$!
+  sleep 2
+  set -e
+  local alive=0
+  kill -0 "$RPCSS_PID" 2>/dev/null && alive=1 || true
+  log "RPCSS_PRESTART net_rc=$NET_RC rpcss_pid=$RPCSS_PID alive=$alive out_bytes=$(wc -c </mnt/data/wine-rpcss.out 2>/dev/null | tr -d ' ')"
+  if [ -f /mnt/data/wine-rpcss.out ]; then
+    grep -E 'wine:|err:|fix:|RpcSs|rpcss|MountMgr|service|c0000|FATAL|started|START' /mnt/data/wine-rpcss.out 2>/dev/null | head -40 | while read -r line; do
+      log "RPCSS_PRESTART.out: $line"
+    done || true
+  fi
+}
+
+rpcss_diag
+rpcss_prestart
 
 # 0.1.53: /desktop=name,WxH,x11 — skip mac/wayland probe; LoadLibrary winex11.drv only
 log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 $*"
@@ -1459,7 +1575,7 @@ if [ "$BYTES" -gt "$LAST_BYTES" ] 2>/dev/null; then
   dd if=/mnt/data/wine-run.out bs=1 skip="$LAST_BYTES" 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
 fi
 log "WINE_EXIT=$RC wine-run_bytes=$BYTES hb_last=${HB:-0}s"
-grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process|noexec|map_image|SHAPE|Xlib|winex11|nodrv|graphics driver|libX11|DISPLAY' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
+grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process|noexec|map_image|SHAPE|Xlib|winex11|nodrv|graphics driver|libX11|DISPLAY|RpcSs|rpcss|MountMgr|mountmgr|ole:start_rpcss|Failed to open RpcSs' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
 
 if [ "$RC" != "0" ]; then
   log "--- wine-run.out tail ---"

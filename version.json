@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.53",
-  "versionCode": 54,
-  "notes": "0.1.53: nodrv graphics — seed winex11.drv + /desktop=...,x11; aarch64 libX11 on LD_LIBRARY_PATH + BOX64_PREFER_WRAPPED; DRIVER_DIAG + Graphics=x11 reg; seed actxprxy; keep seed-copy/NTDLL_ANON_PE"
+  "versionName": "0.1.54",
+  "versionCode": 55,
+  "notes": "0.1.54: RpcSs/MountMgr — seed rpcss.exe+drivers/mountmgr.sys; complete requires RpcSs reg+bins; RPCSS_DIAG+prestart; drop +module debug; keep winex11/seed-copy/NTDLL_ANON_PE"
 }

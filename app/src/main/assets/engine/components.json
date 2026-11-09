@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.53-box64-wine64k-holefit-anonpe-winex11",
+  "runtimeId": "wine-gpustack-v0.1.54-box64-wine64k-holefit-anonpe-rpcss",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.53: winex11 nodrv fix (seed winex11.drv, desktop,x11, libX11 LD path, DRIVER_DIAG); keep 0.1.51/52 holefit+anonpe+seed-copy+HB+export"
+  "notes": "0.1.54: RpcSs/MountMgr seed+diag+prestart; drop +module; keep 0.1.53 winex11 + seed-copy + NTDLL_ANON_PE"
 }

@@ -1,3 +1,27 @@
+## 0.1.111 — NTDLL_GRAN_ALIGN (Dig110 set_mem_area_state survives MMAP32=0)
+
+**Dig 110:** `WINE_FLAVOR=amd64_wow64` ✅ `mmap32_wow64_guest=0` ✅ child
+`BOX64_MMAP32=0` ✅ — but machine-14c child still
+`ntdll set_mem_area_state: Assertion !(size & granularity_mask)` → **SIGABRT**
+with `WINEPRELOADRESERVE="400000-692000"` (PE SizeOfImage not 64k-aligned) +
+box64 **39bits**. Dig109 incomplete: MMAP32 bit alone does not cure assert.
+`wow64cpu_init=[]` · `started_pid_after_app=0` · 0× Loaded. Canary
+`machine_cmd_014c=1` early=exited but `started_pid_cmd=0`. `+wow64` missing
+from WINEDEBUG; stale `mmap32_child=1` labels.
+
+**Knives:** (A) runtime patch `ntdll.so` `set_mem_area_state` entry → 64k-align
+addr↓ / size↑ before assert (`NTDLL_GRAN_ALIGN`; PE 0x692000 → 0x6a0000);
+keep guest MMAP32=0 / parent NOEXEC / HOLEFIT. (B) after child lives require
+`wow64cpu_init` + `started_pid_after_app` + Loaded App. (C) put `+wow64` in
+WINE_START WINEDEBUG; stop stale mmap32_child=1; rename fail class to
+`virtual_granularity_assert` when guest MMAP32=0. KEEP 107
+`/machine x86 /wait /exec`; NO trampoline; no i386 MAIN.
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.111`; `WINE_FLAVOR=amd64_wow64`;
+`mmap32_wow64_guest=0`; `NTDLL_GRAN_ALIGN ok`; **0×** `set_mem_area_state`;
+canary `machine_cmd_014c=1`+`started_pid_cmd=1`; `wow64cpu_init` non-empty;
+`started_pid_after_app=1`; `Loaded L"C:\App\app.exe"`.
+
 ## 0.1.110 — wow64 guest MMAP32=0 (Dig109 set_mem_area_state)
 
 **Dig 109:** `WINE_FLAVOR=amd64_wow64` ✅ trampoline DROPPED ✅ App NtCreate

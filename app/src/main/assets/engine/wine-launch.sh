@@ -38,6 +38,22 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.111: P0 App-only — Dig 110: guest MMAP32=0 LANDED under amd64_wow64, but
+# machine-14c child still SIGABRT in ntdll set_mem_area_state (size & granularity_mask)
+# with WINEPRELOADRESERVE=400000-692000 (PE SizeOfImage not 64k-aligned) + 39bits.
+# Dig109 incomplete — MMAP32 bit alone insufficient. Knives (KEEP 107 argv /
+# NOEXEC / guest MMAP32=0 / no trampoline):
+# (A) Survive set_mem_area_state: patch ntdll.so entry to 64k-align addr↓/size↑
+#     before assert (PE preload 0x692000 → 0x6a0000); stamp NTDLL_GRAN_ALIGN;
+#     keep parent HOLEFIT mid; dig 0× set_mem_area_state on canary/App.
+# (B) After child lives: wow64cpu_init non-empty + started_pid_after_app + Loaded.
+# (C) Dig hygiene: +wow64 actually in WINE_START WINEDEBUG; stop stale
+#     mmap32_child=1 labels when mmap32_wow64_guest=0; rename fail class to
+#     virtual_granularity_assert when guest MMAP32=0; keep assert/gle/ntstatus.
+# (D) deferred — only if A blocked (deeper in-process). No trampoline/argv swap
+#     / classic i386-unix / unset parent NOEXEC / DXVK x32 / Xvfb / FF.
+# KEEP 102-110 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/parent_mmap32=0/PRIMARY
+# machine_wait_exec_path. No hot/soft-continue/Present/DXVK x32/FF/trampoline.
 # 0.1.110: P0 App-only — Dig 109: flavor amd64_wow64 PASS + trampoline DROPPED +
 # App NtCreate machine 14c, but child wine for app.exe applies box64rc [app.exe]
 # BOX64_MMAP32=1 → ntdll set_mem_area_state granularity ASSERT → SIGABRT before
@@ -267,7 +283,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.110
+WINE_LAUNCH_STAMP=0.1.111
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -844,7 +860,7 @@ BOX64RC
 export BOX64_RCFILE="$BOX64_RC_PATH"
 # NORCFILES must be 0 for RCFILE to load (re-asserted with BOX64_FLAGS below).
 export BOX64_NORCFILES=0
-log "BOX64_RCFILE=$BOX64_RCFILE mmap32_child=1 mmap32_creators=cmd,start mmap32_parent=0 (box64rc initial classic; 0.1.110 may rewrite for amd64_wow64→guest MMAP32=0; parent BOX64_MMAP32=$BOX64_MMAP32; NORCFILES=0; no [explorer.exe])"
+log "BOX64_RCFILE=$BOX64_RCFILE mmap32_child=pending mmap32_creators=pending mmap32_parent=0 (box64rc initial classic; 0.1.111 rewrite for amd64_wow64→guest MMAP32=0; parent BOX64_MMAP32=$BOX64_MMAP32; NORCFILES=0; no [explorer.exe])"
 # 0.1.109: detect Wine package flavor — amd64-wow64 has 0× i386-unix (in-process WoW64)
 WINE_FLAVOR=unknown
 if [ -d /opt/wine/lib/wine/i386-unix ]; then
@@ -1049,6 +1065,75 @@ PY
     exit 1
   }
   log "NTDLL_ANON_PE ok mode=$result path=$ntdll off=0x7a7a8 (force removable/anon PE)"
+  return 0
+}
+
+# 0.1.111 P0-A: Dig110 — machine-14c child wine gets WINEPRELOADRESERVE=400000-692000
+# (PE SizeOfImage not 64k-aligned). Wine11 set_mem_area_state asserts
+# !(size & granularity_mask) → SIGABRT before wow64cpu (MMAP32=0 already proven).
+# Patch entry to round addr↓ / size↑ to 64k, then continue — same ntdll as anon-pe.
+# Entry @0x7425e: replace dual test/jne with jmp to cave @0x744a0 (old size-assert).
+# Cave: and rdi,~0xffff; add rsi,0xffff; and rsi,~0xffff; jmp 0x74270.
+patch_ntdll_granularity_align() {
+  local ntdll=/opt/wine/lib/wine/x86_64-unix/ntdll.so
+  local marker=/opt/wine/lib/wine/x86_64-unix/.ntdll-gran-align-0.1.111
+  local off_entry=475742
+  local off_cave=476320
+  # entry 18B: test di / jne addr_fail / test si / jne size_fail
+  local orig_entry=6685ff0f85580200006685f60f8530020000
+  # entry new: jmp cave + 13 NOPs  (rel32 = 0x744a0 - 0x74263 = 0x23d)
+  local new_entry=e93d02000090909090909090909090909090
+  # cave 31B orig = start of size-assert __assert_fail setup
+  local orig_cave=488d0d49490200ba55010000488d35252f0200488d3dce3a0200e84177f9ff
+  # cave new 26B: align + jmp back to 0x74270 (rel = 0x74270 - 0x744ba = -0x24a)
+  local new_cave=4881e70000ffff4881c6ffff00004881e60000ffffe9b6fdffff9090909090
+  if [ ! -f "$ntdll" ]; then
+    log "FATAL: NTDLL_GRAN_ALIGN missing $ntdll"
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "FATAL: NTDLL_GRAN_ALIGN needs python3"
+    exit 1
+  fi
+  local result
+  result=$(python3 - "$ntdll" "$off_entry" "$orig_entry" "$new_entry" "$off_cave" "$orig_cave" "$new_cave" "$marker" <<'PY'
+import sys, os
+from pathlib import Path
+path = Path(sys.argv[1])
+off_e = int(sys.argv[2]); orig_e = bytes.fromhex(sys.argv[3]); new_e = bytes.fromhex(sys.argv[4])
+off_c = int(sys.argv[5]); orig_c = bytes.fromhex(sys.argv[6]); new_c = bytes.fromhex(sys.argv[7])
+marker = Path(sys.argv[8])
+data = bytearray(path.read_bytes())
+ce = bytes(data[off_e:off_e + len(orig_e)])
+cc = bytes(data[off_c:off_c + len(orig_c)])
+if ce == new_e and cc == new_c:
+    marker.write_text("gran-align=1 stamp=0.1.111 already\n")
+    print("already")
+    sys.exit(0)
+if ce != orig_e and ce != new_e:
+    sys.stderr.write("unexpected entry bytes at 0x%x got=%s\n" % (off_e, ce.hex()))
+    sys.exit(2)
+if cc != orig_c and cc != new_c:
+    sys.stderr.write("unexpected cave bytes at 0x%x got=%s\n" % (off_c, cc.hex()))
+    sys.exit(2)
+bak = path.with_suffix(".so.pre-gran-align")
+if not bak.exists():
+    bak.write_bytes(path.read_bytes())
+data[off_e:off_e + len(new_e)] = new_e
+data[off_c:off_c + len(new_c)] = new_c
+tmp = path.with_suffix(".so.gran-align-tmp")
+tmp.write_bytes(data)
+os.replace(str(tmp), str(path))
+marker.write_text("gran-align=1 stamp=0.1.111 entry=0x%x cave=0x%x\n" % (off_e, off_c))
+print("patched")
+sys.exit(0)
+PY
+) || {
+    log "FATAL: NTDLL_GRAN_ALIGN patch failed path=$ntdll"
+    exit 1
+  }
+  log "NTDLL_GRAN_ALIGN ok mode=$result path=$ntdll entry=0x7425e cave=0x744a0 (0.1.111 Dig110: 64k-align addr/size before set_mem_area_state assert)"
+  stamp_wine_run "NTDLL_GRAN_ALIGN=$result entry=0x7425e cave=0x744a0 stamp=0.1.111"
   return 0
 }
 
@@ -1426,6 +1511,7 @@ ensure_prefix_exec() {
 }
 
 patch_ntdll_anon_pe
+patch_ntdll_granularity_align
 
 ensure_prefix_exec
 
@@ -1464,7 +1550,7 @@ export BOX64_SHOWSEGV="${BOX64_SHOWSEGV:-0}"
 export BOX64_SHOWBT="${BOX64_SHOWBT:-0}"
 export BOX64_ROLLING_LOG="${BOX64_ROLLING_LOG:-0}"
 export BOX64_NOBANNER="${BOX64_NOBANNER:-1}"
-log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32 NORCFILES=$BOX64_NORCFILES RCFILE=${BOX64_RCFILE:-unset} mmap32_child=1 mmap32_creators=cmd,start"
+log "BOX64_FLAGS NOHOSTEXT=$BOX64_DYNAREC_NOHOSTEXT AVX=$BOX64_AVX SSE42=$BOX64_SSE42 AES=$BOX64_AES DYNAREC=$BOX64_DYNAREC SAFEFLAGS=$BOX64_DYNAREC_SAFEFLAGS CALLRET=$BOX64_DYNAREC_CALLRET BIGBLOCK=$BOX64_DYNAREC_BIGBLOCK NATIVEFLAGS=$BOX64_DYNAREC_NATIVEFLAGS CPUTYPE=$BOX64_CPUTYPE X87DOUBLE=$BOX64_DYNAREC_X87DOUBLE WAIT=$BOX64_DYNAREC_WAIT ALIGNED_ATOMICS=$BOX64_DYNAREC_ALIGNED_ATOMICS MMAP32=$BOX64_MMAP32 NORCFILES=$BOX64_NORCFILES RCFILE=${BOX64_RCFILE:-unset} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-pending} mmap32_creators=${MMAP32_CREATORS:-pending} mmap32_parent=0"
 
 # ---- 0.1.44 hole-fit: mid after STACK_HEAD so Wine TEB/stack != mid base ----
 # Evidence: WINEPRELOADRESERVE=100000-1 occupied 0x100000; addr-outer first-success
@@ -3074,7 +3160,7 @@ fi
 # 0.1.63: APP_WIN uses forward slashes so log()/echo never emits BEL (\a).
 # Force +ole/+rpcss/+x11drv until first Present / 60s (overrides earlier WINE_RUN default).
 export WINEARCH=win64
-export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
+export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,+seh,+loaddll,+process,+module,+wow64,+ole,+rpcss,+x11drv,+msgbox}"
 # 0.1.91 K1b: best-effort stop orphan start.exe writers from prior cycle (stale wine-run)
 # 0.1.92: NEVER match services.exe/rpcss/wineserver/winedevice (Boss 091: orphan-reap
 # falsely TERM pid=services.exe right after RpcSs ready → COM/ShellExecute brittle).
@@ -3389,7 +3475,7 @@ app_load_dump_fail_sigs() {
   else
     log "APP_LOAD ntcreate_app=none mode=${APP_LOAD_MODE:-?} (no NtCreateUserProcess for App\\app.exe in slice)"
   fi
-  log "APP_LOAD ntcreate_diag started_pid_lines=${_nt_started} started_pid_after_app=${_nt_started_after_app} loaded_app=${_loaded_app} machine_014c=${_mach_014c} machine_zero=${_mach_zero} mscoree_hits=${_msc} dblslash_hits=${_dbl} mode=${APP_LOAD_MODE:-?} mmap32_child=1 mmap32_creators=cmd,start"
+  log "APP_LOAD ntcreate_diag started_pid_lines=${_nt_started} started_pid_after_app=${_nt_started_after_app} loaded_app=${_loaded_app} machine_014c=${_mach_014c} machine_zero=${_mach_zero} mscoree_hits=${_msc} dblslash_hits=${_dbl} mode=${APP_LOAD_MODE:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} mmap32_creators=${MMAP32_CREATORS:-?} mmap32_parent=0"
   if [ -n "${_nt_app:-}" ] && [ "${_nt_started_after_app:-0}" = "0" ]; then
     log "APP_LOAD create_fail=no_started_pid mode=${APP_LOAD_MODE:-?} (App NtCreateUserProcess seen; no CreateProcessInternalW started process after App — real A2 fail)"
   fi
@@ -3404,9 +3490,18 @@ app_load_dump_fail_sigs() {
   fi
   if [ "${_mach_014c:-0}" = "1" ] && [ "${_nt_started_after_app:-0}" = "0" ]; then
     if [ "${_mmap_assert}" = "1" ]; then
-      log "APP_LOAD create_fail=mmap32_granularity_assert mode=${APP_LOAD_MODE:-?} (Dig109/0.1.110: App NtCreate machine 14c → child wine BOX64_MMAP32=1 → ntdll set_mem_area_state assert → SIGABRT before wow64cpu; want mmap32_wow64_guest=0)"
-      log "APP_LOAD ntstatus_hint=CHILD_SIGABRT_SET_MEM_AREA_STATE mode=${APP_LOAD_MODE:-?} (not a Wine NTSTATUS — posix abort; GLE often 0 → FormatMessage failed)"
-      stamp_wine_run "create_fail=mmap32_granularity_assert mode=${APP_LOAD_MODE:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}"
+      # 0.1.111 P0-C: name by guest MMAP32 — Dig110 proved assert survives MMAP32=0
+      if [ "${MMAP32_WOW64_GUEST:-1}" = "0" ]; then
+        _cfail=virtual_granularity_assert
+        _cfail_note="Dig110/0.1.111: guest MMAP32=0 but PE WINEPRELOADRESERVE size unaligned → set_mem_area_state; want NTDLL_GRAN_ALIGN + 0× assert"
+      else
+        _cfail=mmap32_granularity_assert
+        _cfail_note="Dig109: guest MMAP32=1 → set_mem_area_state assert → SIGABRT before wow64cpu"
+      fi
+      log "APP_LOAD create_fail=${_cfail} mode=${APP_LOAD_MODE:-?} (${_cfail_note})"
+      log "APP_LOAD ntstatus_hint=CHILD_SIGABRT_SET_MEM_AREA_STATE mode=${APP_LOAD_MODE:-?} (not a Wine NTSTATUS — posix abort; GLE often 0 → FormatMessage failed; 0.1.111 NTDLL_GRAN_ALIGN should kill this)"
+      stamp_wine_run "create_fail=${_cfail} mode=${APP_LOAD_MODE:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} (alias mmap32_granularity_assert if guest was 1)"
+      unset _cfail _cfail_note
     elif printf '%s\n' "$_slice" | grep -qE 'ShellExecuteEx failed|Application could not be started|err:start:fatal_error|FormatMessage failed'; then
       log "APP_LOAD create_fail=shellex_after_machine14c mode=${APP_LOAD_MODE:-?} (NtCreate App machine 14c but no started pid — CreateProcess/WoW64 reject; ShellExecuteEx fatal)"
       log "APP_LOAD ntstatus_hint=CREATEPROCESS_FAIL_AFTER_MACHINE_14C mode=${APP_LOAD_MODE:-?} (TRACE omits NTSTATUS; attribute applied; child never started)"
@@ -3449,10 +3544,10 @@ app_load_dump_fail_sigs() {
   _upta=$(printf '%s\n' "$_slice" | grep -cE 'UpdateProcThreadAttribute' 2>/dev/null || echo 0)
   # Real NTSTATUS hex tokens (exclude PE section Characteristic c0000040/c0000080)
   _nth_hex=$(printf '%s\n' "$_slice" | grep -vE 'map_image_into_view|flags c00000' 2>/dev/null | grep -oE 'c0000[0-9a-fA-F]{3}|STATUS_[A-Z_]+|returning status[=: ]+[0-9a-fxA-F]+|not supported on this installation \(machine [0-9a-fA-F]+\)|NtCreateUserProcess.*\) = [cC0-9a-fx]+|set_mem_area_state|granularity_mask|SIGABRT' 2>/dev/null | head -10 | tr '\n' '|' || true)
-  log "APP_LOAD wow64_create_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} wine_flavor=${WINE_FLAVOR:-?} mmap_assert=${_mmap_assert:-0} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} mode=${APP_LOAD_MODE:-?} (0.1.110: want canary 14c+started_pid_cmd then App Loaded + wow64cpu_init)"
+  log "APP_LOAD wow64_create_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} wine_flavor=${WINE_FLAVOR:-?} mmap_assert=${_mmap_assert:-0} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} mode=${APP_LOAD_MODE:-?} (0.1.111: want 0×set_mem_area_state + canary 14c+started_pid_cmd + wow64cpu_init + Loaded)"
   # KEEP legacy stamp name for dig greps that still look for trampoline_dig
   log "APP_LOAD trampoline_dig machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} UpdateProcThreadAttribute=${_upta} mode=${APP_LOAD_MODE:-?} (alias of wow64_create_dig; trampoline DROPPED 0.1.109)"
-  log "APP_LOAD ntstatus_hex=[${_nth_hex:-}] mode=${APP_LOAD_MODE:-?} mmap_assert=${_mmap_assert:-0} (0.1.110 real NTSTATUS/c000/STATUS_/set_mem_area_state/SIGABRT; PE flags filtered)"
+  log "APP_LOAD ntstatus_hex=[${_nth_hex:-}] mode=${APP_LOAD_MODE:-?} mmap_assert=${_mmap_assert:-0} (0.1.111 real NTSTATUS/c000/STATUS_/set_mem_area_state/SIGABRT; PE flags filtered; NTDLL_GRAN_ALIGN should clear assert)"
   stamp_wine_run "ntstatus_hex=${_nth_hex:-none} machine_cmd_014c=${_mach_cmd_014c} started_pid_cmd=${_started_cmd} mmap_assert=${_mmap_assert:-0} wine_flavor=${WINE_FLAVOR:-?} mode=${APP_LOAD_MODE:-?}"
   [ -n "${_nt_cmd:-}" ] && log "APP_LOAD ntcreate_cmd slice: $_nt_cmd" || log "APP_LOAD ntcreate_cmd=[] mode=${APP_LOAD_MODE:-?}"
   # 0.1.104: mscoree skip + LdrShutdown after App NtCreate machine 0 = creator DETACH
@@ -3616,7 +3711,11 @@ app_load_wow64_canary() {
   if [ "$_m14" = "1" ] && [ "${_st_cmd:-0}" != "0" ] && [ "$_fm" = "0" ] && [ "$_mmap_a" = "0" ]; then
     _cclass=create_ok_started_cmd
   elif [ "$_mmap_a" = "1" ]; then
-    _cclass=create_fail_mmap32_assert
+    if [ "${MMAP32_WOW64_GUEST:-1}" = "0" ]; then
+      _cclass=create_fail_virtual_granularity_assert
+    else
+      _cclass=create_fail_mmap32_assert
+    fi
   elif [ "$_m14" = "1" ] && [ "${_st_cmd:-0}" = "0" ]; then
     _cclass=create_fail_14c_no_started_cmd
   elif [ "$_fm" = "1" ]; then
@@ -3626,7 +3725,7 @@ app_load_wow64_canary() {
   else
     _cclass=create_no_ntcreate_cmd
   fi
-  log "APP_LOAD canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} mmap_assert=${_mmap_a} create_class=${_cclass} ntstatus_hex=[${_nth:-}] wow64cpu_init=[${_wow:-}] wine_flavor=${WINE_FLAVOR:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} early=${_early:-?} (0.1.110 PASS=14c+started_pid_cmd; NEVER start.exe pid alone)"
+  log "APP_LOAD canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} mmap_assert=${_mmap_a} create_class=${_cclass} ntstatus_hex=[${_nth:-}] wow64cpu_init=[${_wow:-}] wine_flavor=${WINE_FLAVOR:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?} early=${_early:-?} (0.1.111 PASS=14c+started_pid_cmd + 0×set_mem_area_state; NEVER start.exe pid alone)"
   stamp_wine_run "canary_dig machine_cmd_014c=${_m14} started_pid=${_st} started_pid_cmd=${_st_cmd} create_fail_sig=${_fm} mmap_assert=${_mmap_a} create_class=${_cclass} ntstatus_hex=${_nth:-none} wine_flavor=${WINE_FLAVOR:-?} mmap32_wow64_guest=${MMAP32_WOW64_GUEST:-?}"
   unset _c _off _cpid _i _slice _m14 _st _st_cmd _fm _nth _mmap_a _wow _early _max _cclass _j
   return 0

@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.110",
-  "versionCode": 112,
-  "notes": "0.1.110: P0 App-only. Dig109: amd64_wow64+DROP trampoline PASS flavor/14c, but child wine [app.exe] BOX64_MMAP32=1 \u2192 ntdll set_mem_area_state assert \u2192 SIGABRT before wow64cpu (wow64cpu_init=[]; started=0; shellex). Knives: (A) amd64_wow64 box64rc guest/host MMAP32=0; (B) dig mmap32_granularity_assert + gle_raw + create_class; (C) canary same argv, dig-before-kill, PASS=14c+started_pid_cmd. KEEP 107 order/NOEXEC/parent_mmap32=0. No trampoline/hot/Present/DXVK x32/FF. vc112.",
-  "tipSha": "64d7c59"
+  "versionName": "0.1.111",
+  "versionCode": 113,
+  "notes": "0.1.111: P0 App-only. Dig110: guest MMAP32=0 landed but machine-14c child still set_mem_area_state SIGABRT (WINEPRELOADRESERVE=400000-692000 PE size not 64k-aligned). Knives: (A) NTDLL_GRAN_ALIGN patch addr↓/size↑ before assert; (B) wow64cpu+started+Loaded after child lives; (C) +wow64 WINEDEBUG + fix stale mmap32_child labels + virtual_granularity_assert name. KEEP 107 order/NOEXEC/guest MMAP32=0. No trampoline/hot/Present/DXVK x32/FF. vc113.",
+  "tipSha": "PENDING"
 }

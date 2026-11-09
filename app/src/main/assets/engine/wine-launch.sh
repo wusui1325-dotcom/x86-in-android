@@ -38,10 +38,14 @@ path_is_mounted() {
   return 1
 }
 
-# 0.1.95: P0 NEVER i386 PE as wine MAIN (094 SIGILL rc=132). 64-bit cmd //c
-# CreateProcess(C:\App\app.exe) via Wow64; KEEP WINELOADERNOEXEC=1; unix argv use
-# //exec,//c (Wine mangles single /exec as path). SIGILL WTERMSIG/BOX64_SHOWSEGV
-# diagnostics. Keep 094 RPCSS STATE→ready + exe assoc + fail_hr knives.
+# 0.1.96: P0 NtCreateUserProcess i386 fail (095: cmd CreateProcess hit App but
+# no started pid; machine=0; path C:\App\\app.exe; mscoree fallback). Knives:
+# (1) BOX64_MMAP32=1 for APP_LOAD (WoW64 i386 needs <4GB VA; global MMAP32=0
+# blocks child map); (2) forward-slash C:/App/app.exe (kill double-backslash);
+# (3) primary start //exec //wait (64-bit CreateProcess; // avoids argv mangle);
+# (4) unset WINELOADERNOEXEC for 64-bit MAIN spawn (H4; never i386 MAIN);
+# (5) stamp BinaryType_host + NtCreateUserProcess started-pid / machine / mscoree.
+# Keep 095 no-i386-MAIN / RPCSS ready=1 / fail_hr; DXVK x32 defer.
 # 0.1.94: P0 unix-seed MAIN + unset WINELOADERNOEXEC (stop Wine→start.exe rewrite);
 # inject .exe assoc (H4); RPCSS treat STATE RUNNING in wine-rpcss.out as ready=1;
 # fail_hr drop section-flag false positives (c0000040/c0000080). Keep 093 knives.
@@ -133,7 +137,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.95
+WINE_LAUNCH_STAMP=0.1.96
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -2919,7 +2923,25 @@ app_load_dump_fail_sigs() {
   # Dig aid: first Loaded PE in this slice
   _first_pe=$(printf '%s\n' "$_slice" | grep -oE 'Loaded L"[^"]+\.exe"' 2>/dev/null | head -1 || true)
   [ -n "${_first_pe:-}" ] && log "APP_LOAD slice_first_pe=${_first_pe} mode=${APP_LOAD_MODE:-?}" || true
-  unset _hr _slice _first_pe
+  # 0.1.96: NtCreateUserProcess / BinaryType / machine / mscoree dig stamps
+  _nt_app=$(printf '%s\n' "$_slice" | grep -E 'NtCreateUserProcess .*App\\\\app\.exe|NtCreateUserProcess .*App/app\.exe|NtCreateUserProcess .*App\\\\app' 2>/dev/null | head -4 || true)
+  _nt_started=$(printf '%s\n' "$_slice" | grep -cE 'CreateProcessInternalW started process pid|NtCreateUserProcess .* pid ' 2>/dev/null || echo 0)
+  _nt_mach=$(printf '%s\n' "$_slice" | grep -oE 'NtCreateUserProcess [^ ]+ image [^ ]+ cmdline [^ ]+ parent [^ ]+ machine [0-9a-fx]+' 2>/dev/null | head -3 | tr '\n' '|' || true)
+  _bt_w=$(printf '%s\n' "$_slice" | grep -E 'GetBinaryTypeW L"' 2>/dev/null | head -4 | tr '\n' '|' || true)
+  _msc=$(printf '%s\n' "$_slice" | grep -cE 'mscoree' 2>/dev/null || echo 0)
+  _dbl=$(printf '%s\n' "$_slice" | grep -cE 'App\\\\\\\\app|App\\\\app\.exe"' 2>/dev/null || echo 0)
+  if [ -n "${_nt_app:-}" ]; then
+    log "APP_LOAD ntcreate_app mode=${APP_LOAD_MODE:-?}: $_nt_app"
+  else
+    log "APP_LOAD ntcreate_app=none mode=${APP_LOAD_MODE:-?} (no NtCreateUserProcess for App\\app.exe in slice)"
+  fi
+  log "APP_LOAD ntcreate_diag started_pid_lines=${_nt_started} mscoree_hits=${_msc} dblslash_hits=${_dbl} mode=${APP_LOAD_MODE:-?}"
+  [ -n "${_nt_mach:-}" ] && log "APP_LOAD ntcreate_machine slice: $_nt_mach" || true
+  [ -n "${_bt_w:-}" ] && log "APP_LOAD GetBinaryTypeW slice: $_bt_w" || true
+  # Prefer explicit NTSTATUS / warn:process near App create
+  _nst=$(printf '%s\n' "$_slice" | grep -iE 'warn:process|err:process|STATUS_INVALID_IMAGE|STATUS_DLL_NOT_FOUND|c000007b|c0000135|invalid image|machine 014c|machine 0x14c' 2>/dev/null | head -8 | tr '\n' '|' || true)
+  [ -n "${_nst:-}" ] && log "APP_LOAD ntstatus_slice: $_nst" || log "APP_LOAD ntstatus_slice=[] mode=${APP_LOAD_MODE:-?}"
+  unset _hr _slice _first_pe _nt_app _nt_started _nt_mach _bt_w _msc _dbl _nst
 }
 app_load_alive() {
   [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
@@ -3003,44 +3025,57 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     wow64_direct)
-      # 0.1.95: Dig 094 — i386 PE as wine MAIN + unset WINELOADERNOEXEC → SIGILL rc=132
-      # (box64/wine arch-switch tries to execute 32-bit image as loader MAIN). Knife:
-      #   (1) MAIN = 64-bit cmd.exe (system32); CreateProcess via `cmd //c`
-      #   (2) KEEP WINELOADERNOEXEC=1 (never arch-reexec on ARM/box64)
-      #   (3) use //c (Wine unix argv mangles single /c|/exec into a DOS path)
-      #   (4) Windows backslash path C:\App\app.exe (seed on drive_c only)
-      #   (5) BOX64_SHOWSEGV=1 for residual SIGILL PC stamp
-      app_load_seed_gate || log "APP_SEED gate=FAIL mode=direct — still try cmd64 CreateProcess (A1 keep wow64)"
-      _w64_win='C:\App\app.exe'
-      # Belt: tiny .cmd stub (64-bit cmd interprets; never i386 MAIN)
+      # 0.1.96: Dig 095 — cmd CreateProcess reached NtCreateUserProcess(C:\App\app.exe)
+      # but no started pid (machine=0; path C:\App\\app.exe; mscoree fallback). Knives:
+      #   (1) MAIN = 64-bit start.exe; CreateProcess via `start //exec //wait`
+      #   (2) forward-slash C:/App/app.exe (kill cmd double-backslash app= path)
+      #   (3) BOX64_MMAP32=1 for this spawn (WoW64 i386 needs <4GB VA; global=0)
+      #   (4) unset WINELOADERNOEXEC (MAIN is 64-bit start — safe; never i386 MAIN)
+      #   (5) //exec avoids Wine unix-argv mangling /exec into a DOS path
+      #   (6) stamp BinaryType_host from PE_MACH; BOX64_SHOWSEGV for residual SIGILL
+      app_load_seed_gate || log "APP_SEED gate=FAIL mode=direct — still try start64 CreateProcess (A1 keep wow64)"
+      _w64_win='C:/App/app.exe'
+      # Belt: .cmd stub uses start /exec with forward slash (never i386 MAIN)
       _stub="$WINEPREFIX/drive_c/App/x86_launch.cmd"
-      printf '%s\n' '@echo off' "\"C:\App\app.exe\"" > "$_stub" 2>/dev/null || true
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=direct_cmd64 win=$_w64_win seed=${SEED:-} stub=$_stub"
-      log "APP_LOAD cmdline: wine cmd //c $_w64_win (64-bit cmd CreateProcess; WINELOADERNOEXEC kept; no i386 MAIN; machine=0x${PE_MACH:-?})"
-      stamp_wine_run "APP_LOAD cmdline: wine cmd //c $_w64_win (wow64 direct_cmd64)"
+      printf '%s\n' '@echo off' 'start "" /exec /wait C:/App/app.exe' > "$_stub" 2>/dev/null || true
+      case "${PE_MACH}" in
+        14c|014c|0x14c|0x014c) _bt=SCS_32BIT_BINARY ;;
+        8664|0x8664) _bt=SCS_64BIT_BINARY ;;
+        *) _bt=UNKNOWN ;;
+      esac
+      log "APP_LOAD BinaryType_host=$_bt machine=0x${PE_MACH:-?} pe_sub=${PE_SUB:-?} (host PE fingerprint; Wine GetBinaryType should match)"
+      stamp_wine_run "APP_LOAD BinaryType_host=$_bt machine=0x${PE_MACH:-?}"
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=direct_start64 win=$_w64_win seed=${SEED:-} stub=$_stub mmap32=1 noexec=unset"
+      log "APP_LOAD cmdline: wine start //exec //wait $_w64_win (64-bit start CreateProcess; BOX64_MMAP32=1; WINELOADERNOEXEC unset; no i386 MAIN; machine=0x${PE_MACH:-?})"
+      stamp_wine_run "APP_LOAD cmdline: wine start //exec //wait $_w64_win (wow64 direct_start64 mmap32=1 noexec=unset)"
       app_load_mark_slice
       (
-        # Keep WINELOADERNOEXEC=1 — do NOT unset (094 SIGILL)
+        unset WINELOADERNOEXEC
+        export BOX64_MMAP32=1
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine cmd //c "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+        # Prefer +warn for process/module so NtCreateUserProcess NTSTATUS surfaces
+        export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start //exec //wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
-      unset _stub
+      unset _stub _bt
       ;;
     wow64_unix_seed)
-      # 0.1.95 ladder-2: 64-bit start.exe //exec //wait CreateProcess (not ShellExecute).
-      # Double-slash so Wine unix argv does not mangle /exec into a DOS path (092 fail).
-      # KEEP WINELOADERNOEXEC=1; never i386 MAIN.
-      app_load_seed_gate || log "APP_SEED gate=FAIL mode=start_exec — still try"
-      _w64_win='C:\App\app.exe'
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=start_exec64 win=$_w64_win seed=${SEED:-}"
-      log "APP_LOAD cmdline: wine start //exec //wait $_w64_win (64-bit start CreateProcess; WINELOADERNOEXEC kept; // avoids unix-path mangle)"
-      stamp_wine_run "APP_LOAD cmdline: wine start //exec //wait $_w64_win (wow64 start_exec64)"
+      # 0.1.96 ladder-2: 64-bit cmd //c CreateProcess with same MMAP32/NOEXEC/path knives
+      # (primary is now start //exec; cmd is backup). Forward-slash path; never i386 MAIN.
+      app_load_seed_gate || log "APP_SEED gate=FAIL mode=cmd64 — still try"
+      _w64_win='C:/App/app.exe'
+      log "APP_LOAD wow64=1 machine=0x${PE_MACH:-?} mode=cmd64_mmap32 win=$_w64_win seed=${SEED:-} mmap32=1 noexec=unset"
+      log "APP_LOAD cmdline: wine cmd //c $_w64_win (64-bit cmd CreateProcess; BOX64_MMAP32=1; WINELOADERNOEXEC unset; //c; machine=0x${PE_MACH:-?})"
+      stamp_wine_run "APP_LOAD cmdline: wine cmd //c $_w64_win (wow64 cmd64_mmap32 noexec=unset)"
       app_load_mark_slice
       (
+        unset WINELOADERNOEXEC
+        export BOX64_MMAP32=1
         export BOX64_SHOWSEGV=1
         export BOX64_LOG="${BOX64_APP_LOG:-1}"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start //exec //wait "$_w64_win" >>/mnt/data/wine-run.out 2>&1
+        export WINEDEBUG="${WINE_START_WINEDEBUG:-err+all,warn+process,warn+module,+seh,+loaddll,+process,+module,+ole,+rpcss,+x11drv,+msgbox}"
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine cmd //c "$_w64_win" >>/mnt/data/wine-run.out 2>&1
       ) &
       ;;
     wow64_explorer)
@@ -3242,8 +3277,8 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       log "APP_SEED visible=no path=${SEED:-?} win=$APP_WIN — keep wow64=1 (no unix demote); CreateProcess may still fail"
     fi
     ensure_exe_assoc || true
-    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_cmd64 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} (64-bit cmd //c CreateProcess; WINELOADERNOEXEC kept; no i386 MAIN; no /mnt/app mmap)"
-    stamp_wine_run "decide=direct_cmd64 win=$APP_WIN seed=${SEED:-}"
+    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_start64 win=$APP_WIN unix=$APP_UNIX seed=${SEED:-} (64-bit start //exec CreateProcess; BOX64_MMAP32=1; WINELOADERNOEXEC unset; no i386 MAIN; no /mnt/app mmap)"
+    stamp_wine_run "decide=direct_start64 win=$APP_WIN seed=${SEED:-} mmap32=1 noexec=unset"
   else
     log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
   fi
@@ -3289,7 +3324,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
       fi
       if app_load_wait_rc || [ -z "${APP_PID:-}" ] || ! kill -0 "$APP_PID" 2>/dev/null; then
         if [ "$APP_LOAD_MODE" = "wow64_direct" ]; then
-          log "APP_LOAD wow64 direct quick-exit — trying start /unix seed (not /mnt/app)"
+          log "APP_LOAD wow64 direct quick-exit — trying cmd64_mmap32 ladder-2 (C:/App; MMAP32=1)"
           app_load_spawn wow64_unix_seed
           sleep 2
         fi
@@ -3807,7 +3842,7 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         APP_LADDER_HANG_STEP=0
         if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
           log "APP_RELAUNCH once target=$APP_WIN via wow64_direct (no strict Loaded by t=${HB}s; machine=0x${PE_MACH})"
-          log "APP_LOAD wow64=1 relaunch: wine cmd //c C:\\App\\app.exe (APP_RELAUNCH direct_cmd64; WINELOADERNOEXEC kept)"
+          log "APP_LOAD wow64=1 relaunch: wine start //exec //wait C:/App/app.exe (APP_RELAUNCH direct_start64; BOX64_MMAP32=1; WINELOADERNOEXEC unset)"
           app_load_dump_fail_sigs
           app_load_kill_app "APP_RELAUNCH"
           app_load_spawn wow64_direct

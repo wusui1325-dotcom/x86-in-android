@@ -1,3 +1,14 @@
+## 0.1.96 — NtCreateUserProcess i386 / MMAP32 / path
+
+**P0:** `wow64_direct` = `wine start //exec //wait C:/App/app.exe` with
+`BOX64_MMAP32=1` + `WINELOADERNOEXEC` unset (64-bit MAIN; never i386 MAIN).
+Forward-slash path kills `C:\App\\app.exe` double-backslash. Ladder-2 =
+`cmd //c` with same MMAP32/NOEXEC knives. Stamp `BinaryType_host` +
+`ntcreate_diag` (started pid / machine / mscoree). DXVK x32 still deferred.
+
+**Expect:** `decide=direct_start64` → `NtCreateUserProcess` App has
+`started process pid` → `Loaded L"C:\App\app.exe"`; RPCSS ready=1 kept.
+
 ## 0.1.95 — 64-bit cmd CreateProcess (no i386 MAIN / no SIGILL)
 
 **Smoke (0.1.94):** ready=1 + unix-seed MAIN → SIGILL rc=132; 0× Loaded App\\app.exe.

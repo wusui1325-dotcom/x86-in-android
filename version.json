@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.95",
-  "versionCode": 96,
-  "notes": "0.1.95: P0 never i386 PE as wine MAIN (094 SIGILL); wow64_direct=wine cmd //c C:\\App\\app.exe (64-bit cmd CreateProcess, WINELOADERNOEXEC kept); ladder-2 start //exec //wait; WTERMSIG/BOX64_SHOWSEGV/SIGILL_PC stamp; RPCSS ready=1 kept; DXVK x32 defer; GIT_SHA bake-after-commit",
-  "tipSha": "3757768"
+  "versionName": "0.1.96",
+  "versionCode": 97,
+  "notes": "0.1.96: P0 NtCreateUserProcess i386 (095 no started pid). BOX64_MMAP32=1 for APP_LOAD; C:/App forward-slash; direct_start64=start //exec //wait; unset WINELOADERNOEXEC (64-bit MAIN); BinaryType_host + ntcreate_diag stamps; DXVK x32 defer; GIT_SHA bake-after-commit",
+  "tipSha": "PENDING"
 }

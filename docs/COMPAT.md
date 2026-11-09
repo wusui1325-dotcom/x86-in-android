@@ -1,3 +1,19 @@
+## 0.1.104 — Wow64/machine App create + CPIW dblslash kill
+
+**Smoke (0.1.103):** RPCSS ready=1 / sc_rc=0 / hard-gate pass / creators OK;
+A2 residual same as 100 — App NtCreate `machine 0`, `started_pid_after_app=0`,
+0× Loaded; CPIW `app=C:\App\\app.exe` dblslash; `/exec`+Windows path → FNF.
+
+**P0:** (1) normalize `APP_WIN=C:\App\app.exe` (single BS) for cmd/start/explorer/
+stub; (2) ladder `direct → machine_x86 → explorer → /exec /unix → start` so
+`start /machine x86 /wait` stamps TRACE `machine 0x014c`; (3) `/exec /unix $SEED`
+(not `/exec /wait C:/App`); (4) dig `creator_detach_after_machine0` +
+`ntstatus_hint` + `path_hygiene`. KEEP 102/103 gates / quiet RPCSS / soft-cap40 /
+MAP_WAIT / defer / mmap32_creators / parent MMAP32=0 / WINELOADERNOEXEC.
+
+**Expect:** `machine_014c=1` on `/machine x86` App NtCreate; `dblslash_hits=0`;
+ideally `started_pid_after_app≥1` + `Loaded L"C:\App\app.exe"`.
+
 ## 0.1.100 — A2 expand MMAP32 to NtCreate creators (cmd/start)
 
 **Smoke (0.1.99 mainline):** A2 **config PASS** — `mmap32_child=1` /

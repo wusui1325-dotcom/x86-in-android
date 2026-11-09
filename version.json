@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.103",
-  "versionCode": 104,
-  "notes": "0.1.103: P0 RPCSS quiet WINEDEBUG=err+ole,err+rpcss for services/sc/rpcss START; rpcss-appeared sc soft-cap 20→40s; ready=0 no WINEDEBUG expand; MAP_WAIT display fix ${I}0ms→I*100ms; defer launch_rpcss_once overlap; KEEP 102 hard-gate/TERM orphan/recover/per-mode dwell/creator_hang + /exec+/machine x86 + mmap32_creators + parent MMAP32=0 + WINELOADERNOEXEC; no hot bake; GIT_SHA bake-after-commit",
-  "tipSha": "3db146f"
+  "versionName": "0.1.104",
+  "versionCode": 105,
+  "notes": "0.1.104: P0 Wow64/machine on App create + CPIW dblslash kill (103 dig A2 residual). Normalize APP_WIN to C:\\App\\app.exe (single BS) for cmd/start/explorer/stub; promote ladder direct→machine_x86 (start /machine x86 /wait) before explorer for TRACE machine 0x014c; fix /exec to /exec /unix $SEED (Windows path+/exec was FNF); dig create_fail=creator_detach_after_machine0 + ntstatus_hint + path_hygiene. KEEP 102/103 hard-gate/quiet RPCSS/soft-cap40/MAP_WAIT I*100ms/defer/TERM orphan/dwell/creator_hang/mmap32_creators/parent MMAP32=0/WINELOADERNOEXEC. No hot/no soft-continue/no Present rewrite/no DXVK x32/no FF.",
+  "tipSha": "PENDING"
 }

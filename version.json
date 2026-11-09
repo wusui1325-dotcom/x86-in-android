@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.52",
-  "versionCode": 53,
-  "notes": "0.1.52: kernel32 c0000135 — stop system32 bind-over; seed PE DLLs; wipe incomplete prefix; FATAL on c0000135/incomplete before WINE_START; keep NTDLL_ANON_PE + soft-pass + log export"
+  "versionName": "0.1.53",
+  "versionCode": 54,
+  "notes": "0.1.53: nodrv graphics — seed winex11.drv + /desktop=...,x11; aarch64 libX11 on LD_LIBRARY_PATH + BOX64_PREFER_WRAPPED; DRIVER_DIAG + Graphics=x11 reg; seed actxprxy; keep seed-copy/NTDLL_ANON_PE"
 }

@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.51-box64-wine64k-holefit-anonpe-hb-export",
+  "runtimeId": "wine-gpustack-v0.1.53-box64-wine64k-holefit-anonpe-winex11",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.51: WINE_START hang fix (light WINE_RUN debug, complete-prefix wineboot, WINE_HB); full log export; parallel extractTarXz; holefit cached+binary skip-probe; keep NTDLL_ANON_PE + soft-pass"
+  "notes": "0.1.53: winex11 nodrv fix (seed winex11.drv, desktop,x11, libX11 LD path, DRIVER_DIAG); keep 0.1.51/52 holefit+anonpe+seed-copy+HB+export"
 }

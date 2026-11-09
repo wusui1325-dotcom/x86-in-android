@@ -13,10 +13,11 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.52: kernel32 c0000135 — stop bind-over system32 (hid wineboot layout);
-# seed PE DLLs by copy; wipe incomplete prefix; FATAL on c0000135 / incomplete
-# before WINE_START. Keep NTDLL_ANON_PE + soft-pass smoke + log export + speed.
-WINE_LAUNCH_STAMP=0.1.52
+# 0.1.53: nodrv / missing graphics driver — seed winex11.drv + force desktop,x11;
+# ensure aarch64 libX11 on LD_LIBRARY_PATH + BOX64_PREFER_WRAPPED; DRIVER_DIAG;
+# expand OLE seed (actxprxy). Keep 0.1.52 seed-copy (no system32 bind) + NTDLL_ANON_PE.
+# 0.1.52: kernel32 c0000135 — stop bind-over system32; seed PE; wipe incomplete.
+WINE_LAUNCH_STAMP=0.1.53
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -245,6 +246,9 @@ fi
 log "BOX64_WINE64K_STAMP=$(cat "$BOX64_WINE64K_STAMP" 2>/dev/null)"
 
 export BOX64_LD_LIBRARY_PATH="/opt/wine/lib/wine/x86_64-unix:/usr/lib/box64-x86_64-linux-gnu:/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu${BOX64_LD_LIBRARY_PATH:+:$BOX64_LD_LIBRARY_PATH}"
+# 0.1.53: winex11.so needs aarch64 libX11/libXext via Box64 native wrap
+export LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export BOX64_PREFER_WRAPPED="${BOX64_PREFER_WRAPPED:-1}"
 export WINEDLLPATH="${WINEDLLPATH:-/opt/wine/lib/wine}"
 # 關鍵：強制 WINELOADER＝unix wine ELF（覆寫 Kotlin／舊 env）
 export WINELOADER=/opt/wine/lib/wine/x86_64-unix/wine
@@ -491,11 +495,13 @@ ensure_prefix_exec() {
   # Seed critical PE DLLs into system32 (copy; never delete wineboot extras)
   # Wineboot will add more; child start.exe needs kernel32.dll visible as a file
   # under C:\windows\system32 (builtin-only was flaky after half-init + bind).
+  # 0.1.53: + winex11.drv (explorer LoadLibrary) + actxprxy/oleaut32/comctl32/uxtheme
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
-    shell32.dll shlwapi.dll shcore.dll ole32.dll combase.dll coml2.dll
-    wininet.dll mpr.dll cryptbase.dll userenv.dll"
+    shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll
+    actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll
+    comctl32.dll uxtheme.dll winex11.drv winewayland.drv"
   local seeded=0
   local skipped=0
   local d
@@ -524,8 +530,10 @@ ensure_prefix_exec() {
   local ndll
   ndll=$(ls "$sys32"/*.dll 2>/dev/null | wc -l | tr -d ' \n')
   ndll=${ndll:-0}
-  log "PREFIX_EXEC seed pe→sys32 seeded=$seeded skip=$skipped kernel32=$k32 ntdll=$n32 kernelbase=$kb dlls=$ndll sys32=$sys32"
-  ls -l "$sys32/kernel32.dll" "$sys32/ntdll.dll" "$sys32/kernelbase.dll" 2>&1 | while read -r line; do
+  local wx=no
+  [ -f "$sys32/winex11.drv" ] && wx=yes
+  log "PREFIX_EXEC seed pe→sys32 seeded=$seeded skip=$skipped kernel32=$k32 ntdll=$n32 kernelbase=$kb winex11=$wx dlls=$ndll sys32=$sys32"
+  ls -l "$sys32/kernel32.dll" "$sys32/ntdll.dll" "$sys32/kernelbase.dll" "$sys32/winex11.drv" 2>&1 | while read -r line; do
     log "PREFIX_EXEC ls[seed]: $line"
   done || true
 
@@ -1010,7 +1018,7 @@ pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
 sleep 0.3
 # 0.1.51: light WINE_RUN debug — err+all,fix+all + BOX64_LOG=1 made explorer glacial
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+module}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export BOX64_SHOWSEGV=0
@@ -1132,9 +1140,84 @@ fi
 # 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll,+module}"
 export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX DISPLAY=${DISPLAY:-unset}"
+
+
+# ---- 0.1.53: Wine graphics driver (winex11) — registry + probe --------------------
+# explorer load_graphics_driver: LoadLibrary("winex11.drv"); ERROR_MOD_NOT_FOUND →
+# "The graphics driver is missing. Check your build!" (nodrv black screen).
+ensure_graphics_x11_reg() {
+  local ureg="$WINEPREFIX/user.reg"
+  mkdir -p "$WINEPREFIX"
+  if [ ! -f "$ureg" ]; then
+    printf '%s\n' 'WINE REGISTRY Version 2' '' \
+      '[Software\\Wine\\Drivers]' \
+      '"Graphics"="x11"' > "$ureg"
+    log "DRIVER_REG created user.reg Graphics=x11"
+    return 0
+  fi
+  if grep -q '"Graphics"="x11"' "$ureg" 2>/dev/null; then
+    log "DRIVER_REG Graphics=x11 already set"
+    return 0
+  fi
+  # Drop any prior Graphics= under Drivers (corrupt/empty/wayland/mac)
+  if command -v sed >/dev/null 2>&1; then
+    sed -i '/^"Graphics"=/d' "$ureg" 2>/dev/null || true
+  fi
+  if grep -q '\[Software\\Wine\\Drivers\]' "$ureg" 2>/dev/null; then
+    # Append value after first Drivers section header via temp rewrite
+    awk '
+      BEGIN{done=0}
+      /^\[Software\\Wine\\Drivers\]/ && !done {
+        print
+        print "\"Graphics\"=\"x11\""
+        done=1
+        next
+      }
+      {print}
+      END{
+        if (!done) {
+          print ""
+          print "[Software\\Wine\\Drivers]"
+          print "\"Graphics\"=\"x11\""
+        }
+      }
+    ' "$ureg" > "$ureg.tmp" 2>/dev/null && mv -f "$ureg.tmp" "$ureg" || \
+      printf '\n[Software\\Wine\\Drivers]\n"Graphics"="x11"\n' >> "$ureg"
+  else
+    printf '\n[Software\\Wine\\Drivers]\n"Graphics"="x11"\n' >> "$ureg"
+  fi
+  log "DRIVER_REG set Graphics=x11"
+}
+
+driver_diag() {
+  local pe=/opt/wine/lib/wine/x86_64-windows/winex11.drv
+  local so=/opt/wine/lib/wine/x86_64-unix/winex11.so
+  local so_wl=/opt/wine/lib/wine/x86_64-unix/winewayland.so
+  local sys="$WINEPREFIX/drive_c/windows/system32/winex11.drv"
+  local x11=/usr/lib/aarch64-linux-gnu/libX11.so.6
+  local xext=/usr/lib/aarch64-linux-gnu/libXext.so.6
+  local xcursor=/usr/lib/aarch64-linux-gnu/libXcursor.so.1
+  local xi=/usr/lib/aarch64-linux-gnu/libXi.so.6
+  local gline
+  gline=$(grep -m1 '"Graphics"=' "$WINEPREFIX/user.reg" 2>/dev/null || echo 'Graphics=unset')
+  log "DRIVER_DIAG pe=$([ -f "$pe" ] && echo yes || echo NO) so=$([ -f "$so" ] && echo yes || echo NO) wayland_so=$([ -f "$so_wl" ] && echo yes || echo no) sys32_drv=$([ -f "$sys" ] && echo yes || echo NO) libX11=$([ -e "$x11" ] && echo yes || echo NO) libXext=$([ -e "$xext" ] && echo yes || echo NO) libXcursor=$([ -e "$xcursor" ] && echo yes || echo no) libXi=$([ -e "$xi" ] && echo yes || echo no)"
+  log "DRIVER_DIAG DISPLAY=${DISPLAY:-unset} WINEDLLPATH=${WINEDLLPATH:-unset} BOX64_PREFER_WRAPPED=${BOX64_PREFER_WRAPPED:-unset} $gline"
+  ls -la "$pe" "$so" "$sys" "$x11" "$xext" 2>&1 | while IFS= read -r line; do
+    log "DRIVER_DIAG ls: $line"
+  done || true
+  if command -v python3 >/dev/null 2>&1; then
+    if python3 -c "import ctypes; ctypes.CDLL('libX11.so.6'); ctypes.CDLL('libXext.so.6'); print('ok')" >/tmp/x11probe.out 2>/tmp/x11probe.err; then
+      log "DRIVER_DIAG dlopen_libX11_Xext=ok"
+    else
+      log "DRIVER_DIAG dlopen_libX11_Xext=FAIL $(head -c 240 /tmp/x11probe.err 2>/dev/null | tr '\\n' ' ')"
+    fi
+  else
+    log "DRIVER_DIAG dlopen_libX11_Xext=skip (no python3)"
+  fi
+}
 
 prefix_is_complete() {
   local p="$1"
@@ -1305,17 +1388,29 @@ if [ ! -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]; then
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 53
 fi
-log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
+# Re-seed right before start (covers skip-wineboot path) + force Graphics=x11
+ensure_prefix_exec
+ensure_graphics_x11_reg
+# Re-copy winex11.drv explicitly (belt+suspenders; ensure_prefix_exec already seeds)
+if [ -f /opt/wine/lib/wine/x86_64-windows/winex11.drv ]; then
+  cp -f /opt/wine/lib/wine/x86_64-windows/winex11.drv "$WINEPREFIX/drive_c/windows/system32/winex11.drv" 2>/dev/null || true
+fi
+if [ -f /opt/wine/lib/wine/x86_64-windows/actxprxy.dll ]; then
+  cp -f /opt/wine/lib/wine/x86_64-windows/actxprxy.dll "$WINEPREFIX/drive_c/windows/system32/actxprxy.dll" 2>/dev/null || true
+fi
+log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) winex11=$([ -f "$WINEPREFIX/drive_c/windows/system32/winex11.drv" ] && echo yes || echo NO) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
 
-# Display diagnose before START
+# Display + driver diagnose before START
 X0_STATE=missing
 if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then X0_STATE=ok; fi
 log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu} desktop=${W}x${H}"
+driver_diag
 
-log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} $*"
+# 0.1.53: /desktop=name,WxH,x11 — skip mac/wayland probe; LoadLibrary winex11.drv only
+log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 $*"
 : > /mnt/data/wine-run.out
 set +e
-"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} "$@" >>/mnt/data/wine-run.out 2>&1 &
+"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 "$@" >>/mnt/data/wine-run.out 2>&1 &
 WINE_PID=$!
 log "WINE_START pid=$WINE_PID (heartbeat on)"
 HB=0
@@ -1364,7 +1459,7 @@ if [ "$BYTES" -gt "$LAST_BYTES" ] 2>/dev/null; then
   dd if=/mnt/data/wine-run.out bs=1 skip="$LAST_BYTES" 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
 fi
 log "WINE_EXIT=$RC wine-run_bytes=$BYTES hb_last=${HB:-0}s"
-grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process|noexec|map_image|SHAPE|Xlib' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
+grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process|noexec|map_image|SHAPE|Xlib|winex11|nodrv|graphics driver|libX11|DISPLAY' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
 
 if [ "$RC" != "0" ]; then
   log "--- wine-run.out tail ---"

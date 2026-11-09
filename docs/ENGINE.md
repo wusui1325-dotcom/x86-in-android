@@ -1,3 +1,19 @@
+## 0.1.67 — APP_LOAD start /unix + Present prefer-app
+
+**Smoke risk (0.1.66):** unix CreateProcess may still quick-exit (deps/cwd); relative
+retry alone may not be enough. `pickLargestMapped` by area always prefers explorer
+desktop (full WxH) over real app children → nonBlack/ok can look healthy while guest
+app never maps.
+
+**Fix:**
+- APP_LOAD ladder: absolute unix → cwd-relative → **`wine start /unix $APP`** (never C:/App)
+- APP_RELAUNCH @15s uses `start /unix`; PE machine WARN; noexec mount hint; FATAL fingerprints
+- Present: prefer focused/application/non-desktop mapped window over explorer desktop
+- DIAG: `desktopOnly=` `mappedKids=` `wmClass=`; KEY_LOG: `start /unix` / `desktopOnly`
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.67`; `APP_LOAD … mode=absolute|relative|start_unix`;
+`PRESENT_DIAG … desktopOnly=0` when app mapped; `Loaded L"` or clear `APP_LOAD_FATAL`.
+
 ## 0.1.66 — Present ahb CPU-first default + APP_LOAD harden
 
 **Smoke risk (0.1.65):** `presentAhb` still called `ensureEgl()` first (pump prefers AHB).

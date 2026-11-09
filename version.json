@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.66",
-  "versionCode": 67,
-  "notes": "0.1.66: ahb_skip + BGRA(virtualData) CPU path; no guest HUD mutate; APP_LOAD_FATAL; X86_PRESENT_GPU=1 opt-in"
+  "versionName": "0.1.67",
+  "versionCode": 68,
+  "notes": "0.1.67: APP_LOAD start /unix ladder; Present prefer app over explorer desktop; DIAG desktopOnly/mappedKids"
 }

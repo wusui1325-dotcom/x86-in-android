@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.66-box64-wine64k-holefit-anonpe-rpcss-win64-present-cpufirst",
+  "runtimeId": "wine-gpustack-v0.1.67-box64-wine64k-holefit-anonpe-rpcss-win64-present-appload-unix",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.66: present-cpufirst ahb_skip + BGRA(virtualData); APP_LOAD_FATAL; no guest HUD mutate"
+  "notes": "0.1.67: APP_LOAD start /unix ladder; Present prefer-app; desktopOnly DIAG; keep 0.1.66 CPU-first"
 }

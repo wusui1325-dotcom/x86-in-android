@@ -23,6 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * bright 8px HUD bar so Boss can see Present works.
  * 0.1.66: AHB CPU-first skips presentAhbCpu (GPUImage lock); true CPU = BGRA(virtualData).
  * DIAG path=ahb_skip|bgra|hud|stub. HUD never mutates guest SHM.
+ * 0.1.67: prefer application / non-desktop mapped window over explorer desktop
+ * (largest-area desktop was hiding real app content). DIAG desktopOnly/mappedKids/wmClass.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -47,6 +49,9 @@ public final class PresentXFramePump extends Thread {
     private int lastW;
     private int lastH;
     private int lastChildId;
+    private int lastMappedKids;
+    private int lastDesktopOnly; // 1 = presenting explorer desktop with no app child
+    private String lastWmClass = "";
     private int emptyAfterReady;
     private String lastStatsLogged = "";
     private ByteBuffer hudScratch;
@@ -118,9 +123,14 @@ public final class PresentXFramePump extends Thread {
             Window root = xServer.windowManager.rootWindow;
             if (root != null) {
                 kids = root.getChildren() != null ? root.getChildren().size() : 0;
-                Pick best = pickLargestMapped(root, /*includeSelf=*/false);
+                PickResult pr = pickBestContent(root, xServer);
+                lastMappedKids = pr.mappedKids;
+                lastDesktopOnly = pr.desktopOnly ? 1 : 0;
+                lastWmClass = pr.wmClass != null ? pr.wmClass : "";
+                Pick best = pr.pick;
                 if (best == null) {
                     best = pickFromWindow(root);
+                    lastDesktopOnly = 1;
                 }
                 if (best != null) {
                     drawable = best.drawable;
@@ -369,23 +379,89 @@ public final class PresentXFramePump extends Thread {
         }
     }
 
-    private static Pick pickLargestMapped(Window root, boolean includeSelf) {
-        Pick best = includeSelf ? pickFromWindow(root) : null;
-        List<Window> children = root.getChildren();
-        if (children == null) return best;
-        for (int i = 0; i < children.size(); i++) {
-            Window child = children.get(i);
-            if (child == null || !child.attributes.isMapped()) continue;
-            Pick direct = pickFromWindow(child);
-            if (direct != null && (best == null || direct.area > best.area)) {
-                best = direct;
+    /**
+     * 0.1.67: prefer application / non-desktop windows over explorer desktop.
+     * Largest-area desktop (full WxH) previously always beat real app children.
+     * Priority: focused application → any application → non-desktop → desktop/any.
+     */
+    private static PickResult pickBestContent(Window root, XServer xServer) {
+        Hold hold = new Hold();
+        walkCollect(root, true, hold);
+
+        // Focused application window wins when it has presentable content.
+        try {
+            if (xServer != null && xServer.windowManager != null) {
+                Window focused = xServer.windowManager.getFocusedWindow();
+                if (focused != null && focused != root) {
+                    boolean app = false;
+                    try { app = focused.isApplicationWindow(); } catch (Throwable ignored) {}
+                    if (app || (!focused.isDesktopWindow())) {
+                        Pick fp = pickFromWindow(focused);
+                        if (fp != null) {
+                            return new PickResult(fp, focused, hold.mappedKids, false, classOf(focused));
+                        }
+                    }
+                }
             }
-            Pick nested = pickLargestMapped(child, /*includeSelf=*/false);
-            if (nested != null && (best == null || nested.area > best.area)) {
-                best = nested;
+        } catch (Throwable ignored) {
+        }
+
+        if (hold.bestApp != null) {
+            return new PickResult(hold.bestApp, hold.bestAppWin, hold.mappedKids, false,
+                    classOf(hold.bestAppWin));
+        }
+        if (hold.bestNonDesktop != null) {
+            return new PickResult(hold.bestNonDesktop, hold.bestNonDeskWin, hold.mappedKids, false,
+                    classOf(hold.bestNonDeskWin));
+        }
+        boolean deskOnly = hold.bestAnyWin != null && hold.bestAnyWin.isDesktopWindow();
+        if (hold.bestAny == null) deskOnly = true;
+        return new PickResult(hold.bestAny, hold.bestAnyWin, hold.mappedKids, deskOnly,
+                classOf(hold.bestAnyWin));
+    }
+
+    private static String classOf(Window w) {
+        if (w == null) return "";
+        try {
+            String c = w.getClassName();
+            return c != null ? c.replace(' ', '_') : "";
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static void walkCollect(Window node, boolean skipSelf, Hold hold) {
+        if (node == null) return;
+        if (!skipSelf && node.attributes.isMapped()) {
+            hold.mappedKids++;
+            Pick p = pickFromWindow(node);
+            if (p != null) {
+                boolean desk = false;
+                boolean app = false;
+                try {
+                    desk = node.isDesktopWindow();
+                    app = node.isApplicationWindow();
+                } catch (Throwable ignored) {
+                }
+                if (app && (hold.bestApp == null || p.area > hold.bestApp.area)) {
+                    hold.bestApp = p;
+                    hold.bestAppWin = node;
+                }
+                if (!desk && (hold.bestNonDesktop == null || p.area > hold.bestNonDesktop.area)) {
+                    hold.bestNonDesktop = p;
+                    hold.bestNonDeskWin = node;
+                }
+                if (hold.bestAny == null || p.area > hold.bestAny.area) {
+                    hold.bestAny = p;
+                    hold.bestAnyWin = node;
+                }
             }
         }
-        return best;
+        List<Window> children = node.getChildren();
+        if (children == null) return;
+        for (int i = 0; i < children.size(); i++) {
+            walkCollect(children.get(i), false, hold);
+        }
     }
 
     private static Pick pickFromWindow(Window w) {
@@ -396,6 +472,32 @@ public final class PresentXFramePump extends Thread {
         int hh = d.height & 0xffff;
         if (ww <= 1 || hh <= 1) return null;
         return new Pick(d, w.id, ww * hh, ww, hh);
+    }
+
+    private static final class Hold {
+        Pick bestApp;
+        Pick bestNonDesktop;
+        Pick bestAny;
+        Window bestAppWin;
+        Window bestNonDeskWin;
+        Window bestAnyWin;
+        int mappedKids;
+    }
+
+    private static final class PickResult {
+        final Pick pick;
+        final Window win;
+        final int mappedKids;
+        final boolean desktopOnly;
+        final String wmClass;
+
+        PickResult(Pick pick, Window win, int mappedKids, boolean desktopOnly, String wmClass) {
+            this.pick = pick;
+            this.win = win;
+            this.mappedKids = mappedKids;
+            this.desktopOnly = desktopOnly;
+            this.wmClass = wmClass;
+        }
     }
 
     private static final class Pick {
@@ -425,6 +527,9 @@ public final class PresentXFramePump extends Thread {
                 + " waitAttach=" + waitingAttach
                 + " last=" + lastW + "x" + lastH
                 + " child=0x" + Integer.toHexString(lastChildId)
+                + " mappedKids=" + lastMappedKids
+                + " desktopOnly=" + lastDesktopOnly
+                + " wmClass=" + (lastWmClass.isEmpty() ? "-" : lastWmClass)
                 + " empty=" + emptyAfterReady
                 + " ready=" + NativeEngine.nativePresentReady()
                 + " egl=" + NativeEngine.nativePresentEglReady()

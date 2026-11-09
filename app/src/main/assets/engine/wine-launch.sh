@@ -14,6 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.67: APP_LOAD start /unix retry + PE/noexec WARN; Present prefer app over explorer desktop.
 # 0.1.66: Present ahb CPU-first default (X86_PRESENT_GPU=1 for EGL); APP_LOAD unix harden (no C:/ fallback).
 # 0.1.65: APP_LOAD unix path (no C:/ → start.exe/ShellExecute); Present CPU-first (no EGL steal).
 # 0.1.64: explorer desktop alone then APP_LOAD; APP_RELAUNCH; no fake Present.
@@ -27,7 +28,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.66
+WINE_LAUNCH_STAMP=0.1.67
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -2099,7 +2100,56 @@ log "WINE_START pid=$WINE_PID (explorer desktop; app via APP_LOAD)"
 APP_PID=""
 APP_RELAUNCHED=0
 APP_TARGET=""
-# 0.1.65: launch via UNIX path only. C:/App/app.exe → wine wraps start.exe → ShellExecuteEx failed.
+APP_LOAD_MODE=""
+# 0.1.67: unix CreateProcess ladder — absolute → relative → start /unix. Never C:/App.
+app_load_dump_fail_sigs() {
+  if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem' /mnt/data/wine-run.out 2>/dev/null; then
+    grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
+      log "APP_LOAD unix failed: $ln"
+    done || true
+  fi
+}
+app_load_alive() {
+  [ -n "$APP_PID" ] && kill -0 "$APP_PID" 2>/dev/null
+}
+app_load_wait_rc() {
+  if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+    wait "$APP_PID" 2>/dev/null
+    APP_RC=$?
+    return 0
+  fi
+  return 1
+}
+app_load_spawn() {
+  # $1 = mode tag: absolute|relative|start_unix
+  APP_LOAD_MODE="$1"
+  case "$1" in
+    absolute)
+      log "APP_LOAD cmdline: wine $APP_TARGET (unix CreateProcess; no C:/App, no start.exe)"
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+      ;;
+    relative)
+      APP_DIR=$(dirname "$APP_TARGET")
+      APP_BASE=$(basename "$APP_TARGET")
+      log "APP_LOAD retry: cd $APP_DIR && wine ./$APP_BASE (unix relative; no C:/)"
+      (
+        cd "$APP_DIR" || exit 1
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "./$APP_BASE" >>/mnt/data/wine-run.out 2>&1
+      ) &
+      ;;
+    start_unix)
+      # Wine start /unix — distinct from Windows-path start.exe/ShellExecuteEx path
+      log "APP_LOAD retry: wine start /unix $APP_TARGET (unix start; no C:/App)"
+      "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+      ;;
+    *)
+      log "APP_LOAD_FATAL unknown mode=$1"
+      return 1
+      ;;
+  esac
+  APP_PID=$!
+  log "APP_LOAD pid=$APP_PID mode=$APP_LOAD_MODE target=$APP_TARGET"
+}
 if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   SEED="$WINEPREFIX/drive_c/App/app.exe"
   if [ -f "$SEED" ]; then
@@ -2112,54 +2162,63 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   # PE machine (optional diag): 0x8664=amd64, 0x14c=i386
   PE_OFF=$(od -An -t u4 -N 4 -j 60 "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo 0)
   PE_OFF=${PE_OFF:-0}
+  PE_MACH="?"
   if [ "$PE_OFF" -gt 0 ] 2>/dev/null; then
     PE_MACH=$(od -An -t x2 -N 2 -j $((PE_OFF + 4)) "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo '?')
     log "APP_PE path=$APP_TARGET pe_off=$PE_OFF machine=0x${PE_MACH:-?} (8664=amd64 14c=i386)"
+    case "${PE_MACH}" in
+      8664|14c) ;;
+      *) log "APP_PE WARN unexpected machine=0x${PE_MACH} — CreateProcess may fail (c000007b)" ;;
+    esac
+  else
+    log "APP_PE WARN pe_off invalid path=$APP_TARGET — not a PE?"
   fi
-  log "APP_LOAD cmdline: wine $APP_TARGET (unix CreateProcess; no C:/App, no start.exe)"
-  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
-  APP_PID=$!
-  log "APP_LOAD pid=$APP_PID target=$APP_TARGET"
-  # 0.1.66: quick-exit / no Loaded → FATAL fingerprints (never fall back to C:/App)
+  if [ ! -r "$APP_TARGET" ]; then
+    log "APP_LOAD WARN target not readable path=$APP_TARGET"
+  fi
+  LS_LINE=$(ls -l "$APP_TARGET" 2>/dev/null | head -1 || true)
+  [ -n "$LS_LINE" ] && log "APP_LOAD ls: $LS_LINE"
+  # Best-effort noexec hint (proot mounts often opaque)
+  if grep -E ' /mnt/app |noexec' /proc/mounts 2>/dev/null | grep -q noexec; then
+    log "APP_LOAD WARN /proc/mounts hints noexec near /mnt/app — PE map may fail"
+  fi
+
+  app_load_spawn absolute
   sleep 2
-  if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
-    wait "$APP_PID" 2>/dev/null
-    APP_RC=$?
-    log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} target=$APP_TARGET"
-    log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.66)"
-    if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null; then
-      grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
-        log "APP_LOAD unix failed: $ln"
-      done || true
-    fi
-    # Retry once: cd to exe dir + relative path (no C:/App, no start.exe Windows path)
+  if app_load_wait_rc; then
+    log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE target=$APP_TARGET"
+    log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.67)"
+    app_load_dump_fail_sigs
+    # step2: relative
     APP_DIR=$(dirname "$APP_TARGET")
     APP_BASE=$(basename "$APP_TARGET")
     if [ -d "$APP_DIR" ] && [ -f "$APP_DIR/$APP_BASE" ]; then
-      log "APP_LOAD retry: cd $APP_DIR && wine ./$APP_BASE (unix relative; no C:/)"
-      (
-        cd "$APP_DIR" || exit 1
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "./$APP_BASE" >>/mnt/data/wine-run.out 2>&1
-      ) &
-      APP_PID=$!
-      log "APP_LOAD retry pid=$APP_PID"
+      app_load_spawn relative
       sleep 2
-      if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
-        wait "$APP_PID" 2>/dev/null
-        APP_RC=$?
-        log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (unix+relative both exited quickly; no Loaded)"
-        log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+      if app_load_wait_rc; then
+        log "APP_LOAD unix failed: relative exited quickly pid=$APP_PID rc=${APP_RC:-?}"
+        app_load_dump_fail_sigs
+        # step3: start /unix
+        app_load_spawn start_unix
+        sleep 2
+        if app_load_wait_rc; then
+          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET pe_machine=0x${PE_MACH} (absolute+relative+start_unix all exited quickly; no Loaded)"
+          log "APP_LOAD unix failed: FATAL — check APP_PE machine= and wine-run.out (c0000135/c000007b)"
+          app_load_dump_fail_sigs
+        else
+          log "APP_LOAD retry alive after 2s pid=$APP_PID mode=start_unix"
+        fi
       else
-        log "APP_LOAD retry alive after 2s pid=$APP_PID"
+        log "APP_LOAD retry alive after 2s pid=$APP_PID mode=relative"
       fi
     else
       log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (no retry dir)"
     fi
   else
-    log "APP_LOAD unix alive after 2s pid=$APP_PID"
+    log "APP_LOAD unix alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE"
   fi
 elif [ -n "$APP_WIN" ]; then
-  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.66 no C:/ fallback)"
+  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.67 no C:/ fallback)"
   log "APP_LOAD unix failed: APP_UNIX missing or not a file (argv had Windows-only seed)"
 fi
 
@@ -2259,16 +2318,19 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
           log "APP_RELAUNCH note: ShellExecuteEx still in log — ensure unix path"
         fi
         APP_RELAUNCHED=1
-        log "APP_RELAUNCH once target=$APP_TARGET (unix; no Loaded fingerprint by t=${HB}s)"
-        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch once (still no C:/App)"
-        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
+        log "APP_RELAUNCH once target=$APP_TARGET via start /unix (no Loaded fingerprint by t=${HB}s)"
+        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch start /unix (still no C:/App)"
+        log "APP_LOAD retry: wine start /unix $APP_TARGET (APP_RELAUNCH)"
+        "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
         APP_PID=$!
-        log "APP_RELAUNCH pid=$APP_PID"
+        APP_LOAD_MODE=start_unix
+        log "APP_RELAUNCH pid=$APP_PID mode=start_unix"
         sleep 2
         if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
           wait "$APP_PID" 2>/dev/null
           APP_RC=$?
-          log "APP_LOAD unix failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} (no C:/ fallback)"
+          log "APP_LOAD unix failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=start_unix (no C:/ fallback)"
+          log "APP_LOAD_FATAL rc=${APP_RC:-?} pe_target=$APP_TARGET (APP_RELAUNCH start_unix quick-exit)"
         fi
       else
         APP_RELAUNCHED=1

@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.89: WoW64 direct-first (wine C:/App; no start.exe first); ladder direct\u2192explorer\u2192start; APP_SEED visible; keep 088\u2013070"
+  "notes": "0.1.90: A1+A3+A2 APP_LOAD (no WOW64 demote; c:+seed; hang-alive ladder; SysWOW64 expand); DXVK x32 defer; keep 089–070"
 }

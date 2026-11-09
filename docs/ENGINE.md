@@ -1,3 +1,20 @@
+## 0.1.90 — A1+A3+A2 APP_LOAD (hang-alive + seed/c: + SysWOW64)
+
+Boss 087 hang-alive + seed footguns still open after 089 direct-first.
+
+**A3:** kill stuck `APP_PID` + fail_sig/no_Loaded timed ladder `direct→explorer→start`;
+APP_RELAUNCH reaps; DO_HB 8/12/15 (pre-090 "t≥15" actually waited until HB=30).
+
+**A1:** never demote `APP_WOW64=0` on `visible=no`; force `dosdevices/c:`→`../drive_c`;
+seed re-cp / `APP_SEED repair=`; winepath `timeout 2` (non-blocking).
+
+**A2:** expand SysWOW64 pe32 (CRT/d3dcompiler/vulkan + pe64 extras); call ensure_* before
+i386 CreateProcess. Overlay clear gated on `desktopOnly=0`. DXVK x32 still deferred.
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.90`; `APP_SEED visible=… c=…`; `decide=direct_win`;
+`Loaded L"…app.exe"` **or** `APP_LOAD ladder advance reason=…` then Loaded / FATAL+`fail_hr=`.
+
+
 ## 0.1.89 — WoW64 direct-first (no start.exe ShellExecute)
 
 **Boss smoke (0.1.87 full log):** `APP_WOW64_SEED` / `decide=start_win` /

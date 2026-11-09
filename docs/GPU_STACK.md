@@ -125,6 +125,7 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.90 A1+A3+A2：** no WOW64 demote; dosdevices c:+seed repair; hang-alive ladder kill+advance; SysWOW64 CRT/d3d/vulkan expand; overlay !desktopOnly; DXVK x32 defer
 - **0.1.89 WoW64 direct-first：** i386 default `wine C:/App/app.exe` (CreateProcess); ladder direct→explorer→start; `decide=direct_win`; `APP_SEED visible=`; ShellExecute HRESULT dump; DXVK x32 defer
 - **0.1.88 InProcessX root cpuAccess=false：** align PresentExtension 0.1.83 / DRI3；Log.i `InProcessX GPUImage cpuAccess=false`；keep pre-promote；keep 087 WoW64
 - **0.1.87 WoW64 i386 APP_LOAD：** machine=0x014c → `wine start C:/App/app.exe`；`ensure_wow64_seed`；fix od `014c` match；InProcessX defer

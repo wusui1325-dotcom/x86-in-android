@@ -27,12 +27,13 @@ path_is_mounted() {
   return 1
 }
 
-# 0.1.89: WoW64 direct-first — Boss 0.1.87: APP_WOW64_SEED/decide=start_win/cmdline=
-# wine start C:/App/app.exe + APP_SEED 169MB OK, but ShellExecuteEx+FormatMessage failed →
-# APP_LOAD_FATAL missing-Loaded t=60s (start.exe ShellExecute; CreateProcess never tried first).
-# Fix: i386 default wow64_direct (`wine C:/App/app.exe`); ladder direct → explorer /desktop=
-# … C:/App → start last (diag). APP_SEED visible=; ShellExecute HRESULT/hex dump. DXVK x32
-# defer (not Loaded). Keep 088 InProcessX / 087 WoW64 seed / 086–070.
+# 0.1.90: A1+A3+A2 APP_LOAD — (A3) hang-alive ladder: kill stuck APP_PID + fail_sig/
+# no_Loaded timed direct→explorer→start; APP_RELAUNCH reaps; DO_HB 8/12/15.
+# (A1) never demote APP_WOW64=0 on visible=no; force dosdevices/c: + seed re-cp;
+# winepath timeout 2s. (A2) expand SysWOW64 pe32 (CRT/d3dcompiler/vulkan + pe64 extras).
+# DXVK x32 still defer (not Loaded). Keep 089 direct-first / 088–070.
+# 0.1.89: WoW64 direct-first — i386 default wow64_direct; ladder direct→explorer→start;
+# APP_SEED visible=; ShellExecute HRESULT dump. DXVK x32 defer.
 # 0.1.88: InProcessX root GPUImage cpuAccess=false (Java; stamp bump). Keep 087 WoW64.
 # 0.1.87: WoW64 i386 APP_LOAD — Boss 0.1.85: Antigravity PE machine=0x014c (i386) under
 # win64; unix absolute `wine /mnt/app/app.exe` → ShellExecuteEx/missing-Loaded (app never
@@ -106,7 +107,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.89
+WINE_LAUNCH_STAMP=0.1.90
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -953,11 +954,21 @@ ensure_wow64_seed() {
       miss="$miss pe64:$d"
     fi
   done
-  # Core 32-bit PE into SysWOW64 (minimal chain for CreateProcess + x11)
+  # Core 32-bit PE into SysWOW64 (CreateProcess + x11 + common deps)
+  # 0.1.90 A2: align with pe64 seed_list extras (setupapi/shcore/wininet/…) + CRT/d3d/vulkan
+  # names (ensure_*_seed also copies; idempotent here so i386 path is self-sufficient)
   for d in ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll sechost.dll \
-           ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll user32.dll gdi32.dll win32u.dll \
-           imm32.dll shell32.dll shlwapi.dll ole32.dll oleaut32.dll combase.dll \
+           ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll \
+           user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll \
+           shell32.dll shlwapi.dll shcore.dll ole32.dll oleaut32.dll combase.dll coml2.dll \
+           actxprxy.dll wininet.dll mpr.dll cryptbase.dll userenv.dll \
            comctl32.dll uxtheme.dll winex11.drv winmm.dll version.dll \
+           wsock32.dll iphlpapi.dll netapi32.dll secur32.dll authz.dll \
+           msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll \
+           concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll \
+           msvcp100.dll msvcr100.dll \
+           d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll \
+           vulkan-1.dll winevulkan.dll \
            start.exe wineboot.exe wineconsole.exe cmd.exe explorer.exe; do
     if [ -f "$pe32/$d" ]; then
       if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then
@@ -2609,8 +2620,14 @@ log "WINE_START begin (WINEARCH=$WINEARCH WINEDEBUG=$WINEDEBUG argv=$* )"
 set +e
 
 # Ensure Z: -> / so unix paths are visible if needed
+# 0.1.90: also force C: -> ../drive_c (wineboot usually makes it; wipe/partial can drop it)
 mkdir -p "$WINEPREFIX/dosdevices" 2>/dev/null || true
 ln -sfn / "$WINEPREFIX/dosdevices/z:" 2>/dev/null || true
+ln -sfn ../drive_c "$WINEPREFIX/dosdevices/c:" 2>/dev/null || true
+_c_link=$(readlink "$WINEPREFIX/dosdevices/c:" 2>/dev/null || echo missing)
+_z_link0=$(readlink "$WINEPREFIX/dosdevices/z:" 2>/dev/null || echo missing)
+log "APP_DOSDEVICES c=${_c_link} z=${_z_link0}"
+unset _c_link _z_link0
 
 # Resolve first .exe arg (guest path, typically /mnt/app/app.exe)
 APP_UNIX=""
@@ -2668,6 +2685,7 @@ fi
 
 APP_PID=""
 APP_RELAUNCHED=0
+APP_LADDER_HANG_STEP=0
 APP_TARGET=""
 APP_LOAD_MODE=""
 APP_LOADED_STRICT=0
@@ -2697,14 +2715,33 @@ app_load_marker_app_hwnd() {
   esac
   return 1
 }
+# 0.1.90: kill stuck APP_PID before ladder advance / relaunch (mirror CUI relaunch)
+app_load_kill_app() {
+  _kap_why="${1:-ladder}"
+  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+    log "APP_LOAD kill pid=$APP_PID mode=${APP_LOAD_MODE:-?} reason=$_kap_why"
+    kill -TERM "$APP_PID" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$APP_PID" 2>/dev/null; then
+      kill -KILL "$APP_PID" 2>/dev/null || true
+      sleep 0.2
+    fi
+    wait "$APP_PID" 2>/dev/null || true
+  fi
+  unset _kap_why
+}
+app_load_fail_sig_present() {
+  grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem|FormatMessage failed|GetLastError|STATUS_DLL_NOT_FOUND|STATUS_INVALID_IMAGE_FORMAT|err:start' /mnt/data/wine-run.out 2>/dev/null
+}
 app_load_dump_fail_sigs() {
-  if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem|FormatMessage failed|GetLastError' /mnt/data/wine-run.out 2>/dev/null; then
-    grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem|FormatMessage failed|GetLastError' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
-      log "APP_LOAD unix failed: $ln"
+  if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem|FormatMessage failed|GetLastError|STATUS_DLL_NOT_FOUND|STATUS_INVALID_IMAGE_FORMAT|err:start' /mnt/data/wine-run.out 2>/dev/null; then
+    grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|c000007b|err:module|err:process|noexec filesystem|FormatMessage failed|GetLastError|STATUS_DLL_NOT_FOUND|STATUS_INVALID_IMAGE_FORMAT|err:start' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
+      log "APP_LOAD fail_sig mode=${APP_LOAD_MODE:-?} wow64=${APP_WOW64:-0}: $ln"
     done || true
   fi
-  # 0.1.89: surface raw HRESULT / GetLastError hex when FormatMessage hides it
-  _hr=$(grep -oE '0x[0-9a-fA-F]{8}|error[=: ]+[0-9]+|hr[=: ]+0x[0-9a-fA-F]+|GetLastError[=: ]+[0-9]+' /mnt/data/wine-run.out 2>/dev/null | head -8 | tr '\n' ' ' || true)
+  # 0.1.89/90: surface raw HRESULT / GetLastError hex when FormatMessage hides it
+  # Widen: failed: NNN / status c0000… / Lstatus= / bare 8-hex after error
+  _hr=$(grep -oE '0x[0-9a-fA-F]{8}|error[=: ]+[0-9]+|hr[=: ]+0x[0-9a-fA-F]+|GetLastError[=: ]+[0-9]+|failed:[= ]*[0-9]+|status[=: ]+[cC][0-9a-fA-F]+|[cC]0000[0-9a-fA-F]{3}' /mnt/data/wine-run.out 2>/dev/null | head -8 | tr '\n' ' ' || true)
   if [ -n "${_hr:-}" ]; then
     log "APP_LOAD fail_hr=[${_hr}] (ShellExecute/CreateProcess raw codes)"
   fi
@@ -2884,32 +2921,61 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   # 0.1.87/89: i386 under win64 → WoW64 Windows-path launch (unix absolute known-fail)
   # 0.1.89: prefer CreateProcess (wow64_direct); do NOT lead with start.exe ShellExecute.
   if [ "$PE_ARCH" = "i386" ]; then
+    # 0.1.90 A1: NEVER demote APP_WOW64=0 — unix absolute is known-fail for 0x014c
     APP_WOW64=1
+    # Ensure C: before any C:/App use (also forced earlier; re-assert here)
+    mkdir -p "$WINEPREFIX/dosdevices" "$WINEPREFIX/drive_c/App" 2>/dev/null || true
+    ln -sfn ../drive_c "$WINEPREFIX/dosdevices/c:" 2>/dev/null || true
+    ln -sfn / "$WINEPREFIX/dosdevices/z:" 2>/dev/null || true
+    # 0.1.90 A2: CRT/d3dcompiler/vulkan/wow64 into SysWOW64 before CreateProcess
+    ensure_vs_crt_seed
+    ensure_d3dcompiler_seed
+    ensure_vulkan_seed
     ensure_wow64_seed
-    if [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ]; then
-      mkdir -p "$WINEPREFIX/drive_c/App" 2>/dev/null || true
+    # Seed repair: always try re-cp if missing or empty
+    if [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; then
       if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
         APP_WIN='C:/App/app.exe'
         SEED="$WINEPREFIX/drive_c/App/app.exe"
-        log "APP_SEED wow64 re-copy path=$SEED"
+        log "APP_SEED repair=re-copy path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ')"
+      else
+        log "APP_SEED repair=FAIL cp from $APP_UNIX — keep wow64=1; still try C:/App"
+        APP_WIN='C:/App/app.exe'
+        SEED="$WINEPREFIX/drive_c/App/app.exe"
       fi
     fi
-    if [ -n "${APP_WIN:-}" ] && [ -f "$SEED" ]; then
-      _seed_vis=yes
-      _seed_bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ' || echo 0)
-      _z_link=$(readlink "$WINEPREFIX/dosdevices/z:" 2>/dev/null || echo missing)
-      _app_ls=$(ls -la "$WINEPREFIX/drive_c/App" 2>/dev/null | tr '\n' ' ' | head -c 240 || echo missing)
-      log "APP_SEED visible=${_seed_vis} path=$SEED bytes=${_seed_bytes} win=$APP_WIN z=${_z_link} dir=[${_app_ls}]"
-      # Best-effort winepath (may no-op if wineserver busy; never fail launch)
-      _wp=$( "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine winepath -u "$APP_WIN" 2>/dev/null | head -1 | tr -d '\r' || true)
-      [ -n "${_wp:-}" ] && log "APP_SEED winepath=$APP_WIN → ${_wp}"
-      unset _seed_vis _seed_bytes _z_link _app_ls _wp
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_win win=$APP_WIN unix=$APP_UNIX (no start.exe first; no unix absolute for i386)"
+    _seed_vis=no
+    [ -f "$SEED" ] && [ -s "$SEED" ] && _seed_vis=yes
+    _seed_bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ' || echo 0)
+    _c_link=$(readlink "$WINEPREFIX/dosdevices/c:" 2>/dev/null || echo missing)
+    _z_link=$(readlink "$WINEPREFIX/dosdevices/z:" 2>/dev/null || echo missing)
+    _app_ls=$(ls -la "$WINEPREFIX/drive_c/App" 2>/dev/null | tr '\n' ' ' | head -c 240 || echo missing)
+    log "APP_SEED visible=${_seed_vis} path=$SEED bytes=${_seed_bytes} win=${APP_WIN:-C:/App/app.exe} c=${_c_link} z=${_z_link} dir=[${_app_ls}]"
+    # 0.1.90 P1: winepath optional + timeout — never block APP_LOAD (wineserver may be busy)
+    if command -v timeout >/dev/null 2>&1; then
+      _wp=$(timeout 2 "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine winepath -u "${APP_WIN:-C:/App/app.exe}" 2>/dev/null | head -1 | tr -d '\r' || true)
     else
-      log "APP_SEED visible=no path=${SEED:-?} win=${APP_WIN:-none}"
-      log "APP_LOAD wow64=1 machine=0x${PE_MACH} WARN no C:/App seed — unix absolute likely fails (c000007b)"
-      APP_WOW64=0
+      _wp=
     fi
+    if [ -n "${_wp:-}" ]; then
+      log "APP_SEED winepath=${APP_WIN:-C:/App/app.exe} → ${_wp}"
+      # If winepath resolved but not to our seed file, re-cp once
+      if [ -f "$SEED" ] && [ "$_wp" != "$SEED" ]; then
+        case "$_wp" in
+          *"/drive_c/App/app.exe"*|*/App/app.exe) ;;
+          *)
+            cp -f "$APP_UNIX" "$SEED" 2>/dev/null && log "APP_SEED repair=winepath-mismatch re-copy" || true
+            ;;
+        esac
+      fi
+    fi
+    unset _seed_vis _seed_bytes _c_link _z_link _app_ls _wp
+    # Keep Windows path even if visible=no — refuse unix absolute for i386
+    APP_WIN="${APP_WIN:-C:/App/app.exe}"
+    if [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; then
+      log "APP_SEED visible=no path=${SEED:-?} win=$APP_WIN — keep wow64=1 (no unix demote); CreateProcess may still fail"
+    fi
+    log "APP_LOAD wow64=1 machine=0x${PE_MACH} decide=direct_win win=$APP_WIN unix=$APP_UNIX (no start.exe first; no unix absolute for i386)"
   else
     log "APP_LOAD wow64=0 machine=0x${PE_MACH:-?} arch=${PE_ARCH} (unix ladder)"
   fi
@@ -3368,8 +3434,10 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     LAST_BYTES=$BYTES
   fi
   DO_HB=0
+  # 0.1.90: also tick 8/12/15/20/45 so hang-alive ladder + APP_RELAUNCH fire on time
+  # (pre-090: only 10/30/60 → "t>=15 relaunch" actually waited until HB=30)
   case "$HB" in
-    10|30|60) DO_HB=1 ;;
+    8|10|12|15|20|30|45|60) DO_HB=1 ;;
   esac
   if [ $((HB % 30)) -eq 0 ]; then DO_HB=1; fi
   if [ "$DO_HB" = "1" ]; then
@@ -3388,6 +3456,55 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     APP_PATH_SEEN=0
     if app_load_path_seen; then APP_PATH_SEEN=1; fi
     if app_load_marker_app_hwnd; then APP_HWND_SEEN=1; fi
+    # 0.1.90: hang-alive ladder advance (wow64) — do not wait for ≤2s death.
+    # Boss 087: fail without quick-exit → missing-Loaded. Kill stuck pid → next step.
+    if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ] && [ "${APP_LADDER_HANG_STEP:-0}" -lt 3 ]; then
+      if ! app_load_has_loaded; then
+        _hang_adv=
+        _from_mode="${APP_LOAD_MODE:-?}"
+        if [ "$HB" -ge 8 ] && [ "$HB" -le 12 ]; then
+          case "$_from_mode" in
+            wow64_direct|wineconsole)
+              if app_load_fail_sig_present || [ "$HB" -ge 12 ]; then
+                if app_load_fail_sig_present; then _hang_adv=fail_sig; else _hang_adv=no_loaded_t; fi
+                _to_mode=wow64_explorer
+              fi
+              ;;
+            wow64_explorer)
+              if [ "$HB" -ge 10 ]; then
+                if app_load_fail_sig_present; then _hang_adv=fail_sig; else _hang_adv=no_loaded_t; fi
+                _to_mode=wow64_start
+              fi
+              ;;
+            wow64_start)
+              if [ "$HB" -ge 12 ]; then
+                app_load_dump_fail_sigs
+                log "APP_LOAD ladder advance exhausted mode=wow64_start t=${HB}s (no Loaded; fail_hr dumped)"
+                APP_LADDER_HANG_STEP=3
+              fi
+              ;;
+          esac
+        fi
+        if [ -n "${_hang_adv:-}" ] && [ -n "${_to_mode:-}" ]; then
+          log "APP_LOAD ladder advance reason=${_hang_adv} t=${HB}s from=${_from_mode} to=${_to_mode} wow64=1"
+          app_load_dump_fail_sigs
+          app_load_kill_app "ladder_hang"
+          app_load_spawn "$_to_mode"
+          case "$_to_mode" in
+            wow64_explorer) APP_LADDER_HANG_STEP=1 ;;
+            wow64_start) APP_LADDER_HANG_STEP=2 ;;
+          esac
+          sleep 2
+          if app_load_wait_rc; then
+            log "APP_LOAD ladder advance quick-exit pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE"
+            app_load_dump_fail_sigs
+          else
+            log "APP_LOAD ladder advance alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE"
+          fi
+        fi
+        unset _hang_adv _from_mode _to_mode
+      fi
+    fi
     # 0.1.64/0.1.77: if app never strict-Loaded by 15s, relaunch once (path echo alone ≠ Loaded)
     if [ "${APP_RELAUNCHED:-0}" = "0" ] && [ -n "${APP_TARGET:-}" ] && [ "$HB" -ge 15 ]; then
       if ! app_load_has_loaded; then
@@ -3398,17 +3515,22 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
           log "APP_RELAUNCH note: path_seen=1 but no strict Loaded — relaunch anyway"
         fi
         APP_RELAUNCHED=1
+        APP_LADDER_HANG_STEP=0
         if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
           log "APP_RELAUNCH once target=$APP_WIN via wow64_direct (no strict Loaded by t=${HB}s; machine=0x${PE_MACH})"
           log "APP_LOAD wow64=1 relaunch: wine $APP_WIN (APP_RELAUNCH direct_win)"
+          app_load_dump_fail_sigs
+          app_load_kill_app "APP_RELAUNCH"
           app_load_spawn wow64_direct
           sleep 2
           if app_load_wait_rc; then
             log "APP_LOAD wow64 failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} mode=wow64_direct"
+            app_load_dump_fail_sigs
             app_load_spawn wow64_explorer
             sleep 2
             if app_load_wait_rc; then
               log "APP_LOAD wow64 failed: explorer relaunch quick-exit — start.exe LAST"
+              app_load_dump_fail_sigs
               app_load_spawn wow64_start
               sleep 2
               if app_load_wait_rc; then
@@ -3451,8 +3573,9 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     # 0.1.66/0.1.77: strict Loaded required — path echo alone does NOT clear missing-Loaded
     if [ "$HB" -ge 45 ] && [ -n "${APP_TARGET:-}" ]; then
       if ! app_load_has_loaded; then
-        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s target=${APP_TARGET} path_seen=${APP_PATH_SEEN}"
+        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s target=${APP_TARGET} path_seen=${APP_PATH_SEEN} mode=${APP_LOAD_MODE:-?} wow64=${APP_WOW64:-0} ladder_hang=${APP_LADDER_HANG_STEP:-0}"
         log "APP_LOAD_FATAL missing-Loaded t=${HB}s (desktop may paint; guest app content absent)"
+        app_load_dump_fail_sigs
       elif [ "$APP_HWND_SEEN" != "1" ]; then
         log "APP_LOAD WARN Loaded-but-no-HWND t=${HB}s target=${APP_TARGET} (strict Loaded; no app HWND in marker)"
       fi
@@ -3467,6 +3590,54 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
     tail -8 /mnt/data/wine-run.out 2>/dev/null | while IFS= read -r ln; do
       log "WINE_HB.tail: $ln"
     done || true
+  fi
+  # 0.1.90: every-second hang-alive probe (even when DO_HB=0) so we never miss the window
+  if [ "$DO_HB" != "1" ] && [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ] \
+      && [ "${APP_LADDER_HANG_STEP:-0}" -lt 3 ] && [ -n "${APP_TARGET:-}" ]; then
+    if [ "$HB" -ge 8 ] && ! app_load_has_loaded; then
+      _hang_adv=
+      _from_mode="${APP_LOAD_MODE:-?}"
+      _to_mode=
+      case "$_from_mode" in
+        wow64_direct|wineconsole)
+          if app_load_fail_sig_present || [ "$HB" -ge 12 ]; then
+            if app_load_fail_sig_present; then _hang_adv=fail_sig; else _hang_adv=no_loaded_t; fi
+            _to_mode=wow64_explorer
+          fi
+          ;;
+        wow64_explorer)
+          if [ "$HB" -ge 10 ]; then
+            if app_load_fail_sig_present; then _hang_adv=fail_sig; else _hang_adv=no_loaded_t; fi
+            _to_mode=wow64_start
+          fi
+          ;;
+        wow64_start)
+          if [ "$HB" -ge 12 ] && [ "${APP_LADDER_HANG_STEP:-0}" -lt 3 ]; then
+            app_load_dump_fail_sigs
+            log "APP_LOAD ladder advance exhausted mode=wow64_start t=${HB}s (no Loaded; fail_hr dumped)"
+            APP_LADDER_HANG_STEP=3
+          fi
+          ;;
+      esac
+      if [ -n "${_hang_adv:-}" ] && [ -n "${_to_mode:-}" ]; then
+        log "APP_LOAD ladder advance reason=${_hang_adv} t=${HB}s from=${_from_mode} to=${_to_mode} wow64=1"
+        app_load_dump_fail_sigs
+        app_load_kill_app "ladder_hang"
+        app_load_spawn "$_to_mode"
+        case "$_to_mode" in
+          wow64_explorer) APP_LADDER_HANG_STEP=1 ;;
+          wow64_start) APP_LADDER_HANG_STEP=2 ;;
+        esac
+        sleep 2
+        if app_load_wait_rc; then
+          log "APP_LOAD ladder advance quick-exit pid=$APP_PID rc=${APP_RC:-?} mode=$APP_LOAD_MODE"
+          app_load_dump_fail_sigs
+        else
+          log "APP_LOAD ladder advance alive after 2s pid=$APP_PID mode=$APP_LOAD_MODE"
+        fi
+      fi
+      unset _hang_adv _from_mode _to_mode
+    fi
   fi
   sleep 1
 done

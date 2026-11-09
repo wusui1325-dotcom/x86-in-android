@@ -776,14 +776,17 @@ class SessionActivity : ComponentActivity() {
                             lastPresentDiag = line
                         }
                         // 0.1.64: ready=true means window_ attached; only then honor presentOk
+                        // 0.1.90: do NOT clear overlay on explorer desktopOnly (masks missing-Loaded)
                         val ready = "ready=true" in stats
+                        val deskOnly = Regex("""\bdesktopOnly=(\d+)""").find(stats)
+                            ?.groupValues?.getOrNull(1) == "1"
                         val presented = try { x.hasPresented() } catch (_: Throwable) { false }
-                        if (!guestPresented && ready) {
+                        if (!guestPresented && ready && !deskOnly) {
                             val okMatch = Regex("""\bok=(\d+)""").find(stats)
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                             if (presented || ok > 0) {
                                 guestPresented = true
-                                appendSticky("PRESENT_DIAG guestPresented=true ok=$ok (overlay clear)")
+                                appendSticky("PRESENT_DIAG guestPresented=true ok=$ok desktopOnly=0 (overlay clear)")
                             }
                         }
                     }
@@ -1419,6 +1422,8 @@ class SessionActivity : ComponentActivity() {
             "wow64_explorer",
             "APP_SEED visible",
             "fail_hr=",
+            "ladder advance",
+            "APP_DOSDEVICES",
             "APP_MSGBOX_DETECT",
             "+msgbox",
             "#32770",

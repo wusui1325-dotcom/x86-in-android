@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.89",
-  "versionCode": 90,
-  "notes": "0.1.89: WoW64 direct-first \u2014 i386 default wine C:/App/app.exe (CreateProcess); ladder direct\u2192explorer\u2192start; APP_SEED visible=; ShellExecute HRESULT dump; DXVK x32 defer; keep 088 InProcessX / 087 WoW64 seed / 086\u2013070"
+  "versionName": "0.1.90",
+  "versionCode": 91,
+  "notes": "0.1.90: A1+A3+A2 APP_LOAD — never demote WOW64; dosdevices c:+seed repair; hang-alive ladder kill+advance; SysWOW64 CRT/d3d/vulkan expand; winepath timeout; overlay !desktopOnly; DXVK x32 defer; keep 089–070"
 }

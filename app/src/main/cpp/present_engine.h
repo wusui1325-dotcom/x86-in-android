@@ -27,8 +27,10 @@ public:
     int presentRgba(const uint8_t* rgba, int width, int height, int strideBytes);
     /** BGRA8888（Drawable／GPUImage virtualData）→ 單趟進 Surface */
     int presentBgra(const uint8_t* bgra, int width, int height, int strideBytes);
-    /** 外部 AHB（不釋放呼叫端；本函式 acquire／release）→ EGL 或 CPU 讀出 */
-    int presentAhb(AHardwareBuffer* external, int width, int height);
+    /** 外部 AHB（不釋放呼叫端；本函式 acquire／release）→ EGL 或 CPU 讀出。
+     * 0.1.70: forceGpu=true → 必試 presentAhbGpu（DRI3 無 virtualData／guestBlack 恢復）。
+     * 否則仍尊 X86_PRESENT_GPU=1；預設 ahb_skip 保 CPU BGRA。 */
+    int presentAhb(AHardwareBuffer* external, int width, int height, bool forceGpu = false);
     int presentStub(int frameIndex);
 
     int width() const { return width_; }
@@ -90,7 +92,7 @@ JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentRgba
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentBgra(
         JNIEnv*, jclass, jobject bgraDirect, jint width, jint height, jint stride);
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentAhb(
-        JNIEnv*, jclass, jlong ahbPtr, jint width, jint height);
+        JNIEnv*, jclass, jlong ahbPtr, jint width, jint height, jboolean forceGpu);
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentStub(
         JNIEnv*, jclass, jint frameIndex);
 JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentReady(

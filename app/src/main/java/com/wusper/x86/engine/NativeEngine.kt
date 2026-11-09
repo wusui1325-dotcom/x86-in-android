@@ -53,9 +53,11 @@ object NativeEngine {
     /** Drawable／MIT-SHM BGRA → 單趟進 Surface（無 Java swizzle） */
     @JvmStatic
     external fun nativePresentBgra(bgraDirect: ByteBuffer, width: Int, height: Int, stride: Int): Int
-    /** Winlator GPUImage／DRI3 AHB → EGL GPU_SAMPLED Present */
+    /** Winlator GPUImage／DRI3 AHB → EGL GPU_SAMPLED Present.
+     * 0.1.70: forceGpu=true → try ahb_gpu even when X86_PRESENT_GPU unset
+     * (DRI3 no virtualData / guestBlack sticky recovery). */
     @JvmStatic
-    external fun nativePresentAhb(ahbPtr: Long, width: Int, height: Int): Int
+    external fun nativePresentAhb(ahbPtr: Long, width: Int, height: Int, forceGpu: Boolean): Int
     @JvmStatic
     external fun nativePresentStub(frameIndex: Int): Int
     @JvmStatic

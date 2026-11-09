@@ -1331,6 +1331,8 @@ class SessionActivity : ComponentActivity() {
             "guestBlack=0 recovered",
             "guestSample",
             "nonBlackGuest",
+            "ahb_gpu",
+            "forceGpu",
             "d3d11.dll",
             "freedreno",
             "TURNIP_ICD",

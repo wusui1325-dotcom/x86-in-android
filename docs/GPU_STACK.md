@@ -116,6 +116,8 @@
   `dxwrapper=wined3d`／prefs `x86/dxwrapper`。期望 log：`DXVK_DIAG wrapper=wined3d`＋`hud=off`＋`d3d*=b`。
   Present 采樣排除 DXVK HUD 帶（`hud_sample_policy=exclude_top64`）；`guestBlack=0 recovered` 可回落。
   `VK_LOADER_DEBUG=error`＋`TURNIP_PROBE` 助 vkCreate／Adapter 指紋。
+- **0.1.70 像素路徑**：Present 停強升 GPUImage；DRI3 無 CPU／`guestBlack` sticky → `forceGpu`→`ahb_gpu`
+  （EGLImage 顯示 AHB 真像素）。預設仍 CPU-first；`X86_PRESENT_GPU=1` 全程 GPU。
 - **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
 
 ### 還缺

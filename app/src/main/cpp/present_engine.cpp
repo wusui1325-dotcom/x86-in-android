@@ -504,7 +504,7 @@ int PresentEngine::blitBgraToWindow(
     return 0;
 }
 
-int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) {
+int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height, bool forceGpu) {
     std::lock_guard<std::mutex> lock(mu_);
     if (!external || width <= 0 || height <= 0) return -EINVAL;
     if (width_ != width || height_ != height) {
@@ -518,11 +518,17 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
     // GPUImage.lockHardwareBuffer keeps AHardwareBuffer permanently locked for
     // drawable life; a second AHardwareBuffer_lock in presentAhbCpu always fails.
     // True CPU path is Java BGRA(virtualData). Opt-in GPU: X86_PRESENT_GPU=1.
+    // 0.1.70: forceGpu (DRI3 no-CPU / guestBlack recovery) also takes ahb_gpu.
     static bool logged_cpu = false;
     static bool logged_gpu = false;
-    if (presentWantGpu()) {
+    static bool logged_force = false;
+    const bool wantGpu = forceGpu || presentWantGpu();
+    if (wantGpu) {
         last_present_path_ = "ahb_gpu";
-        if (!logged_gpu) {
+        if (forceGpu && !logged_force) {
+            LOGI("PRESENT path=ahb_gpu (forceGpu=1; DRI3/no-CPU or guestBlack recovery)");
+            logged_force = true;
+        } else if (!forceGpu && !logged_gpu) {
             LOGI("PRESENT path=ahb_gpu (X86_PRESENT_GPU=1)");
             logged_gpu = true;
         }
@@ -702,10 +708,11 @@ Java_com_wusper_x86_engine_NativeEngine_nativePresentBgra(
 
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wusper_x86_engine_NativeEngine_nativePresentAhb(
-        JNIEnv*, jclass, jlong ahbPtr, jint width, jint height) {
+        JNIEnv*, jclass, jlong ahbPtr, jint width, jint height, jboolean forceGpu) {
     if (ahbPtr == 0) return -EINVAL;
     return PresentEngine::instance().presentAhb(
-            reinterpret_cast<AHardwareBuffer*>(ahbPtr), width, height);
+            reinterpret_cast<AHardwareBuffer*>(ahbPtr), width, height,
+            forceGpu == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT jint JNICALL

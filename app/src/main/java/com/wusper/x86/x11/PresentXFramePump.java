@@ -30,6 +30,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.69: isNearlyBlack excludes DXVK HUD band (y<64 + BL corner); sticky clears on
  * guestLit ({@code guestBlack=0 recovered}); AHB-no-data → guestSample=none;
  * pathStats adds guestSample= / nonBlackGuest=.
+ * 0.1.70: do NOT promote software Drawable→GPUImage (wipes GDI pixels). When AHB has no
+ * CPU mapping or guestBlack sticky, forceGpu→ahb_gpu so DRI3/DXVK pixels can land.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -158,13 +160,10 @@ public final class PresentXFramePump extends Thread {
             }
             if (drawable != null) {
                 Texture tex = drawable.getTexture();
-                if (!(tex instanceof GPUImage)) {
-                    try {
-                        GPUImage.createOrObtain(xServer, drawable, true, true);
-                        tex = drawable.getTexture();
-                    } catch (Throwable ignored) {
-                    }
-                }
+                // 0.1.70: NEVER promote software Drawable→GPUImage here.
+                // createOrObtain(..., cpuAccess=true) replaces data with empty AHB
+                // virtualData and wipes GDI/PutImage pixels → permanent guestBlack.
+                // Only use AHB if DRI3/PresentExtension already attached a GPUImage.
                 if (tex instanceof GPUImage) {
                     GPUImage gpu = (GPUImage) tex;
                     ahbPtr = gpu.getHardwareBufferPtr();
@@ -181,37 +180,51 @@ public final class PresentXFramePump extends Thread {
         lastChildId = childId;
 
         // 0.1.66 P0: GPUImage keeps AHB permanently locked → presentAhbCpu double-lock
-        // always fails. True CPU path = BGRA(virtualData). Only try AHB when no
-        // virtualData (rare) or when native GPU path is enabled (X86_PRESENT_GPU=1).
-        // presentAhb default now returns -EAGAIN (ahb_skip) without locking.
+        // always fails. True CPU path = BGRA(virtualData).
+        // 0.1.70: forceGpu when no CPU mapping (DRI3) or guestBlack sticky (GPU wrote
+        // AHB but CPU view stays black). Else ahb_skip → BGRA below.
+        boolean forceGpu = (ahbPtr != 0) && (data == null || guestBlackSticky != 0);
         if (ahbPtr != 0 && data == null) {
-            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
+            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height, true);
             if (rc == 0) {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
-                // 0.1.69: no virtualData — unknown guest pixels; do not grow/clear streak
+                // 0.1.70: GPU-only AHB — cannot CPU-sample; trust ahb_gpu posted pixels
                 lastGuestSample = "none";
+                if (guestBlackSticky != 0) {
+                    guestBlackSticky = 0;
+                    consecutiveGuestBlack = 0;
+                    Log.i(TAG, "PRESENT_DIAG guestBlack=0 recovered path=ahb_gpu (no-CPU AHB) frame="
+                            + frameIndex);
+                } else {
+                    consecutiveGuestBlack = 0;
+                }
                 maybeLog(frameIndex, kids);
                 return;
             }
             // AHB failed / skipped — fall through (must not early-return)
             presentFail++;
         } else if (ahbPtr != 0) {
-            // Have virtualData: skip useless presentAhbCpu; go BGRA below.
-            // Still allow one GPU attempt only if env opted in — native presentAhb
-            // itself gates on X86_PRESENT_GPU; call it at most to try GPU, ignore skip.
-            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height);
+            int rc = NativeEngine.nativePresentAhb(ahbPtr, width, height, forceGpu);
             if (rc == 0) {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
                 lastGuestSample = "ahb";
-                boolean black = isNearlyBlack(data, width, height, strideBytes);
+                // forceGpu ahb_gpu: CPU virtualData may still look black — treat as lit
+                boolean black = !forceGpu && isNearlyBlack(data, width, height, strideBytes);
                 if (!black) {
                     nonBlackHits++;
                     nonBlackGuestHits++;
-                    noteGuestContent(true, frameIndex);
+                    if (forceGpu && guestBlackSticky != 0) {
+                        guestBlackSticky = 0;
+                        consecutiveGuestBlack = 0;
+                        Log.i(TAG, "PRESENT_DIAG guestBlack=0 recovered path=ahb_gpu (sticky force) frame="
+                                + frameIndex);
+                    } else {
+                        noteGuestContent(true, frameIndex);
+                    }
                 } else {
                     presentHudBar(width, height, frameIndex);
                     noteGuestContent(false, frameIndex);

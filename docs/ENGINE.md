@@ -1,3 +1,17 @@
+## 0.1.70 — Present AHB GPU pixel path (guestBlack real fix)
+
+**Smoke risk (0.1.69):** HUD-band/`wined3d` bisect 可觀測，但 CPU-first `ahb_skip` 讓 DRI3
+無 virtualData 的 AHB 永遠上不了屏；Present 泵強升 GPUImage 還會抹掉 GDI 像素。
+
+**Fix:**
+- Present 泵：**停**對軟體 Drawable 強升 GPUImage（保 PutImage／GDI）
+- `presentAhb(forceGpu)`：無 CPU 映射或 `guestBlack` sticky → 強制 `ahb_gpu`（EGLImage）
+- 預設仍 CPU-first／`X86_PRESENT_GPU=1` 可全程 GPU；成功 ahb_gpu 可清 sticky
+- KEY_LOG: `ahb_gpu`／`forceGpu`／`guestBlack=0 recovered`
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.70`; soft windows `path=bgra nonBlack↑`;
+DRI3／DXVK `path=ahb_gpu` with real pixels (not HUD-only); `guestBlack=0` after recovery.
+
 ## 0.1.69 — guestBlack HUD harden + wined3d bisect plumbing
 
 **Smoke risk (0.1.68):** `DXVK_HUD` paints into swapchain → `isNearlyBlack` false-green

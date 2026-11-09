@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "coreVersion": "0.1.96-hot.1+core.1",
+  "channel": "smokeHot",
+  "createdAt": "2026-11-09T23:00:00+08:00",
+  "notes": "Example hot core: wine-launch.sh only. Host files on HTTPS with matching sha256.",
+  "minApkVersionCode": 109701,
+  "files": [
+    {
+      "path": "wine-launch.sh",
+      "url": "https://example.com/hot/0.1.96-hot.1/wine-launch.sh",
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "size": 0
+    },
+    {
+      "path": "wine-reg-helper.py",
+      "url": "https://example.com/hot/0.1.96-hot.1/wine-reg-helper.py",
+      "sha256": "REPLACE_WITH_REAL_SHA256",
+      "size": 0
+    }
+  ],
+  "smoke": {
+    "workspaceId": "",
+    "exeHint": "",
+    "waitSeconds": 90
+  }
+}

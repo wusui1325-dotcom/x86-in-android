@@ -23,18 +23,18 @@ if [[ "${SKIP_BUMP:-0}" != "1" ]]; then
   "$ROOT/scripts/bump_version.sh"
 fi
 
-./gradlew assembleRelease --no-daemon "$@"
+./gradlew assembleMainlineRelease --no-daemon "$@"
 
 VER=$(python3 -c 'import json;print(json.load(open("version.json"))["versionName"])')
-APK="$ROOT/app/build/outputs/apk/release/x86-in-android-${VER}.apk"
+APK="$ROOT/app/build/outputs/apk/mainline/release/x86-in-android-${VER}.apk"
 if [[ ! -f "$APK" ]]; then
-  APK="$ROOT/app/build/outputs/apk/release/x86-in-android-release.apk"
+  APK="$ROOT/app/build/outputs/apk/mainline/release/x86-in-android-release.apk"
 fi
 if [[ -f "$APK" ]]; then
   echo "OK: $APK"
   ls -lh "$APK"
 else
-  find "$ROOT/app/build/outputs/apk/release" -name '*.apk' -print -exec ls -lh {} \;
+  find "$ROOT/app/build/outputs/apk/mainline/release" -name '*.apk' -print -exec ls -lh {} \;
 fi
 
 python3 - <<'PY'

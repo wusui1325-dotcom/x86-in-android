@@ -67,6 +67,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.wusper.x86.engine.ComponentInstaller
+import com.wusper.x86.hot.HotSmokeConfig
+import com.wusper.x86.hot.SmokeHotLoop
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import com.wusper.x86.session.SessionActivity
 import com.wusper.x86.ui.theme.X86Theme
 
@@ -102,6 +106,24 @@ class MainActivity : ComponentActivity() {
                             Manifest.permission.POST_NOTIFICATIONS,
                         ) == PackageManager.PERMISSION_GRANTED
                         if (!ok) notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    if (BuildConfig.SMOKE_HOT) {
+                        SmokeHotLoop.startAutoPoll(
+                            this@MainActivity,
+                            lifecycleScope,
+                            object : SmokeHotLoop.Listener {
+                                override fun onStatus(line: String) {
+                                    android.util.Log.i("SmokeHotLoop", line)
+                                }
+                                override fun onRoundDone(ok: Boolean, detail: String) {
+                                    android.util.Log.i("SmokeHotLoop", "done ok=$ok $detail")
+                                }
+                            },
+                        )
+                        if (intent?.getBooleanExtra("hot_smoke_now", false) == true) {
+                            intent.removeExtra("hot_smoke_now")
+                            runHotSmokeRound()
+                        }
                     }
                 }
 
@@ -392,6 +414,18 @@ class MainActivity : ComponentActivity() {
                                             Icon(Icons.Default.Delete, contentDescription = null)
                                         },
                                     )
+                                    if (BuildConfig.SMOKE_HOT) {
+                                        DropdownMenuItem(
+                                            text = { Text(stringResource(R.string.btn_hot_smoke_round)) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                runHotSmokeRound()
+                                            },
+                                            leadingIcon = {
+                                                Icon(Icons.Default.Science, contentDescription = null)
+                                            },
+                                        )
+                                    }
                                     DropdownMenuItem(
                                         text = { Text(stringResource(R.string.btn_about)) },
                                         onClick = {
@@ -610,6 +644,36 @@ class MainActivity : ComponentActivity() {
         // bump via intent flag — Compose tick is local; use shared pref pulse
         getSharedPreferences("x86_ui", Context.MODE_PRIVATE)
             .edit().putLong("resume_pulse", System.currentTimeMillis()).apply()
+    }
+
+
+    private fun runHotSmokeRound() {
+        if (!BuildConfig.SMOKE_HOT) return
+        if (SmokeHotLoop.isBusy()) {
+            Toast.makeText(this, getString(R.string.toast_hot_smoke_busy), Toast.LENGTH_SHORT).show()
+            return
+        }
+        Toast.makeText(this, getString(R.string.toast_hot_smoke_started), Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch {
+            val report = SmokeHotLoop.runOneRound(
+                this@MainActivity,
+                triggerHot = true,
+                listener = object : SmokeHotLoop.Listener {
+                    override fun onStatus(line: String) {
+                        android.util.Log.i("SmokeHotLoop", line)
+                    }
+                    override fun onRoundDone(ok: Boolean, detail: String) { }
+                },
+            )
+            Toast.makeText(
+                this@MainActivity,
+                getString(
+                    R.string.toast_hot_smoke_done,
+                    if (report.ok) "OK ${report.detail.take(120)}" else "FAIL ${report.detail.take(120)}",
+                ),
+                Toast.LENGTH_LONG,
+            ).show()
+        }
     }
 
     companion object {

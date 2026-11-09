@@ -104,6 +104,24 @@ android {
         }
     }
 
+    // Parallel channel: smokeHot MVP (core hot-update + smoke upload). Path A = mainline.
+    // versionCode scheme: 100000 + mainlineVc*100 + hotRev  → 0.1.96-hot.1 = 109701
+    flavorDimensions += "channel"
+    productFlavors {
+        create("mainline") {
+            dimension = "channel"
+            buildConfigField("boolean", "SMOKE_HOT", "false")
+        }
+        create("smokeHot") {
+            dimension = "channel"
+            applicationIdSuffix = ".smokehot"
+            versionName = "0.1.96-hot.1"
+            versionCode = 109701
+            buildConfigField("boolean", "SMOKE_HOT", "true")
+            resValue("string", "app_name", "x86-hot-smoke")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -144,10 +162,17 @@ android.applicationVariants.configureEach {
     outputs.configureEach {
         val out = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
         // 0.1.40+: unique versioned APK name avoids CDN/browser cache serving stale bits
+        // smokeHot uses its own versionName (0.1.96-hot.1); mainline uses version.json
+        val ver = variant.mergedFlavor.versionName ?: appVersionName
+        val flavor = variant.flavorName
         out.outputFileName = if (variant.buildType.name == "release") {
-            "x86-in-android-${appVersionName}.apk"
+            if (flavor == "smokeHot") {
+                "x86-in-android-${ver}.apk"
+            } else {
+                "x86-in-android-${ver}.apk"
+            }
         } else {
-            "x86-in-android-${variant.buildType.name}.apk"
+            "x86-in-android-${flavor}-${variant.buildType.name}.apk"
         }
     }
 }

@@ -1,0 +1,13 @@
+{
+  "manifestUrl": "",
+  "pollIntervalSec": 300,
+  "autoLoop": false,
+  "uploadMode": "drive",
+  "uploadUrl": "",
+  "uploadMethod": "POST",
+  "uploadHeaders": {},
+  "driveFolderId": "1n2ZPm-GOQV66ikxfnPh6XRLbio5PE6fz",
+  "driveFolderName": "x86-a-log",
+  "smokeWaitSeconds": 90,
+  "notes": "Set driveAccessToken via SharedPreferences x86_hot_smoke (not baked). Or switch uploadMode=https and point uploadUrl at a relay that writes into Drive folder x86-a-log."
+}

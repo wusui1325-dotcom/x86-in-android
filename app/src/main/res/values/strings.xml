@@ -90,4 +90,8 @@
     <string name="session_desktop_hint">虛擬桌面 1280×720（固定）</string>
     <string name="error_insufficient_storage">儲存空間不足：可用約 %1$s，下載約需 %2$s。請腾出空間後再試。</string>
     <string name="abi_min_sdk_note">僅 arm64-v8a · Android 9+</string>
+    <string name="btn_hot_smoke_round">跑一輪熱更煙測</string>
+    <string name="toast_hot_smoke_started">熱更煙測開始（背景）…</string>
+    <string name="toast_hot_smoke_done">熱更煙測：%1$s</string>
+    <string name="toast_hot_smoke_busy">熱更煙測進行中</string>
 </resources>

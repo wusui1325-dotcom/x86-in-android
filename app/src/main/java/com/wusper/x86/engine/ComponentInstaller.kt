@@ -1,5 +1,7 @@
 package com.wusper.x86.engine
 
+import com.wusper.x86.hot.HotCoreManager
+
 import android.content.Context
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
@@ -390,17 +392,36 @@ object ComponentInstaller {
         val dest = File(rootfs, "usr/local/bin/wine-launch.sh")
         dest.parentFile?.mkdirs()
         // 每次啟動覆寫（0.1.33：確保 unix wine 路徑進客體，勿留舊 bin/wine 腳本）
+        // smokeHot: prefer hot overlay (filesDir/engine/hot/current) over APK assets
         if (dest.exists()) dest.delete()
-        ctx.assets.open("engine/wine-launch.sh").use { input ->
-            dest.outputStream().use { output -> input.copyTo(output) }
+        val hotLaunch = HotCoreManager.resolveOverlayFile(ctx, "wine-launch.sh")
+        if (hotLaunch != null) {
+            hotLaunch.inputStream().use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            android.util.Log.i(
+                "ComponentInstaller",
+                "wine-launch from hot overlay core=${HotCoreManager.installedCoreVersion(ctx)}",
+            )
+        } else {
+            ctx.assets.open("engine/wine-launch.sh").use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
         }
         ExecBits.force(dest)
         // 0.1.59: wine-reg-helper.py beside wine-launch.sh (UTF-8 Version 2 offline patch)
         val helper = File(rootfs, "usr/local/bin/wine-reg-helper.py")
         runCatching {
             if (helper.exists()) helper.delete()
-            ctx.assets.open("engine/wine-reg-helper.py").use { input ->
-                helper.outputStream().use { output -> input.copyTo(output) }
+            val hotHelper = HotCoreManager.resolveOverlayFile(ctx, "wine-reg-helper.py")
+            if (hotHelper != null) {
+                hotHelper.inputStream().use { input ->
+                    helper.outputStream().use { output -> input.copyTo(output) }
+                }
+            } else {
+                ctx.assets.open("engine/wine-reg-helper.py").use { input ->
+                    helper.outputStream().use { output -> input.copyTo(output) }
+                }
             }
             ExecBits.force(helper)
         }.onFailure {

@@ -1,3 +1,18 @@
+## 0.1.91 — K0–K3 prove APP_LOAD (stamp + RPCSS done + seed gate)
+
+Boss 0.1.90 smoke: live log never entered WINE_START/APP_LOAD (stuck RPCSS t=30,
+0× done). Export `session.log=(missing)` (wrong path). wine-run start.exe /
+「no associated」= **stale**. Cannot judge A1/A3 from that export.
+
+**K0:** export `logs/session.log` + durable `/mnt/data/app-load.stamp` (log tee);
+`# STAMP` into wine-run. **K1:** clear wine-run at script start; orphan start.exe
+reap before WINE_START. **K2:** seed gate refuse blind `wow64_start`. **K3:** RPCSS
+heartbeat + soft-continue @t≥30 → always `done`. Keep 090 A1/A3; DXVK x32 defer.
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.91`; `RPCSS_PRESTART done`; `WINE_START begin`;
+`APP_DOSDEVICES c=…`; `decide=direct_win`; `APP_SEED gate=OK|FAIL`; app-load.stamp
+in export; then Loaded **or** ladder/fail_hr — never silent ShellExecute-only.
+
 ## 0.1.90 — A1+A3+A2 APP_LOAD (hang-alive + seed/c: + SysWOW64)
 
 Boss 087 hang-alive + seed footguns still open after 089 direct-first.

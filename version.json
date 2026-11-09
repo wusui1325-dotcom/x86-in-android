@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.90",
-  "versionCode": 91,
-  "notes": "0.1.90: A1+A3+A2 APP_LOAD — never demote WOW64; dosdevices c:+seed repair; hang-alive ladder kill+advance; SysWOW64 CRT/d3d/vulkan expand; winepath timeout; overlay !desktopOnly; DXVK x32 defer; keep 089–070"
+  "versionName": "0.1.91",
+  "versionCode": 92,
+  "notes": "0.1.91: K0\u2013K3 prove APP_LOAD \u2014 logs/session.log export + app-load.stamp; early wine-run clear + orphan start reap; seed gate refuse blind wow64_start; RPCSS heartbeat/done soft-continue@30; keep 090 A1/A3; DXVK x32 defer"
 }

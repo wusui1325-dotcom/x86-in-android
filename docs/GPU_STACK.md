@@ -1,3 +1,4 @@
+<!-- 0.1.91: APP_LOAD stamp/export + RPCSS done + seed gate; DXVK x32 still defer -->
 # GpuStack 架構（Boss 定案 A · 2026-11-09）
 
 **目標**：真 x86（Windows PE／Linux ELF）主線；殼維持 `com.wusper.x86`（M3、選 exe／工作區、Session Surface）；引擎換成 **Winlator／glibc 級 GPU 棧**，**砍掉預設 Xvfb→XWD 軟渲**。

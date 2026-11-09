@@ -28,7 +28,7 @@
       "pickFiles": [
         "box64"
       ],
-      "notes": "glibc Box64 0.4.4 wine64k: DOS 0x10000:0x10000 + low 0x100000 (holefit at runtime) + hi 0x7f000000; stamp wine64k-align-0x100000"
+      "notes": "0.1.91: K0–K3 APP_LOAD stamp/export + RPCSS done + seed gate; DXVK x32 defer; keep 090–070"
     },
     {
       "id": "box64-x64lib",

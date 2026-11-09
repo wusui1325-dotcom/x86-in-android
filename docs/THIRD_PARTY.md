@@ -1,3 +1,4 @@
+<!-- 0.1.91: APP_LOAD stamp/export + RPCSS done + seed gate; DXVK x32 still defer -->
 # 第三方組件
 
 ## Box64

@@ -408,7 +408,7 @@ object ComponentInstaller {
         }
         // script stamp fingerprint; clear sticky holefit marker when APK script changes
         val scriptStamp = File(rootfs, "usr/local/bin/.wine-launch-apk-stamp")
-        val want = "0.1.90"
+        val want = "0.1.91"
         val prev = runCatching { scriptStamp.readText().trim() }.getOrDefault("")
         if (prev != want) {
             File(rootfs, "usr/local/bin/.box64-wine64k-holefit").delete()

@@ -210,7 +210,11 @@ class SessionActivity : ComponentActivity() {
                             os.write("\n===== Session logText (KEY + gpu-stack merge) =====\n".toByteArray())
                             os.write(logText.toByteArray())
                             os.write("\n".toByteArray())
-                            appendFile("session.log", dataDir?.let { File(it, "session.log") })
+                            // 0.1.91 K0a: nativeExec writes ws.dir/logs/session.log (not dataDir/)
+                            appendFile("session.log (logs/)", ws?.dir?.let { File(File(it, "logs"), "session.log") })
+                            appendFile("session.log (dataDir legacy)", dataDir?.let { File(it, "session.log") })
+                            // 0.1.91 K0b: durable APP_LOAD stamps (survive gpu-stack truncate)
+                            appendFile("app-load.stamp", dataDir?.let { File(it, "app-load.stamp") })
                             appendFile("gpu-stack.log", dataDir?.let { File(it, "gpu-stack.log") })
                             appendFile("wine-run.out", dataDir?.let { File(it, "wine-run.out") })
                             appendFile("wine-version.out (WINE_PE_SMOKE)", dataDir?.let { File(it, "wine-version.out") })
@@ -1424,6 +1428,14 @@ class SessionActivity : ComponentActivity() {
             "fail_hr=",
             "ladder advance",
             "APP_DOSDEVICES",
+            "APP_SEED gate",
+            "APP_LOAD_STAMP",
+            "WINE_RUN_OUT",
+            "RPCSS_PRESTART done",
+            "RPCSS_PRESTART heartbeat",
+            "RPCSS_PRESTART soft-continue",
+            "app-load.stamp",
+            "# STAMP",
             "APP_MSGBOX_DETECT",
             "+msgbox",
             "#32770",

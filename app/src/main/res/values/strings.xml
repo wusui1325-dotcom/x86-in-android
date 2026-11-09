@@ -24,6 +24,9 @@
     <string name="btn_clear_runtime">重裝運行時</string>
     <string name="btn_retry">重試</string>
     <string name="btn_copy_log">複製 log</string>
+    <string name="btn_export_log">匯出完整 log</string>
+    <string name="toast_log_exported">已匯出完整 log</string>
+    <string name="toast_log_export_fail">匯出 log 失敗</string>
     <string name="btn_jump_key">跳轉關鍵</string>
     <string name="btn_toggle_log_show">顯示日誌</string>
     <string name="btn_toggle_log_hide">隱藏日誌</string>

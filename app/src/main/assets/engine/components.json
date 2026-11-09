@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.50-box64-wine64k-holefit-anonpe-smoke",
+  "runtimeId": "wine-gpustack-v0.1.51-box64-wine64k-holefit-anonpe-hb-export",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.50: WINE_PE_SMOKE soft-continue when wineboot progresses (no FATAL 124 live hang); keep NTDLL_ANON_PE + pe_ok FATAL + plain-dir scratch"
+  "notes": "0.1.51: WINE_START hang fix (light WINE_RUN debug, complete-prefix wineboot, WINE_HB); full log export; parallel extractTarXz; holefit cached+binary skip-probe; keep NTDLL_ANON_PE + soft-pass"
 }

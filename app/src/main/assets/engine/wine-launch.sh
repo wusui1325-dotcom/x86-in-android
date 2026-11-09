@@ -13,10 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.50: PE works (NTDLL_ANON_PE); WINE_PE_SMOKE hang gate was wrong — wineboot
-# progressing (services/explorer/system.reg) was treated as FATAL 124. Soft-continue.
-# Keep NTDLL_ANON_PE + plain-dir scratch + pe_ok FATAL + hole-fit mid≥0x1200000.
-WINE_LAUNCH_STAMP=0.1.50
+# 0.1.51: WINE_START hang — light WINE_RUN debug, complete-prefix wineboot,
+# smoke cleanup, WINE_HB heartbeats, DISPLAY diagnose; speed: holefit skip-probe,
+# PREFIX_EXEC skip redundant copy; keep NTDLL_ANON_PE + soft-pass smoke.
+WINE_LAUNCH_STAMP=0.1.51
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -399,6 +399,31 @@ PY
 }
 
 
+# Parallel directory copy (nproc workers). Falls back to cp -a.
+parallel_dir_copy() {
+  local src="$1" dst="$2"
+  [ -d "$src" ] || return 1
+  mkdir -p "$dst" || return 1
+  local n
+  n=$(nproc 2>/dev/null || echo 1)
+  if [ "$n" -lt 1 ]; then n=1; fi
+  if [ "$n" -gt 8 ]; then n=8; fi
+  if [ "$n" -gt 1 ] && command -v find >/dev/null 2>&1; then
+    # File-level parallel copy; create dirs first
+    (cd "$src" && find . -type d -print0) | while IFS= read -r -d '' d; do
+      mkdir -p "$dst/$d" 2>/dev/null || true
+    done
+    if (cd "$src" && find . -type f -print0) | xargs -0 -P "$n" -I{} cp -p "$src/{}" "$dst/{}" 2>/dev/null; then
+      # also copy symlinks
+      (cd "$src" && find . -type l -print0) | while IFS= read -r -d '' l; do
+        cp -a "$src/$l" "$dst/$l" 2>/dev/null || true
+      done
+      return 0
+    fi
+  fi
+  cp -a "$src"/. "$dst"/
+}
+
 ensure_prefix_exec() {
   local p="${WINEPREFIX:-/home/xuser/.wine}"
   local pe_dir=/opt/wine/lib/wine/x86_64-windows
@@ -630,7 +655,8 @@ ensure_prefix_exec() {
       log_diag mkdir-x64w-child "$scratch/x86_64-windows"
       exit 1
     fi
-    if ! cp -a "$pe_dir"/. "$scratch/x86_64-windows"/; then
+    # Parallel copy when nproc>1 (wall-clock win on large PE tree)
+    if ! parallel_dir_copy "$pe_dir" "$scratch/x86_64-windows"; then
       log "FATAL: PREFIX_EXEC cp x86_64-windows failed"
       exit 1
     fi
@@ -667,14 +693,19 @@ ensure_prefix_exec() {
     bind_pe_from_scratch
   fi
 
-  # ALWAYS put system32 on tmpfs so wineboot copies / NT maps land on exec
+  # ALWAYS put system32 on scratch bind so wineboot copies / NT maps land on exec
   if ! ensure_dir "$scratch/system32"; then
     log "FATAL: PREFIX_EXEC cannot mkdir $scratch/system32"
     log_diag mkdir-sys32 "$scratch"
     exit 1
   fi
-  if [ -d "$sys32" ]; then
-    cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
+  # Skip full sys32 tree copy when already seeded (ntdll + .copied); only refresh ntdll
+  if [ -f "$scratch/system32/.copied" ] && [ -f "$scratch/system32/ntdll.dll" ]; then
+    log "PREFIX_EXEC reuse scratch/system32 (skip full copy)"
+  else
+    if [ -d "$sys32" ] && [ "$(ls -A "$sys32" 2>/dev/null | wc -l | tr -d ' ')" -gt 0 ]; then
+      parallel_dir_copy "$sys32" "$scratch/system32" 2>/dev/null || cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
+    fi
   fi
   cp -f "$scratch/x86_64-windows/ntdll.dll" "$scratch/system32/ntdll.dll" 2>/dev/null \
     || cp -f "$pe_ntdll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
@@ -826,6 +857,33 @@ if len(found) != 1:
     sys.exit(2)
 base = found[0]
 print(base + 16, base + 24)
+PY
+}
+
+box64_mid_matches() {
+  python3 - "$1" "$2" "$3" <<'PY'
+import struct, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+want_a = int(sys.argv[2], 0)
+want_s = int(sys.argv[3], 0)
+data = path.read_bytes()
+dos = (0x10000).to_bytes(8,"little") + (0x10000).to_bytes(8,"little")
+hi = (0x7f000000).to_bytes(8,"little") + (0x3000000).to_bytes(8,"little")
+idx = 0
+found = []
+while True:
+    i = data.find(dos, idx)
+    if i < 0:
+        break
+    if data[i+32:i+48] == hi:
+        found.append(i)
+    idx = i + 1
+if len(found) != 1:
+    sys.exit(1)
+base = found[0]
+a, s = struct.unpack_from("<QQ", data, base + 16)
+sys.exit(0 if (a == want_a and s == want_s) else 1)
 PY
 }
 
@@ -981,6 +1039,13 @@ PYINNER
         unset HOLEFIT_ADDR HOLEFIT_SIZE SCRIPT_STAMP
       else
         log "HOLEFIT reuse marker addr=$HOLEFIT_ADDR size=$HOLEFIT_SIZE"
+        # Fast path: if binary already has this mid, skip wine --version probe
+        if box64_mid_matches "$box" "$HOLEFIT_ADDR" "$HOLEFIT_SIZE"; then
+          log "HOLEFIT ok (cached+binary) addr=$HOLEFIT_ADDR size=$HOLEFIT_SIZE — skip probe"
+          export HOLEFIT_ADDR HOLEFIT_SIZE
+          unset WINEPRELOADRESERVE
+          return 0
+        fi
         if box64_patch_prereserve_mid "$box" "$HOLEFIT_ADDR" "$HOLEFIT_SIZE" 2>&1 | tee -a /mnt/data/gpu-stack.log; then
           if box64_probe_mid_done "$HOLEFIT_ADDR"; then
             log "HOLEFIT ok (cached) WINE prereserve of $HOLEFIT_ADDR:$HOLEFIT_SIZE"
@@ -1182,12 +1247,16 @@ else
   log "WINE_PE_SMOKE wineboot NO prefix files (system.reg missing) — early loader/wineboot fail"
 fi
 ls -la "$SMOKE_PREFIX" 2>/dev/null | head -20 | tee -a /mnt/data/gpu-stack.log || true
+# Kill smoke wineserver under smoke prefix, then wipe (avoid locks bleeding into main)
+export WINEPREFIX="$SMOKE_PREFIX"
+"$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
 rm -rf "$SMOKE_PREFIX" 2>/dev/null || true
-# Keep err unmuted for real run until Present works (Kotlin WINEDEBUG=-all hid root cause)
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,fix+all}"
+sleep 0.3
+# 0.1.51: light WINE_RUN debug — err+all,fix+all + BOX64_LOG=1 made explorer glacial
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
 if [ -n "$SMOKE_PREFIX_SAVE" ]; then export WINEPREFIX="$SMOKE_PREFIX_SAVE"; else export WINEPREFIX=/home/xuser/.wine; fi
-# Real run: BOX64_LOG=1 until WINE_EXIT=0 (Parent: capture beyond truncated smoke)
-export BOX64_LOG="${BOX64_RUN_LOG:-1}"
+export BOX64_LOG="${BOX64_RUN_LOG:-0}"
 export BOX64_SHOWSEGV=0
 export BOX64_SHOWBT=0
 set -e
@@ -1304,22 +1373,79 @@ else
   exit 1
 fi
 
-# 0.1.42: explicit wineboot on real prefix if empty — same path PE smoke hits; capture err
+# 0.1.51: complete-prefix check (system.reg alone is NOT enough — stub from noexec era)
 mkdir -p "$WINEPREFIX"
 ensure_prefix_exec
-export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,fix+all}"
-export BOX64_LOG="${BOX64_RUN_LOG:-1}"
-log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX"
-if [ ! -f "$WINEPREFIX/system.reg" ]; then
-  log "WINEBOOT_INIT begin (no system.reg) timeout=90s"
+export WINEDEBUG="${WINE_RUN_WINEDEBUG:-err+all,+seh,+loaddll}"
+export BOX64_LOG="${BOX64_RUN_LOG:-0}"
+log "WINE_RUN WINEDEBUG=$WINEDEBUG BOX64_LOG=$BOX64_LOG WINEPREFIX=$WINEPREFIX DISPLAY=${DISPLAY:-unset}"
+
+prefix_is_complete() {
+  local p="$1"
+  [ -f "$p/system.reg" ] || return 1
+  local ssz usz ndll
+  ssz=$(wc -c < "$p/system.reg" 2>/dev/null | tr -d ' \n')
+  ssz=${ssz:-0}
+  # Real wineboot system.reg is typically 100KB+; stub from failed era ~1–2KB
+  [ "$ssz" -ge 20000 ] || return 1
+  [ -f "$p/user.reg" ] || return 1
+  usz=$(wc -c < "$p/user.reg" 2>/dev/null | tr -d ' \n')
+  usz=${usz:-0}
+  [ "$usz" -ge 400 ] || return 1
+  [ -f "$p/drive_c/windows/system32/kernel32.dll" ] || return 1
+  [ -f "$p/drive_c/windows/system32/ntdll.dll" ] || return 1
+  ndll=$(ls "$p/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' \n')
+  ndll=${ndll:-0}
+  [ "$ndll" -ge 15 ] || return 1
+  # Wine writes .update-timestamp when wineboot finishes
+  [ -f "$p/.update-timestamp" ] || return 1
+  return 0
+}
+
+if prefix_is_complete "$WINEPREFIX"; then
+  log "WINEBOOT_INIT skip (prefix complete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" | tr -d ' ')B dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') .update-timestamp=yes)"
+else
+  if [ -f "$WINEPREFIX/system.reg" ]; then
+    log "WINEBOOT_INIT force (prefix incomplete: system.reg=$(wc -c <"$WINEPREFIX/system.reg" 2>/dev/null | tr -d ' ')B — stub/half-init from prior fail)"
+  else
+    log "WINEBOOT_INIT begin (no system.reg) timeout=120s"
+  fi
+  # Drop stale wineserver locks on main prefix before init
+  "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
   : > /mnt/data/wineboot-init.out
   set +e
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine wineboot --init >>/mnt/data/wineboot-init.out 2>&1 &
   WB_PID=$!
   WB_T=0
+  WB_BYTES=0
   while kill -0 "$WB_PID" 2>/dev/null; do
     WB_T=$((WB_T+1))
-    if [ "$WB_T" -ge 90 ]; then
+    SZ=$(wc -c < /mnt/data/wineboot-init.out 2>/dev/null | tr -d ' \n' || echo 0)
+    SZ=${SZ:-0}
+    if [ "$SZ" -gt "$WB_BYTES" ] 2>/dev/null; then
+      dd if=/mnt/data/wineboot-init.out bs=1 skip="$WB_BYTES" count=$((SZ-WB_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
+      WB_BYTES=$SZ
+    fi
+    if [ $((WB_T % 15)) -eq 0 ]; then
+      log "WINEBOOT_INIT hb t=${WB_T}s pid=$WB_PID out_bytes=$SZ"
+    fi
+    # Early done: .update-timestamp appeared
+    if [ -f "$WINEPREFIX/.update-timestamp" ] && [ -f "$WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]; then
+      log "WINEBOOT_INIT progress complete markers t=${WB_T}s — wait exit"
+      # give wineboot a few more seconds to exit cleanly
+      for _ in 1 2 3 4 5; do
+        kill -0 "$WB_PID" 2>/dev/null || break
+        sleep 1
+        WB_T=$((WB_T+1))
+      done
+      if kill -0 "$WB_PID" 2>/dev/null; then
+        kill -TERM "$WB_PID" 2>/dev/null || true
+        sleep 1
+        kill -KILL "$WB_PID" 2>/dev/null || true
+      fi
+      break
+    fi
+    if [ "$WB_T" -ge 120 ]; then
       log "WINEBOOT_INIT TIMEOUT — killing"
       kill -TERM "$WB_PID" 2>/dev/null || true
       sleep 1
@@ -1332,9 +1458,9 @@ if [ ! -f "$WINEPREFIX/system.reg" ]; then
   wait "$WB_PID" 2>/dev/null
   WB_RC=$?
   set -e
-  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no)"
+  log "WINEBOOT_INIT exit=$WB_RC system.reg=$([ -f "$WINEPREFIX/system.reg" ] && echo yes || echo no) complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
   log "--- WINEBOOT_INIT key lines ---"
-  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
+  grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|wineboot|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|noexec|map_image' /mnt/data/wineboot-init.out 2>/dev/null | head -120 | tee -a /mnt/data/gpu-stack.log || true
   log "--- WINEBOOT_INIT tail ---"
   tail -60 /mnt/data/wineboot-init.out 2>/dev/null | tee -a /mnt/data/gpu-stack.log || true
   if [ ! -f "$WINEPREFIX/system.reg" ]; then
@@ -1343,19 +1469,69 @@ if [ ! -f "$WINEPREFIX/system.reg" ]; then
     [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
     exit "${WB_RC:-1}"
   fi
-else
-  log "WINEBOOT_INIT skip (system.reg present)"
+  if ! prefix_is_complete "$WINEPREFIX"; then
+    log "WARN: WINEBOOT_INIT left incomplete prefix (will still try WINE_START; export log if Present hangs)"
+  fi
 fi
+
+# Display diagnose before START
+X0_STATE=missing
+if [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ]; then X0_STATE=ok; fi
+log "DISPLAY_DIAG DISPLAY=${DISPLAY:-unset} X0=$X0_STATE backend=${BACKEND:-gpu} desktop=${W}x${H}"
 
 log "WINE_START /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} $*"
 : > /mnt/data/wine-run.out
 set +e
-"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} "$@" >>/mnt/data/wine-run.out 2>&1
+"$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H} "$@" >>/mnt/data/wine-run.out 2>&1 &
+WINE_PID=$!
+log "WINE_START pid=$WINE_PID (heartbeat on)"
+HB=0
+LAST_BYTES=0
+while kill -0 "$WINE_PID" 2>/dev/null; do
+  HB=$((HB+1))
+  BYTES=$(wc -c < /mnt/data/wine-run.out 2>/dev/null | tr -d ' \n' || echo 0)
+  BYTES=${BYTES:-0}
+  # Stream new wine-run bytes into KEY log so Session is not stuck at START
+  if [ "$BYTES" -gt "$LAST_BYTES" ] 2>/dev/null; then
+    dd if=/mnt/data/wine-run.out bs=1 skip="$LAST_BYTES" count=$((BYTES-LAST_BYTES)) 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
+    LAST_BYTES=$BYTES
+  fi
+  DO_HB=0
+  case "$HB" in
+    10|30|60) DO_HB=1 ;;
+  esac
+  if [ $((HB % 30)) -eq 0 ]; then DO_HB=1; fi
+  if [ "$DO_HB" = "1" ]; then
+    X0_NOW=no
+    [ -S /tmp/.X11-unix/X0 ] || [ -e /tmp/.X11-unix/X0 ] && X0_NOW=ok
+    GROW=$((BYTES-LAST_BYTES))
+    # LAST_BYTES already caught up above; report absolute size
+    APP_ALIVE=0
+    if grep -qE 'Detected running wine with |explorer\.exe|app\.exe' /mnt/data/wine-run.out 2>/dev/null; then APP_ALIVE=1; fi
+    ERR_N=$(grep -cE '^[0-9a-f]+:err:' /mnt/data/wine-run.out 2>/dev/null || echo 0)
+    ERR_N=$(echo "$ERR_N" | tr -d ' \n')
+    log "WINE_HB t=${HB}s pid=$WINE_PID alive=1 wine-run_bytes=$BYTES x0=$X0_NOW app_seen=$APP_ALIVE err_lines=${ERR_N:-0}"
+    if [ "$BYTES" -eq 0 ]; then
+      log "WINE_HB note: wine-run.out empty — Wine silent (debug light); Present may still be waiting for first drawable"
+    fi
+    # Tail recent wine-run for KEY panel
+    tail -8 /mnt/data/wine-run.out 2>/dev/null | while IFS= read -r ln; do
+      log "WINE_HB.tail: $ln"
+    done || true
+  fi
+  sleep 1
+done
+wait "$WINE_PID" 2>/dev/null
 RC=$?
 set -e
-# live-ish: also append a short key extract to gpu-stack so Session sees it without opening wine-run.out
-log "WINE_EXIT=$RC wine-run_bytes=$(wc -c </mnt/data/wine-run.out 2>/dev/null | tr -d ' ')"
-grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
+# Flush remaining
+BYTES=$(wc -c < /mnt/data/wine-run.out 2>/dev/null | tr -d ' \n' || echo 0)
+BYTES=${BYTES:-0}
+if [ "$BYTES" -gt "$LAST_BYTES" ] 2>/dev/null; then
+  dd if=/mnt/data/wine-run.out bs=1 skip="$LAST_BYTES" 2>/dev/null | tee -a /mnt/data/gpu-stack.log >/dev/null
+fi
+log "WINE_EXIT=$RC wine-run_bytes=$BYTES hb_last=${HB:-0}s"
+grep -E 'wine:|err:|fix:|warn:|Assertion|c0000|SIG|Signal|prereserve|Illegal|FATAL|shared user|granularity|LdrInitialize|KiUser|Emit Signal|Application could not|err:module|err:process|noexec|map_image|SHAPE|Xlib' /mnt/data/wine-run.out 2>/dev/null | head -80 | tee -a /mnt/data/gpu-stack.log || true
 
 if [ "$RC" != "0" ]; then
   log "--- wine-run.out tail ---"

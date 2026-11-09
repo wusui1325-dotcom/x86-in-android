@@ -105,7 +105,7 @@ object ExitStatusMessages {
             )
         1 -> (
             "客體行程以退出碼 1 結束（不是 Android「存取所有檔案」權限）。" +
-                "0.1.50+ 請看 WINE_LAUNCH_STAMP、NTDLL_ANON_PE、PREFIX_EXEC ok … pe_ok=yes（pe_ok=no 必 FATAL）、" +
+                "0.1.51+ 請看 WINE_LAUNCH_STAMP、NTDLL_ANON_PE、PREFIX_EXEC ok … pe_ok=yes（pe_ok=no 必 FATAL）、" +
                 "WINE_PE_SMOKE soft-continue／WINEBOOT_INIT／WINE_START、HOLEFIT ok、prereserve mid done。" +
                 "c0000018 → unix wine；noexec → 需 NTDLL_ANON_PE；無 system.reg → wineboot 早死。"
             )
@@ -114,17 +114,17 @@ object ExitStatusMessages {
                 "SELFTEST=132 → 換 Box64；SMOKE=132 → Wine／x64lib；僅 explorer 炸 → GPU／PE。"
             )
         124 -> (
-            "客體退出碼 124＝WINE_PE_SMOKE 逾時且無 boot 進度。0.1.50+：若已有 services／explorer／system.reg 會 soft-continue，不應再 FATAL。" +
-                "請確認 WINE_LAUNCH_STAMP=0.1.50、NTDLL_ANON_PE ok、HOLEFIT ok；無進度才看 loader／prereserve。"
+            "客體退出碼 124＝WINE_PE_SMOKE 逾時且無 boot 進度。0.1.51+：若已有 services／explorer／system.reg 會 soft-continue，不應再 FATAL。" +
+                "請確認 WINE_LAUNCH_STAMP=0.1.51、NTDLL_ANON_PE ok、HOLEFIT ok；無進度才看 loader／prereserve。"
             )
         139 -> (
             "客體退出碼 139＝Wine PE SIGSEGV。常見 LdrInitializeThunk→KiUserExceptionDispatcher 迴圈：" +
-                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.50+ hole-fit size-outer＋FATAL；" +
+                "Box64 mid prereserve 在 39-bit/proot 下 isBlockFree 失敗會被靜默丟棄。0.1.51+ hole-fit size-outer＋FATAL；" +
                 "請蓋裝後看 HOLEFIT ok 與 prereserve mid done。"
             )
         134 -> (
             "客體退出碼 134＝SIGABRT。常見 Wine11 set_mem_area_state granularity_mask assert。" +
-                "0.1.50+ 需 wine64k-align + hole-fit mid + NTDLL_ANON_PE；看 WINE_LAUNCH_STAMP／HOLEFIT ok／PREFIX_EXEC ok。"
+                "0.1.51+ 需 wine64k-align + hole-fit mid + NTDLL_ANON_PE；看 WINE_LAUNCH_STAMP／HOLEFIT ok／PREFIX_EXEC ok。"
             )
         else -> (
             "客體退出碼 $code。請查看日誌；" +

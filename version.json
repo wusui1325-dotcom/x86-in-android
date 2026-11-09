@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.50",
-  "versionCode": 51,
-  "notes": "0.1.50: WINE_PE_SMOKE soft-continue on progressing wineboot (no FATAL hang); keep NTDLL_ANON_PE + pe_ok FATAL"
+  "versionName": "0.1.51",
+  "versionCode": 52,
+  "notes": "0.1.51: WINE_START hang (light debug + complete-prefix wineboot + WINE_HB); full log export; parallel extract; holefit skip-probe; keep NTDLL_ANON_PE + soft-pass"
 }

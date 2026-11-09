@@ -3,6 +3,7 @@ package com.wusper.x86.session
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.Context
 import android.widget.Toast
 import androidx.compose.ui.text.SpanStyle
@@ -16,6 +17,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -71,6 +73,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
+import com.wusper.x86.BuildConfig
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.ExitStatusMessages
 import com.wusper.x86.engine.GpuStack
@@ -168,6 +171,75 @@ class SessionActivity : ComponentActivity() {
                     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     cm.setPrimaryClip(ClipData.newPlainText("x86-session-log", logText))
                     Toast.makeText(this@SessionActivity, getString(com.wusper.x86.R.string.toast_log_copied), Toast.LENGTH_SHORT).show()
+                }
+                fun exportFullLog() {
+                    try {
+                        val dataDir = ws?.dataDir
+                        val stamp = Regex("""WINE_LAUNCH_STAMP=([0-9.]+)""")
+                            .find(logText)?.groupValues?.getOrNull(1) ?: BuildConfig.VERSION_NAME
+                        val tip = BuildConfig.GIT_SHA.take(7)
+                        val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                            .format(java.util.Date())
+                        val name = "x86-log-${stamp}-${tip}-${ts}.txt"
+                        val outDir = File(cacheDir, "log-export").also { it.mkdirs() }
+                        val out = File(outDir, name)
+                        val hdr = buildString {
+                            appendLine("=== x86-in-android full session log ===")
+                            appendLine("versionName=${BuildConfig.VERSION_NAME} versionCode=${BuildConfig.VERSION_CODE}")
+                            appendLine("GIT_SHA=${BuildConfig.GIT_SHA}")
+                            appendLine("WINE_LAUNCH_STAMP=$stamp")
+                            appendLine("workspace=${ws?.id ?: "-"} display=${ws?.displayName ?: "-"}")
+                            appendLine("exportedAt=$ts (device local)")
+                            appendLine()
+                        }
+                        out.outputStream().buffered().use { os ->
+                            os.write(hdr.toByteArray())
+                            fun appendFile(label: String, f: File?) {
+                                os.write("\n===== $label =====\n".toByteArray())
+                                if (f != null && f.exists()) {
+                                    f.inputStream().use { it.copyTo(os) }
+                                    os.write("\n".toByteArray())
+                                } else {
+                                    os.write("(missing)\n".toByteArray())
+                                }
+                            }
+                            os.write("\n===== Session logText (KEY + gpu-stack merge) =====\n".toByteArray())
+                            os.write(logText.toByteArray())
+                            os.write("\n".toByteArray())
+                            appendFile("session.log", dataDir?.let { File(it, "session.log") })
+                            appendFile("gpu-stack.log", dataDir?.let { File(it, "gpu-stack.log") })
+                            appendFile("wine-run.out", dataDir?.let { File(it, "wine-run.out") })
+                            appendFile("wine-version.out (WINE_PE_SMOKE)", dataDir?.let { File(it, "wine-version.out") })
+                            appendFile("wineboot-init.out", dataDir?.let { File(it, "wineboot-init.out") })
+                            appendFile("box64-selftest.out", dataDir?.let { File(it, "box64-selftest.out") })
+                            appendFile("wine-prereserve-probe.out", dataDir?.let { File(it, "wine-prereserve-probe.out") })
+                        }
+                        val uri = FileProvider.getUriForFile(
+                            this@SessionActivity,
+                            "${packageName}.fileprovider",
+                            out,
+                        )
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            putExtra(Intent.EXTRA_SUBJECT, name)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            clipData = ClipData.newUri(contentResolver, name, uri)
+                        }
+                        startActivity(Intent.createChooser(send, getString(com.wusper.x86.R.string.btn_export_log)))
+                        Toast.makeText(
+                            this@SessionActivity,
+                            getString(com.wusper.x86.R.string.toast_log_exported),
+                            Toast.LENGTH_SHORT,
+                        ).show()
+                    } catch (t: Throwable) {
+                        android.util.Log.e("SessionActivity", "exportFullLog", t)
+                        Toast.makeText(
+                            this@SessionActivity,
+                            getString(com.wusper.x86.R.string.toast_log_export_fail) + ": ${t.message}",
+                            Toast.LENGTH_LONG,
+                        ).show()
+                    }
                 }
                 fun jumpToKeyLog() {
                     val lines = logText.split('\n')
@@ -583,6 +655,13 @@ class SessionActivity : ComponentActivity() {
                             } else {
                                 session
                             }
+                            // Surface status from WINE_HB so 「執行中」does not look frozen
+                            val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
+                            if (hb != null && status.startsWith("執行中")) {
+                                val tSec = hb.groupValues[1]
+                                val pidHb = hb.groupValues[2]
+                                status = "執行中 pid=$pidHb t=${tSec}s"
+                            }
                         }
                         if (wait != 1) {
                             val pid = NativeEngine.nativeRunningPid()
@@ -966,6 +1045,12 @@ class SessionActivity : ComponentActivity() {
                                 Text(getString(com.wusper.x86.R.string.btn_copy_log))
                             }
                             OutlinedButton(
+                                onClick = { exportFullLog() },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(getString(com.wusper.x86.R.string.btn_export_log))
+                            }
+                            OutlinedButton(
                                 onClick = {
                                     logExpanded = true
                                     jumpToKeyLog()
@@ -1034,6 +1119,11 @@ class SessionActivity : ComponentActivity() {
             "soft-pass",
             "soft-continue",
             "WINE_RUN",
+            "WINE_HB",
+            "DISPLAY_DIAG",
+            "prefix complete",
+            "prefix incomplete",
+            "cached+binary",
             "WINE_PRERESERVE",
             "TIMEOUT",
             "still running",

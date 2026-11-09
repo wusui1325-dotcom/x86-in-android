@@ -6,6 +6,10 @@ import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.json.JSONObject
 import org.tukaani.xz.XZInputStream
 import java.io.BufferedInputStream
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.Future
+import java.util.concurrent.Executors
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -391,9 +395,9 @@ object ComponentInstaller {
             dest.outputStream().use { output -> input.copyTo(output) }
         }
         ExecBits.force(dest)
-        // 0.1.50: script stamp fingerprint; clear sticky holefit marker when APK script changes
+        // 0.1.51: script stamp fingerprint; clear sticky holefit marker when APK script changes
         val scriptStamp = File(rootfs, "usr/local/bin/.wine-launch-apk-stamp")
-        val want = "0.1.50"
+        val want = "0.1.51"
         val prev = runCatching { scriptStamp.readText().trim() }.getOrDefault("")
         if (prev != want) {
             File(rootfs, "usr/local/bin/.box64-wine64k-holefit").delete()
@@ -775,7 +779,7 @@ object ComponentInstaller {
         }
         conn.inputStream.use { input ->
             FileOutputStream(dest, append).use { output ->
-                val buf = ByteArray(256 * 1024)
+                val buf = ByteArray(1024 * 1024)
                 var got = if (append) existing else 0L
                 while (true) {
                     checkCancelled()
@@ -1110,129 +1114,194 @@ object ComponentInstaller {
     ) {
         dest.mkdirs()
         requireXzMagic(archive)
+        android.util.Log.i(
+            "ComponentInstaller",
+            "extractTarXz buffer=1MiB parallel-write archive=${archive.name} -> ${dest.name}",
+        )
         val strip = stripPrefix.trim().trim('/')
         val stripWithSlash = if (strip.isNotEmpty()) "$strip/" else ""
-        FileInputStream(archive).use { fis ->
-            BufferedInputStream(fis).use { bis ->
-                XZInputStream(bis).use { xzis ->
-                    TarArchiveInputStream(xzis).use { tis ->
-                        var entry: TarArchiveEntry? = tis.nextEntry
-                        while (entry != null) {
-                            var name = entry.name.removePrefix("./")
-                            if (strip.isNotEmpty()) {
+        val nWorkers = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+        val pool = Executors.newFixedThreadPool(nWorkers)
+        val pending = mutableListOf<Future<*>>()
+        val writeErrors = AtomicInteger(0)
+        var firstError: Throwable? = null
+        val writeLock = Any()
+        fun drainFailures() {
+            val err = firstError
+            if (err != null) throw err
+            if (writeErrors.get() > 0) {
+                throw IllegalStateException("extractTarXz parallel write failures=${writeErrors.get()}")
+            }
+        }
+        try {
+            FileInputStream(archive).use { fis ->
+                BufferedInputStream(fis, 1024 * 1024).use { bis ->
+                    XZInputStream(bis).use { xzis ->
+                        TarArchiveInputStream(xzis).use { tis ->
+                            var entry: TarArchiveEntry? = tis.nextEntry
+                            while (entry != null) {
+                                drainFailures()
+                                var name = entry.name.removePrefix("./")
+                                if (strip.isNotEmpty()) {
+                                    when {
+                                        name == strip -> {
+                                            entry = tis.nextEntry
+                                            continue
+                                        }
+                                        name.startsWith(stripWithSlash) ->
+                                            name = name.removePrefix(stripWithSlash)
+                                        else -> {
+                                            entry = tis.nextEntry
+                                            continue
+                                        }
+                                    }
+                                }
+                                if (name.isEmpty()) {
+                                    entry = tis.nextEntry
+                                    continue
+                                }
+                                if (skipDevice && (name == "dev" || name.startsWith("dev/") || name.contains("/dev/"))) {
+                                    entry = tis.nextEntry
+                                    continue
+                                }
+                                val out = lexicalResolveUnder(dest, name)
+                                if (out == null) {
+                                    entry = tis.nextEntry
+                                    continue
+                                }
                                 when {
-                                    name == strip -> {
-                                        entry = tis.nextEntry
-                                        continue
+                                    entry.isDirectory -> {
+                                        if (!Files.isSymbolicLink(out.toPath())) {
+                                            out.mkdirs()
+                                        }
                                     }
-                                    name.startsWith(stripWithSlash) ->
-                                        name = name.removePrefix(stripWithSlash)
-                                    else -> {
-                                        entry = tis.nextEntry
-                                        continue
-                                    }
-                                }
-                            }
-                            if (name.isEmpty()) {
-                                entry = tis.nextEntry
-                                continue
-                            }
-                            if (skipDevice && (name == "dev" || name.startsWith("dev/") || name.contains("/dev/"))) {
-                                entry = tis.nextEntry
-                                continue
-                            }
-                            // 路徑穿越防護：必須用「不解引用」的 lexical 路徑。
-                            // File.canonicalFile 會跟隨已存在的 bin→usr/bin，把 entry「bin」
-                            // 解析成 usr/bin，再建成 usr/bin→usr/bin 自指環（ELOOP）。
-                            val out = lexicalResolveUnder(dest, name)
-                            if (out == null) {
-                                entry = tis.nextEntry
-                                continue
-                            }
-                            when {
-                                entry.isDirectory -> {
-                                    // 若同名已是 symlink（usrmerge），不要 mkdir 跟進去改目標
-                                    if (!Files.isSymbolicLink(out.toPath())) {
-                                        out.mkdirs()
-                                    }
-                                }
-                                entry.isSymbolicLink -> {
-                                    out.parentFile?.mkdirs()
-                                    val target = entry.linkName ?: ""
-                                    val critical = name == "bin" || name == "lib" || name == "sbin" ||
-                                        name == "usr/bin/sh" || name.endsWith("/ld-linux-aarch64.so.1")
-                                    fun linkOrLog() {
-                                        try {
-                                            // 拒絕自指環：例如誤把輸出解析到 usr/bin 後再建 → usr/bin
-                                            val parent = out.parentFile?.toPath() ?: dest.toPath()
-                                            val resolvedTarget = parent.resolve(target).normalize()
-                                            if (resolvedTarget == out.toPath().toAbsolutePath().normalize()) {
+                                    entry.isSymbolicLink -> {
+                                        out.parentFile?.mkdirs()
+                                        val target = entry.linkName ?: ""
+                                        val critical = name == "bin" || name == "lib" || name == "sbin" ||
+                                            name == "usr/bin/sh" || name.endsWith("/ld-linux-aarch64.so.1")
+                                        fun linkOrLog() {
+                                            try {
+                                                val parent = out.parentFile?.toPath() ?: dest.toPath()
+                                                val resolvedTarget = parent.resolve(target).normalize()
+                                                if (resolvedTarget == out.toPath().toAbsolutePath().normalize()) {
+                                                    android.util.Log.w(
+                                                        "ComponentInstaller",
+                                                        "skip self-referential symlink $name → $target",
+                                                    )
+                                                    if (critical) {
+                                                        throw IllegalStateException(
+                                                            "符號連結自指：$name → $target",
+                                                        )
+                                                    }
+                                                    return
+                                                }
+                                                deleteSelfNoFollow(out)
+                                                Files.createSymbolicLink(out.toPath(), Paths.get(target))
+                                            } catch (t: Throwable) {
                                                 android.util.Log.w(
                                                     "ComponentInstaller",
-                                                    "skip self-referential symlink $name → $target",
+                                                    "extract symlink $name → $target: ${t.message}",
                                                 )
-                                                if (critical) {
-                                                    throw IllegalStateException(
-                                                        "符號連結自指：$name → $target",
-                                                    )
-                                                }
-                                                return
+                                                if (critical) throw t
                                             }
-                                            deleteSelfNoFollow(out)
-                                            Files.createSymbolicLink(out.toPath(), Paths.get(target))
-                                        } catch (t: Throwable) {
+                                        }
+                                        if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
+                                            linkOrLog()
+                                        } else if (target.isNotBlank() && !target.startsWith("/")) {
+                                            val destPath = dest.toPath().toAbsolutePath().normalize()
+                                            val resolved = out.parentFile!!.toPath().resolve(target).normalize()
+                                            if (resolved.startsWith(destPath)) {
+                                                linkOrLog()
+                                            }
+                                        } else if (critical && target.isNotBlank()) {
                                             android.util.Log.w(
                                                 "ComponentInstaller",
-                                                "extract symlink $name → $target: ${t.message}",
+                                                "skip absolute symlink $name → $target",
                                             )
-                                            if (critical) throw t
                                         }
                                     }
-                                    if (target.isNotBlank() && !target.startsWith("/") && ".." !in target.split('/')) {
-                                        linkOrLog()
-                                    } else if (target.isNotBlank() && !target.startsWith("/")) {
-                                        // 允許相對含 .. 但 normalize 後仍在 dest 內（不跟隨）
-                                        val destPath = dest.toPath().toAbsolutePath().normalize()
-                                        val resolved = out.parentFile!!.toPath().resolve(target).normalize()
-                                        if (resolved.startsWith(destPath)) {
-                                            linkOrLog()
+                                    entry.isLink -> {
+                                        out.parentFile?.mkdirs()
+                                        val linkTarget = entry.linkName ?: ""
+                                        val src = if (strip.isNotEmpty() && linkTarget.startsWith(stripWithSlash)) {
+                                            File(dest, linkTarget.removePrefix(stripWithSlash))
+                                        } else if (strip.isNotEmpty() && linkTarget.startsWith("$strip/")) {
+                                            File(dest, linkTarget.removePrefix("$strip/"))
+                                        } else {
+                                            File(dest, linkTarget.removePrefix("./"))
                                         }
-                                    } else if (critical && target.isNotBlank()) {
-                                        android.util.Log.w(
-                                            "ComponentInstaller",
-                                            "skip absolute symlink $name → $target",
-                                        )
+                                        if (src.isFile) {
+                                            src.copyTo(out, overwrite = true)
+                                            if (entry.mode and 0b001001001 != 0) ExecBits.force(out)
+                                        }
+                                    }
+                                    else -> {
+                                        out.parentFile?.mkdirs()
+                                        val mode = entry.mode
+                                        val size = entry.size
+                                        // Parallel write for modest files: read fully then pool.write
+                                        // Large files stay synchronous to bound memory.
+                                        val parallelMax = 8L * 1024L * 1024L
+                                        if (size in 1..parallelMax) {
+                                            val bytes = ByteArray(size.toInt())
+                                            var off = 0
+                                            while (off < bytes.size) {
+                                                val n = tis.read(bytes, off, bytes.size - off)
+                                                if (n <= 0) break
+                                                off += n
+                                            }
+                                            val destFile = out
+                                            pending.add(
+                                                pool.submit {
+                                                    try {
+                                                        FileOutputStream(destFile).use { fos ->
+                                                            BufferedOutputStream(fos, 1024 * 1024).use { bos ->
+                                                                bos.write(bytes, 0, off)
+                                                                bos.flush()
+                                                            }
+                                                        }
+                                                        if (mode and 0b001001001 != 0) {
+                                                            ExecBits.force(destFile)
+                                                        }
+                                                    } catch (t: Throwable) {
+                                                        writeErrors.incrementAndGet()
+                                                        synchronized(writeLock) {
+                                                            if (firstError == null) firstError = t
+                                                        }
+                                                    }
+                                                },
+                                            )
+                                        } else {
+                                            val buf = ByteArray(1024 * 1024)
+                                            FileOutputStream(out).use { fos ->
+                                                BufferedOutputStream(fos, buf.size).use { bos ->
+                                                    while (true) {
+                                                        val n = tis.read(buf)
+                                                        if (n <= 0) break
+                                                        bos.write(buf, 0, n)
+                                                    }
+                                                    bos.flush()
+                                                }
+                                            }
+                                            if (mode and 0b001001001 != 0) {
+                                                ExecBits.force(out)
+                                            }
+                                        }
                                     }
                                 }
-                                entry.isLink -> {
-                                    // hard link：盡量指向已解出的檔
-                                    out.parentFile?.mkdirs()
-                                    val linkTarget = entry.linkName ?: ""
-                                    val src = if (strip.isNotEmpty() && linkTarget.startsWith(stripWithSlash)) {
-                                        File(dest, linkTarget.removePrefix(stripWithSlash))
-                                    } else if (strip.isNotEmpty() && linkTarget.startsWith("$strip/")) {
-                                        File(dest, linkTarget.removePrefix("$strip/"))
-                                    } else {
-                                        File(dest, linkTarget.removePrefix("./"))
-                                    }
-                                    if (src.isFile) {
-                                        src.copyTo(out, overwrite = true)
-                                        if (entry.mode and 0b001001001 != 0) ExecBits.force(out)
-                                    }
-                                }
-                                else -> {
-                                    out.parentFile?.mkdirs()
-                                    FileOutputStream(out).use { fos -> tis.copyTo(fos) }
-                                    if (entry.mode and 0b001001001 != 0) {
-                                        ExecBits.force(out)
-                                    }
-                                }
+                                entry = tis.nextEntry
                             }
-                            entry = tis.nextEntry
                         }
                     }
                 }
             }
+            for (f in pending) {
+                f.get()
+            }
+            drainFailures()
+        } finally {
+            pool.shutdown()
         }
     }
 

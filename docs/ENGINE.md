@@ -1,3 +1,22 @@
+## 0.1.51 — WINE_START hang + full log export + speed
+
+**Bug (0.1.50 smoke):** Soft-pass OK; `WINEBOOT_INIT skip (system.reg present)` then stuck at
+`WINE_START` with status「執行中」and black「等待客體畫面（Present）…」. Root causes:
+(1) `WINEDEBUG=err+all,fix+all` + `BOX64_LOG=1` flood made first explorer glacial;
+(2) wineboot skip only checked `system.reg` (stub from noexec era);
+(3) no heartbeat after START so Session looked frozen.
+
+**Fix:** Light `WINE_RUN` debug (`err+all,+seh,+loaddll`, `BOX64_LOG=0`); `prefix_is_complete`
+(system.reg size, user.reg, kernel32, dll count, `.update-timestamp`); force wineboot if
+incomplete; smoke wineserver cleanup; `WINE_HB` / `DISPLAY_DIAG` heartbeats; Session
+「匯出完整 log」FileProvider share (session + gpu-stack + wine-run + smoke outs).
+Speed: parallel `extractTarXz` writes (nproc 2–8), 1MiB buffers; `parallel_dir_copy` for
+PREFIX_EXEC; holefit `cached+binary` skip probe. Keep NTDLL_ANON_PE + soft-pass.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.51` → `NTDLL_ANON_PE ok` → `HOLEFIT ok (cached+binary)`
+or `HOLEFIT ok` → soft-pass → `WINEBOOT_INIT` skip-or-force → `DISPLAY_DIAG` → `WINE_START pid=`
+→ `WINE_HB t=10s/30s/60s` → Present or next unmuted err. UI:「匯出完整 log」next to 複製 log.
+
 ## 0.1.50 — WINE_PE_SMOKE soft-continue (live wineboot ≠ FATAL hang)
 
 **Bug (0.1.49 smoke):** PE finally runs (`NTDLL_ANON_PE ok`, no `map_image … noexec`);

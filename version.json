@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.77",
-  "versionCode": 78,
-  "notes": "0.1.77: APP_LOAD fingerprint — strict Loaded (no false path_seen); PE subsystem=2/3; APP_HWND_WAIT; Loaded-but-no-HWND WARN; bringToFront→raiseWindow"
+  "versionName": "0.1.78",
+  "versionCode": 79,
+  "notes": "0.1.78: Loaded-but-no-HWND — sticky .x86-x11-ready (desk cannot wipe app hwnd); guest .x86-nohwnd-req → host force map+raise + nohwnd_scan=; APP_HWND_WAIT backoff; desk-steal-block"
 }

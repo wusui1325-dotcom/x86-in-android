@@ -583,6 +583,7 @@ class SessionActivity : ComponentActivity() {
                         // 0.1.75: clear+set desktop ready marker before XServer (DesktopHelper.attachTo)
                         val readyMarker = java.io.File(ws.dataDir, ".x86-x11-ready")
                         DesktopHelper.setReadyMarker(readyMarker)
+                        DesktopHelper.stopNoHwndPoller()
                         DesktopHelper.clearReadyMarker()
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
@@ -1392,6 +1393,11 @@ class SessionActivity : ComponentActivity() {
             ".x86-x11-ready",
             "APP_HWND_WAIT",
             "Loaded-but-no-HWND",
+            "NOHWND_MAP",
+            "nohwnd_scan",
+            "nohwnd_req",
+            "desk-steal-block",
+            "AppActivate",
             "subsystem=",
             "path_seen",
             "strict Loaded",

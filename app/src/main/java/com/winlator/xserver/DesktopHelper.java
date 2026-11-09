@@ -6,8 +6,10 @@ import androidx.collection.ArrayMap;
 
 import com.winlator.winhandler.WinHandler;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.FileReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Map;
@@ -16,9 +18,25 @@ public abstract class DesktopHelper {
     private static final String TAG = "DesktopHelper";
     /** 0.1.75: guest /mnt/data/.x86-x11-ready — wine-launch MAP_WAIT before APP_LOAD. */
     private static volatile File readyMarker;
+    /** 0.1.78: guest /mnt/data/.x86-nohwnd-req — Loaded-but-no-HWND → host rescan map+raise. */
+    private static volatile File nohwndReqFile;
+    private static volatile Thread nohwndPoller;
+    private static volatile boolean nohwndPollerStop;
+
+    // Sticky app HWND so desk remaps cannot wipe marker / steal raise.
+    private static volatile int stickyAppId;
+    private static volatile long stickyHwnd;
+    private static volatile String stickyClass = "";
+    private static volatile boolean stickyIsApp;
 
     public static void setReadyMarker(File marker) {
         readyMarker = marker;
+        if (marker != null) {
+            File parent = marker.getParentFile();
+            nohwndReqFile = parent != null ? new File(parent, ".x86-nohwnd-req") : null;
+        } else {
+            nohwndReqFile = null;
+        }
     }
 
     public static void clearReadyMarker() {
@@ -27,10 +45,20 @@ public abstract class DesktopHelper {
             //noinspection ResultOfMethodCallIgnored
             m.delete();
         }
+        File r = nohwndReqFile;
+        if (r != null && r.isFile()) {
+            //noinspection ResultOfMethodCallIgnored
+            r.delete();
+        }
+        stickyAppId = 0;
+        stickyHwnd = 0L;
+        stickyClass = "";
+        stickyIsApp = false;
     }
 
     public static void attachTo(final XServer xServer) {
         setupXResources(xServer);
+        startNoHwndPoller(xServer);
 
         xServer.pointer.addOnPointerMotionListener(new Pointer.OnPointerMotionListener() {
             @Override
@@ -44,11 +72,193 @@ public abstract class DesktopHelper {
             public void onMapWindow(Window window) {
                 // 0.1.75: raise before focus/bringToFront so HWND is ABOVE + ConfigureNotify
                 // before DXGI CreateSwapChain (WinHandler.bringToFront is a no-op here).
+                // 0.1.78: desk must not steal raise above sticky app.
                 raiseIfNeeded(xServer, window);
                 setFocusedWindow(xServer, window);
-                maybeWriteReadyMarker(window);
+                maybeWriteReadyMarker(window, null);
+            }
+
+            @Override
+            public void onModifyWindowProperty(Window window, Property property) {
+                // HWND / WM_CLASS may arrive after first MapWindow — refresh sticky + marker.
+                if (window == null) return;
+                try {
+                    long hwnd = window.getHandle();
+                    boolean desk = window.isDesktopWindow();
+                    boolean app = window.isApplicationWindow();
+                    if (!desk && (app || hwnd != 0L)) {
+                        rememberSticky(window, app, hwnd);
+                        maybeWriteReadyMarker(window, null);
+                    }
+                } catch (Throwable ignored) {
+                }
             }
         });
+    }
+
+    private static void startNoHwndPoller(final XServer xServer) {
+        nohwndPollerStop = true;
+        Thread old = nohwndPoller;
+        if (old != null) {
+            try { old.interrupt(); } catch (Throwable ignored) {}
+        }
+        nohwndPollerStop = false;
+        Thread t = new Thread(() -> {
+            Log.i(TAG, "NOHWND_MAP poller start");
+            while (!nohwndPollerStop) {
+                try {
+                    File req = nohwndReqFile;
+                    if (req != null && req.isFile()) {
+                        handleNoHwndRequest(xServer, req);
+                    }
+                    Thread.sleep(200);
+                } catch (InterruptedException ie) {
+                    break;
+                } catch (Throwable t1) {
+                    Log.w(TAG, "NOHWND_MAP poller: " + t1.getMessage());
+                    try { Thread.sleep(500); } catch (InterruptedException ie) { break; }
+                }
+            }
+            Log.i(TAG, "NOHWND_MAP poller stop");
+        }, "x86-nohwnd-poller");
+        t.setDaemon(true);
+        nohwndPoller = t;
+        t.start();
+    }
+
+    /** Stop poller when session ends (best-effort; next attachTo restarts). */
+    public static void stopNoHwndPoller() {
+        nohwndPollerStop = true;
+        Thread t = nohwndPoller;
+        if (t != null) {
+            try { t.interrupt(); } catch (Throwable ignored) {}
+        }
+    }
+
+    private static void handleNoHwndRequest(XServer xServer, File req) {
+        String basename = "app.exe";
+        String body = "";
+        try (BufferedReader br = new BufferedReader(new FileReader(req))) {
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = br.readLine()) != null) {
+                sb.append(line).append('\n');
+                String low = line.trim();
+                if (low.startsWith("basename=")) {
+                    basename = low.substring("basename=".length()).trim();
+                    if (basename.isEmpty()) basename = "app.exe";
+                }
+            }
+            body = sb.toString();
+        } catch (Throwable t) {
+            Log.w(TAG, "NOHWND_MAP read req: " + t.getMessage());
+            // still consume so we don't spin
+        }
+        // Consume request so we act once per write (guest may re-touch).
+        //noinspection ResultOfMethodCallIgnored
+        req.delete();
+
+        String scan = scanMapRaiseApp(xServer, basename);
+        Log.i(TAG, "NOHWND_MAP basename=" + basename + " nohwnd_scan=" + scan
+                + " req_bytes=" + body.length());
+        // Refresh marker with scan diag even if no candidate (so guest sees response).
+        Window sticky = stickyAppId != 0 ? xServer.windowManager.getWindow(stickyAppId) : null;
+        if (sticky != null) {
+            maybeWriteReadyMarker(sticky, scan);
+        } else {
+            writeScanOnlyMarker(scan, basename);
+        }
+    }
+
+    /**
+     * 0.1.78: scan all non-desktop windows; force map + raise those matching PE basename
+     * (WM_CLASS) or carrying {@code _NET_WM_HWND}. Returns compact nohwnd_scan= payload.
+     */
+    public static String scanMapRaiseApp(XServer xServer, String classHint) {
+        if (xServer == null) return "none";
+        WindowManager wm = xServer.windowManager;
+        ArrayList<Window> candidates = wm.findNonDesktopCandidates(classHint);
+        if (candidates.isEmpty()) {
+            // Fallback: any non-desk with hwnd, even if classHint missed.
+            candidates = wm.findNonDesktopCandidates(null);
+        }
+        if (candidates.isEmpty()) return "none";
+
+        StringBuilder scan = new StringBuilder();
+        Window best = null;
+        long bestHwnd = 0L;
+        for (int i = 0; i < candidates.size(); i++) {
+            Window w = candidates.get(i);
+            if (w == null || w == wm.rootWindow) continue;
+            boolean wasMapped = false;
+            long hwnd = 0L;
+            String cn = "";
+            try {
+                wasMapped = w.attributes.isMapped();
+                hwnd = w.getHandle();
+                cn = w.getClassName();
+                if (cn == null) cn = "";
+            } catch (Throwable ignored) {
+            }
+            boolean mappedNow = wasMapped;
+            if (!wasMapped) {
+                try {
+                    wm.mapWindow(w);
+                    mappedNow = w.attributes.isMapped();
+                } catch (Throwable t) {
+                    Log.w(TAG, "NOHWND_MAP mapWindow: " + t.getMessage());
+                }
+            }
+            try {
+                wm.raiseWindow(w);
+            } catch (Throwable t) {
+                Log.w(TAG, "NOHWND_MAP raiseWindow: " + t.getMessage());
+            }
+            try {
+                boolean parentIsRoot = w.getParent() == wm.rootWindow;
+                wm.setFocus(
+                        w,
+                        parentIsRoot
+                                ? WindowManager.FocusRevertTo.POINTER_ROOT
+                                : WindowManager.FocusRevertTo.PARENT);
+            } catch (Throwable ignored) {
+            }
+            boolean app = false;
+            try { app = w.isApplicationWindow(); } catch (Throwable ignored) {}
+            rememberSticky(w, app || hwnd != 0L, hwnd);
+
+            if (scan.length() > 0) scan.append(';');
+            scan.append("id=0x").append(Integer.toHexString(w.id))
+                    .append(",class=").append(cn.replace(' ', '_').replace(';', '_'))
+                    .append(",hwnd=0x").append(Long.toHexString(hwnd))
+                    .append(",mapped=").append(wasMapped ? "1" : "0")
+                    .append("->").append(mappedNow ? "1" : "0");
+
+            if (best == null || hwnd != 0L && bestHwnd == 0L) {
+                best = w;
+                bestHwnd = hwnd;
+            }
+        }
+        if (best != null) {
+            maybeWriteReadyMarker(best, scan.toString());
+        }
+        return scan.length() == 0 ? "none" : scan.toString();
+    }
+
+    private static void rememberSticky(Window window, boolean app, long hwnd) {
+        if (window == null) return;
+        boolean desk = false;
+        try { desk = window.isDesktopWindow(); } catch (Throwable ignored) {}
+        if (desk) return;
+        if (!(app || hwnd != 0L)) return;
+        stickyAppId = window.id;
+        if (hwnd != 0L) stickyHwnd = hwnd;
+        stickyIsApp = app || stickyIsApp;
+        try {
+            String cn = window.getClassName();
+            if (cn != null && !cn.isEmpty()) stickyClass = cn;
+        } catch (Throwable ignored) {
+        }
     }
 
     private static void raiseIfNeeded(XServer xServer, Window window) {
@@ -63,45 +273,127 @@ public abstract class DesktopHelper {
                 hwnd = window.getHandle();
             } catch (Throwable ignored) {
             }
+            // 0.1.78: explorer remaps must not stack ABOVE sticky app HWND.
+            if (desk && stickyAppId != 0) {
+                Window sticky = xServer.windowManager.getWindow(stickyAppId);
+                if (sticky != null && sticky != xServer.windowManager.rootWindow) {
+                    xServer.windowManager.raiseWindow(sticky);
+                    Log.i(TAG, "MAP_RAISE desk-steal-block → re-raise sticky id=0x"
+                            + Integer.toHexString(stickyAppId)
+                            + " hwnd=0x" + Long.toHexString(stickyHwnd));
+                    return;
+                }
+            }
             if (app || desk || hwnd != 0L || window.isDialogBox()) {
                 xServer.windowManager.raiseWindow(window);
+            }
+            if (!desk && (app || hwnd != 0L)) {
+                rememberSticky(window, app, hwnd);
             }
         } catch (Throwable t) {
             Log.w(TAG, "raiseIfNeeded: " + t.getMessage());
         }
     }
 
-    private static void maybeWriteReadyMarker(Window window) {
+    private static void maybeWriteReadyMarker(Window window, String nohwndScan) {
         File m = readyMarker;
         if (m == null) return;
         try {
             boolean desk = false;
             boolean app = false;
             long hwnd = 0L;
+            String cn = "";
             try {
                 desk = window.isDesktopWindow();
                 app = window.isApplicationWindow();
                 hwnd = window.getHandle();
+                cn = window.getClassName();
+                if (cn == null) cn = "";
             } catch (Throwable ignored) {
             }
             // Desktop map unlocks APP_LOAD; HWND map refreshes marker for DIAG.
-            if (!(desk || app || hwnd != 0L)) return;
+            if (!(desk || app || hwnd != 0L || (nohwndScan != null && !nohwndScan.isEmpty()))) {
+                // Still allow sticky refresh when property updates an already-sticky window.
+                if (stickyAppId == 0 || window.id != stickyAppId) return;
+            }
+            if (!desk && (app || hwnd != 0L)) {
+                rememberSticky(window, app, hwnd);
+            }
+
+            // 0.1.78 sticky merge: desk-only write must not wipe app hwnd.
+            boolean outApp = app;
+            long outHwnd = hwnd;
+            String outClass = cn;
+            boolean outDesk = desk;
+            if (desk && stickyAppId != 0 && stickyHwnd != 0L) {
+                outApp = stickyIsApp || true;
+                outHwnd = stickyHwnd;
+                if (outClass.isEmpty()) outClass = stickyClass;
+                // Marker reports sticky app presence even while desk is also mapped.
+                outDesk = false;
+            } else if (!desk && stickyHwnd != 0L && outHwnd == 0L) {
+                outHwnd = stickyHwnd;
+                outApp = stickyIsApp || outApp;
+                if (outClass.isEmpty()) outClass = stickyClass;
+            } else if (stickyIsApp && !desk) {
+                outApp = true;
+            }
+
             File parent = m.getParentFile();
             if (parent != null) //noinspection ResultOfMethodCallIgnored
                 parent.mkdirs();
-            String body = "mapped=1 desk=" + (desk ? 1 : 0)
-                    + " app=" + (app ? 1 : 0)
+            StringBuilder body = new StringBuilder();
+            body.append("mapped=1 desk=").append(outDesk ? 1 : 0)
+                    .append(" app=").append(outApp || outHwnd != 0L ? 1 : 0)
+                    .append(" hwnd=0x").append(Long.toHexString(outHwnd))
+                    .append(" id=0x").append(Integer.toHexString(
+                            outHwnd != 0L && stickyAppId != 0 ? stickyAppId : window.id));
+            if (outClass != null && !outClass.isEmpty()) {
+                body.append(" class=").append(outClass.replace(' ', '_'));
+            }
+            if (nohwndScan != null && !nohwndScan.isEmpty()) {
+                body.append(" nohwnd_scan=").append(nohwndScan.replace(' ', '_'));
+            }
+            body.append('\n');
+            try (FileOutputStream fos = new FileOutputStream(m, false)) {
+                fos.write(body.toString().getBytes(StandardCharsets.UTF_8));
+            }
+            if (desk && stickyAppId == 0) {
+                Log.i(TAG, "MAP_RAISE desktop ready marker=" + m.getName());
+            } else if (outHwnd != 0L || outApp) {
+                Log.i(TAG, "MAP_RAISE app sticky marker hwnd=0x" + Long.toHexString(outHwnd)
+                        + " app=" + (outApp ? 1 : 0)
+                        + (nohwndScan != null ? " nohwnd_scan=" + nohwndScan : ""));
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "readyMarker write: " + t.getMessage());
+        }
+    }
+
+    private static void writeScanOnlyMarker(String scan, String basename) {
+        File m = readyMarker;
+        if (m == null) return;
+        try {
+            File parent = m.getParentFile();
+            if (parent != null) //noinspection ResultOfMethodCallIgnored
+                parent.mkdirs();
+            // Preserve sticky if any; else desk=1 placeholder with scan diag.
+            int desk = stickyAppId != 0 ? 0 : 1;
+            int app = (stickyIsApp || stickyHwnd != 0L) ? 1 : 0;
+            long hwnd = stickyHwnd;
+            int id = stickyAppId;
+            String body = "mapped=1 desk=" + desk
+                    + " app=" + app
                     + " hwnd=0x" + Long.toHexString(hwnd)
-                    + " id=0x" + Integer.toHexString(window.id)
+                    + " id=0x" + Integer.toHexString(id)
+                    + " class=" + (stickyClass.isEmpty() ? basename : stickyClass).replace(' ', '_')
+                    + " nohwnd_scan=" + (scan == null ? "none" : scan.replace(' ', '_'))
                     + "\n";
             try (FileOutputStream fos = new FileOutputStream(m, false)) {
                 fos.write(body.getBytes(StandardCharsets.UTF_8));
             }
-            if (desk) {
-                Log.i(TAG, "MAP_RAISE desktop ready marker=" + m.getName());
-            }
         } catch (Throwable t) {
-            Log.w(TAG, "readyMarker write: " + t.getMessage());
+            Log.w(TAG, "scan marker write: " + t.getMessage());
         }
     }
 
@@ -121,6 +413,23 @@ public abstract class DesktopHelper {
     private static void setFocusedWindow(XServer xServer, Window window) {
         WinHandler winHandler = xServer.getWinHandler();
             if (winHandler == null) return;
+        // 0.1.78: do not let desktop focus steal after sticky app HWND.
+        try {
+            if (window.isDesktopWindow() && stickyAppId != 0) {
+                Window sticky = xServer.windowManager.getWindow(stickyAppId);
+                if (sticky != null) {
+                    boolean parentIsRoot = sticky.getParent() == xServer.windowManager.rootWindow;
+                    xServer.windowManager.setFocus(
+                            sticky,
+                            parentIsRoot
+                                    ? WindowManager.FocusRevertTo.POINTER_ROOT
+                                    : WindowManager.FocusRevertTo.PARENT);
+                    winHandler.bringToFront(sticky.getClassName(), sticky.getHandle());
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         if (window.isApplicationWindow()) {
             boolean parentIsRoot = window.getParent() == xServer.windowManager.rootWindow;
             xServer.windowManager.setFocus(window, parentIsRoot ? WindowManager.FocusRevertTo.POINTER_ROOT : WindowManager.FocusRevertTo.PARENT);

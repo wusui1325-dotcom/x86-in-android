@@ -103,6 +103,58 @@ public class WindowManager extends XResourceManager {
         return fallback;
     }
 
+    /**
+     * 0.1.78: non-desktop candidates for Loaded-but-no-HWND rescan.
+     * Prefer WM_CLASS match to PE basename; always include non-desk with {@code _NET_WM_HWND}.
+     * Includes UNMAPPED windows (caller may force mapWindow).
+     */
+    public ArrayList<Window> findNonDesktopCandidates(String classHint) {
+        ArrayList<Window> matched = new ArrayList<>();
+        ArrayList<Window> hwndAny = new ArrayList<>();
+        String hint = classHint != null ? classHint.trim() : "";
+        String hintLow = hint.toLowerCase();
+        // Strip path / .exe variants for looser WM_CLASS match.
+        String hintBase = hintLow;
+        int slash = Math.max(hintBase.lastIndexOf('/'), hintBase.lastIndexOf('\\'));
+        if (slash >= 0 && slash + 1 < hintBase.length()) hintBase = hintBase.substring(slash + 1);
+        if (hintBase.endsWith(".exe")) hintBase = hintBase.substring(0, hintBase.length() - 4);
+        for (int i = 0; i < windows.size(); i++) {
+            Window window = windows.valueAt(i);
+            if (window == null || window == rootWindow) continue;
+            boolean desk = false;
+            long hwnd = 0L;
+            String cn = "";
+            try {
+                desk = window.isDesktopWindow();
+                hwnd = window.getHandle();
+                cn = window.getClassName();
+                if (cn == null) cn = "";
+            } catch (Throwable ignored) {
+            }
+            if (desk) continue;
+            boolean classHit = false;
+            if (!hint.isEmpty() && cn != null && !cn.isEmpty()) {
+                String cnLow = cn.toLowerCase();
+                if (cnLow.equals(hintLow) || cnLow.contains(hintLow) || hintLow.contains(cnLow)) {
+                    classHit = true;
+                } else if (!hintBase.isEmpty()
+                        && !cnLow.isEmpty()
+                        && (cnLow.contains(hintBase) || hintBase.contains(cnLow))) {
+                    classHit = true;
+                }
+            }
+            boolean app = false;
+            try { app = window.isApplicationWindow(); } catch (Throwable ignored) {}
+            if (classHit || app) {
+                matched.add(window);
+            } else if (hwnd != 0L) {
+                hwndAny.add(window);
+            }
+        }
+        if (!matched.isEmpty()) return matched;
+        return hwndAny;
+    }
+
     public void destroyWindow(int id) {
         Window window = getWindow(id);
         if (window != null && rootWindow.id != id) {

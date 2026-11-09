@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.78: Loaded-but-no-HWND — sticky ready marker (desk cannot wipe app hwnd);
+# guest .x86-nohwnd-req → host force map+raise + nohwnd_scan=; APP_HWND_WAIT backoff;
+# desk-steal-block. Keep 077 fingerprint / 076 Smart TU_GMEM / 075 map+raise.
 # 0.1.77: APP_LOAD fingerprint — strict Loaded (no false path_seen); PE subsystem=
 # (2=GUI/3=CUI); APP_HWND_WAIT after load; Loaded-but-no-HWND WARN. Host bringToFront→raise.
 # Keep 076 Smart TU_GMEM / 075 map+raise.
@@ -46,7 +49,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.77
+WINE_LAUNCH_STAMP=0.1.78
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -138,7 +141,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.77 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.78 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -2577,18 +2580,56 @@ elif [ -n "$APP_WIN" ]; then
   log "APP_LOAD unix failed: APP_UNIX missing or not a file (argv had Windows-only seed)"
 fi
 
-# 0.1.77: after APP_LOAD, wait for app HWND in .x86-x11-ready (Loaded-but-no-HWND fingerprint)
+# 0.1.77/78: after APP_LOAD, wait for app HWND in .x86-x11-ready (Loaded-but-no-HWND)
+# 0.1.78: on timeout after strict Loaded → write .x86-nohwnd-req, backoff wait, AppActivate nudge
+app_load_nohwnd_request() {
+  # $1 = basename hint (PE file name)
+  _bn="${1:-app.exe}"
+  printf 'basename=%s\nwant=mapraise\nstamp=0.1.78\n' "$_bn" > /mnt/data/.x86-nohwnd-req
+  log "NOHWND_MAP req written basename=$_bn path=/mnt/data/.x86-nohwnd-req"
+}
+app_load_marker_nohwnd_scan() {
+  [ -f /mnt/data/.x86-x11-ready ] || return 1
+  _m=$(head -c 400 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
+  case "$_m" in
+    *" nohwnd_scan="*) return 0 ;;
+  esac
+  return 1
+}
+app_load_appactivate_nudge() {
+  # Best-effort: WScript AppActivate may trigger winex11 ShowWindow/SetForeground path.
+  _title="${1:-}"
+  _bn="${2:-app.exe}"
+  _vbs=/mnt/data/.x86-appactivate.vbs
+  # Title often equals exe stem; also try basename.
+  cat > "$_vbs" << VBS
+On Error Resume Next
+Set sh = CreateObject("WScript.Shell")
+ok = sh.AppActivate("${_bn}")
+If Not ok Then ok = sh.AppActivate(Replace("${_bn}", ".exe", ""))
+If Not ok And Len("${_title}") > 0 Then ok = sh.AppActivate("${_title}")
+WScript.Echo "AppActivate=" & ok
+VBS
+  log "NOHWND_MAP AppActivate nudge basename=$_bn"
+  set +e
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine cscript //nologo "Z:\\mnt\\data\\.x86-appactivate.vbs" >>/mnt/data/wine-run.out 2>&1
+  # Also try unix path form if Z: map differs
+  "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine start /unix "$_vbs" >>/mnt/data/wine-run.out 2>&1
+  set -e
+}
 if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
   HWND_WAIT_MAX="${X86_HWND_WAIT_MAX:-80}"
   HWND_WAIT_I=0
-  log "APP_HWND_WAIT marker for app HWND (max ${HWND_WAIT_MAX}x0.1s)"
+  APP_BASE_NAME=$(basename "$APP_TARGET")
+  APP_BASE_NAME=${APP_BASE_NAME:-app.exe}
+  log "APP_HWND_WAIT marker for app HWND (max ${HWND_WAIT_MAX}x0.1s) basename=$APP_BASE_NAME"
   while [ "$HWND_WAIT_I" -lt "$HWND_WAIT_MAX" ]; do
     if app_load_has_loaded; then
       APP_LOADED_STRICT=1
     fi
     if app_load_marker_app_hwnd; then
       APP_HWND_SEEN=1
-      log "APP_HWND_WAIT ready t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT} marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+      log "APP_HWND_WAIT ready t=${HWND_WAIT_I}0ms loaded=${APP_LOADED_STRICT} marker=$(head -c 160 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
       break
     fi
     # App process died early — stop waiting
@@ -2603,6 +2644,36 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
     if app_load_has_loaded || [ "$APP_LOADED_STRICT" = "1" ]; then
       APP_LOADED_STRICT=1
       log "APP_LOAD WARN Loaded-but-no-HWND t=${HWND_WAIT_I}0ms target=$APP_TARGET (strict Loaded; marker still desk-only or missing)"
+      # 0.1.78: request host rescan + backoff + guest AppActivate
+      app_load_nohwnd_request "$APP_BASE_NAME"
+      app_load_appactivate_nudge "" "$APP_BASE_NAME"
+      HWND_BACKOFF_MAX="${X86_HWND_BACKOFF_MAX:-60}"
+      HWND_BACKOFF_I=0
+      log "APP_HWND_WAIT backoff after nohwnd_req (max ${HWND_BACKOFF_MAX}x0.2s)"
+      while [ "$HWND_BACKOFF_I" -lt "$HWND_BACKOFF_MAX" ]; do
+        if app_load_marker_app_hwnd; then
+          APP_HWND_SEEN=1
+          log "APP_HWND_WAIT ready after NOHWND_MAP t_backoff=${HWND_BACKOFF_I}x0.2s marker=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+          break
+        fi
+        if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+          log "APP_HWND_WAIT backoff abort app dead"
+          break
+        fi
+        # Re-touch req every ~2s if still no scan response
+        if [ $((HWND_BACKOFF_I % 10)) -eq 0 ] && ! app_load_marker_nohwnd_scan; then
+          app_load_nohwnd_request "$APP_BASE_NAME"
+        fi
+        sleep 0.2
+        HWND_BACKOFF_I=$((HWND_BACKOFF_I + 1))
+      done
+      if [ "$APP_HWND_SEEN" != "1" ]; then
+        if app_load_marker_nohwnd_scan; then
+          log "APP_LOAD WARN Loaded-but-no-HWND after NOHWND_MAP scan=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+        else
+          log "APP_LOAD WARN Loaded-but-no-HWND after NOHWND_MAP (no host scan response)"
+        fi
+      fi
     elif app_load_path_seen; then
       log "APP_HWND_WAIT timeout t=${HWND_WAIT_I}0ms path_seen=1 loaded=0 (argv echo ≠ Loaded — wait for loaddll)"
     else
@@ -2739,6 +2810,8 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         log "APP_LOAD confirmed by t=${HB}s (strict Loaded) — no relaunch"
         if [ "$APP_HWND_SEEN" != "1" ]; then
           log "APP_LOAD WARN Loaded-but-no-HWND at HB t=${HB}s (strict Loaded; marker desk-only?)"
+          APP_BASE_NAME=${APP_BASE_NAME:-$(basename "${APP_TARGET:-app.exe}")}
+          app_load_nohwnd_request "$APP_BASE_NAME"
         fi
       fi
     fi

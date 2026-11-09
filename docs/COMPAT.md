@@ -1,3 +1,19 @@
+## 0.1.78 — Loaded-but-no-HWND / winex11 map deeper
+
+**Smoke risk (0.1.77):** strict Loaded + APP_HWND_WAIT can still WARN Loaded-but-no-HWND when
+explorer remaps overwrite `.x86-x11-ready` (wipe app hwnd), when Wine creates `_NET_WM_HWND`
+but never MapWindow/ShowWindow, or when desktop raise steals ABOVE the app after map+raise.
+
+**Fix:**
+- Sticky ready marker — desk remaps cannot wipe `app=1 hwnd=0x…`; property updates refresh sticky
+- Desk-steal-block — sticky app re-raised/focused instead of explorer
+- Guest `.x86-nohwnd-req` (basename=PE) → host scan force `mapWindow`+`raiseWindow` + `nohwnd_scan=`
+- APP_HWND_WAIT backoff after req; best-effort `AppActivate` nudge
+- Keep 077 fingerprint / 076 Smart TU_GMEM / 075 map+raise / VIEWABLE
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.78`; strict Loaded; `APP_HWND_WAIT ready` or
+`NOHWND_MAP … nohwnd_scan=…`; Present `desktopOnly=0`; `guestBlack=0`.
+
 ## 0.1.77 — APP_LOAD fingerprint harden + bringToFront→raise
 
 **Smoke risk (0.1.76):** Smart TU_GMEM can still leave a black window when APP_LOAD

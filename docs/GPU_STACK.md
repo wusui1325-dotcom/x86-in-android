@@ -125,6 +125,9 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.78 Loaded-but-no-HWND map：** sticky `.x86-x11-ready` (desk cannot wipe app hwnd);
+  guest `.x86-nohwnd-req` → host force map+raise + `nohwnd_scan=`; APP_HWND_WAIT backoff;
+  desk-steal-block. Keep 077 fingerprint / 076 Smart TU_GMEM / 075 map+raise.
 - **0.1.77 APP_LOAD fingerprint：** strict `Loaded L"…app.exe"` (path echo ≠ Loaded);
   PE `subsystem=` GUI/CUI; `APP_HWND_WAIT` + `Loaded-but-no-HWND` WARN;
   `bringToFront`→`raiseWindow`. Keep 076 Smart TU_GMEM. No Present CPU-first flip.

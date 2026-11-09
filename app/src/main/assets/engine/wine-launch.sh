@@ -3852,7 +3852,7 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         APP_LADDER_HANG_STEP=0
         if [ "${APP_WOW64:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
           log "APP_RELAUNCH once target=$APP_WIN via wow64_direct (no strict Loaded by t=${HB}s; machine=0x${PE_MACH})"
-          log "APP_LOAD wow64=1 relaunch: wine start //exec //wait C:/App/app.exe (APP_RELAUNCH direct_start64; BOX64_MMAP32=1; WINELOADERNOEXEC unset)"
+          log "APP_LOAD wow64=1 relaunch: wine start //exec //wait C:/App/app.exe (APP_RELAUNCH direct_start64; mmap32_parent=0; WINELOADERNOEXEC unset)"
           app_load_dump_fail_sigs
           app_load_kill_app "APP_RELAUNCH"
           app_load_spawn wow64_direct

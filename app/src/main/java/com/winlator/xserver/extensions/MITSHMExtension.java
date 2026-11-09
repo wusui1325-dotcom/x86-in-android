@@ -18,10 +18,15 @@ import com.winlator.xserver.errors.XRequestError;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicLong;
 
 public class MITSHMExtension extends Extension {
     public static final byte MAJOR_VERSION = 1;
     public static final byte MINOR_VERSION = 1;
+
+    /** 0.1.115 P0-L: MIT-SHM PutImage dig stamp (Wine often prefers SHM over core PutImage). */
+    public static final AtomicLong x11ShmPutImageCount = new AtomicLong();
+    public static long shmPutImageCount() { return x11ShmPutImageCount.get(); }
 
     private static abstract class ClientOpcodes {
         private static final byte QUERY_VERSION = 0;
@@ -111,6 +116,7 @@ public class MITSHMExtension extends Extension {
             }
         }
         else drawable.drawImage(srcX, srcY, dstX, dstY, srcWidth, srcHeight, depth, data, totalWidth, totalHeight);
+        if (srcWidth > 1 && srcHeight > 1) x11ShmPutImageCount.incrementAndGet();
     }
 
     private void createPixmap(XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException, XRequestError {

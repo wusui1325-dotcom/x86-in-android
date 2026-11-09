@@ -8,6 +8,9 @@ import com.winlator.xserver.Drawable;
 import com.winlator.xserver.Window;
 import com.winlator.xserver.XLock;
 import com.winlator.xserver.XServer;
+import com.winlator.xserver.events.Expose;
+import com.winlator.xserver.extensions.MITSHMExtension;
+import com.winlator.xserver.requests.DrawRequests;
 import com.wusper.x86.engine.NativeEngine;
 import com.wusper.x86.graphics.DesktopLayout;
 
@@ -45,6 +48,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * explorer root ({@code child=0x3 mappedKids=0 desktopOnly=1}). Knives: SparseArray scan +
  * force-map unmapped App HWND; never treat explorer as bestApp; retarget Present to App
  * drawable (GDI BGRA) so Boss sees installer dialog pixels.
+ * 0.1.115 Dig114: exclude rundll32; hwnd←xid fallback; forceMap+Expose so Wine
+ * x11drv GDI blit (PutImage/CopyArea/SHM) hits Present-sampled drawable; DIAG
+ * x11_putimage=/x11_copyarea=/x11_shm_putimage=.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -519,7 +525,7 @@ public final class PresentXFramePump extends Thread {
                     boolean app = false;
                     try { desk = focused.isDesktopWindow(); } catch (Throwable ignored) {}
                     try { app = focused.isApplicationWindow(); } catch (Throwable ignored) {}
-                    if (!desk && (app || (!focused.isDesktopWindow()))) {
+                    if (!desk && !isHelper(focused) && (app || (!focused.isDesktopWindow()))) {
                         Pick fp = pickFromWindow(focused);
                         if (fp == null) {
                             fp = pickFromWindowAllowUnmapped(focused);
@@ -590,9 +596,23 @@ public final class PresentXFramePump extends Thread {
     private static long hwndOf(Window w) {
         if (w == null) return 0L;
         try {
-            return w.getHandle();
+            // 0.1.115: Wine often never sets _NET_WM_HWND — fall back to XID
+            return w.getHandleOrXid();
         } catch (Throwable t) {
-            return 0L;
+            try {
+                return w.getHandle();
+            } catch (Throwable t2) {
+                return 0L;
+            }
+        }
+    }
+
+    private static boolean isHelper(Window w) {
+        if (w == null) return false;
+        try {
+            return w.isHelperProcess();
+        } catch (Throwable t) {
+            return false;
         }
     }
 
@@ -622,13 +642,19 @@ public final class PresentXFramePump extends Thread {
                 boolean app = false;
                 boolean dialog = false;
                 long hwnd = 0L;
+                boolean helper = false;
                 try {
                     desk = node.isDesktopWindow();
                     app = node.isApplicationWindow();
                     dialog = node.isDialogLike();
                     hwnd = node.getHandle();
+                    helper = node.isHelperProcess();
                 } catch (Throwable ignored) {
                 }
+                if (hwnd == 0L && !desk && !helper) {
+                    try { hwnd = node.getHandleOrXid(); } catch (Throwable ignored) {}
+                }
+                if (helper) return; // 0.1.115: never forceMap/Present rundll32
                 if (desk) {
                     // Still count VIEWABLE desk toward mappedKids for DIAG honesty.
                     try {
@@ -660,10 +686,30 @@ public final class PresentXFramePump extends Thread {
                                         + Integer.toHexString(node.id)
                                         + " hwnd=0x" + Long.toHexString(hwnd)
                                         + " class=" + classOf(node)
-                                        + " (0.1.112 Wine WM_STATE without MapWindow)");
+                                        + " (0.1.115 Wine WM_STATE without MapWindow)");
+                            }
+                            // 0.1.115 P0-L: Expose nudge → Wine x11drv GDI blit
+                            // (PutImage/CopyArea/SHM) into Present-sampled drawable
+                            try {
+                                node.sendEvent(new Expose(node));
+                            } catch (Throwable ignored2) {
                             }
                         }
                     } catch (Throwable ignored) {
+                    }
+                } else if (hwnd != 0L || dialog || app) {
+                    // Already mapped App/dialog — still nudge redraw once per sticky
+                    if (!hold.loggedForceMap && hold.forceMapped == 0) {
+                        try {
+                            node.sendEvent(new Expose(node));
+                            hold.loggedForceMap = true;
+                            android.util.Log.i(TAG, "PRESENT_DIAG exposeNudge id=0x"
+                                    + Integer.toHexString(node.id)
+                                    + " hwnd=0x" + Long.toHexString(hwnd)
+                                    + " class=" + classOf(node)
+                                    + " (0.1.115 P0-L GDI flush)");
+                        } catch (Throwable ignored) {
+                        }
                     }
                 }
                 Window.MapState ms;
@@ -726,6 +772,8 @@ public final class PresentXFramePump extends Thread {
     private static void considerPick(Hold hold, Window node, Pick p, boolean app, boolean dialog,
                                      boolean desk, long hwnd) {
         if (hold == null || node == null || p == null || desk) return;
+        // 0.1.115 P0-K: sticky exclude rundll32 — never Present-retarget helpers
+        if (isHelper(node)) return;
         if (app && (hold.bestApp == null || p.area > hold.bestApp.area)) {
             hold.bestApp = p;
             hold.bestAppWin = node;
@@ -767,12 +815,25 @@ public final class PresentXFramePump extends Thread {
             boolean desk = false;
             boolean app = false;
             boolean dialog = false;
+            boolean helper = false;
             try {
                 hwnd = node.getHandle();
                 desk = node.isDesktopWindow();
                 app = node.isApplicationWindow();
                 dialog = node.isDialogLike();
+                helper = node.isHelperProcess();
             } catch (Throwable ignored) {
+            }
+            if (hwnd == 0L && !desk && !helper) {
+                try { hwnd = node.getHandleOrXid(); } catch (Throwable ignored) {}
+            }
+            if (helper) {
+                // still walk children; do not count helper as bestApp
+                List<Window> kids = node.getChildren();
+                if (kids != null) {
+                    for (int i = 0; i < kids.size(); i++) walkCollect(kids.get(i), false, hold);
+                }
+                return;
             }
             Window.MapState ms;
             try {
@@ -979,7 +1040,10 @@ public final class PresentXFramePump extends Thread {
                 + " path=" + NativeEngine.nativePresentLastPath()
                 + " guestBlack=" + guestBlackSticky
                 + " guestSample=" + lastGuestSample
-                + " ahbCpuAccess=" + lastAhbCpuAccess;
+                + " ahbCpuAccess=" + lastAhbCpuAccess
+                + " x11_putimage=" + DrawRequests.putImageCount()
+                + " x11_copyarea=" + DrawRequests.copyAreaCount()
+                + " x11_shm_putimage=" + MITSHMExtension.shmPutImageCount();
     }
 
     public int presentOkCount() {

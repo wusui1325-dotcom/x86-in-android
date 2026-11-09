@@ -233,7 +233,54 @@ public class Window extends XResource {
             if (cn != null && cn.contains("#32770")) return true;
         } catch (Throwable ignored) {
         }
+        // 0.1.115 P0-K: dialog-sized geometry (WinRAR/NSIS) when Wine skips Type.DIALOG
+        try {
+            if (isDialogSized()) return true;
+        } catch (Throwable ignored) {
+        }
         return false;
+    }
+
+    /**
+     * 0.1.115: dialog-ish size — not full desktop, large enough to be a real UI
+     * (WinRAR SFX ~300x100–600x500; MessageBox smaller).
+     */
+    public boolean isDialogSized() {
+        try {
+            if (isDesktopWindow()) return false;
+        } catch (Throwable ignored) {
+        }
+        int w = width & 0xffff;
+        int h = height & 0xffff;
+        if (w < 120 || h < 60) return false;
+        if (w > 1400 || h > 1000) return false;
+        // Reject near-fullscreen chrome
+        if (w >= 1100 && h >= 600) return false;
+        return true;
+    }
+
+    /**
+     * 0.1.115 P0-K: sticky/Present must never latch helper processes
+     * (rundll32 residue faked MAP_WAIT / Present in Dig114).
+     */
+    public boolean isHelperProcess() {
+        try {
+            String cn = getClassName();
+            if (cn == null || cn.isEmpty()) return false;
+            String low = cn.toLowerCase();
+            return low.contains("rundll32")
+                    || low.contains("wineboot")
+                    || low.contains("services.exe")
+                    || low.contains("winedevice")
+                    || low.contains("plugplay")
+                    || low.contains("msiexec")
+                    || low.contains("regsvr32")
+                    || low.contains("conhost")
+                    || low.equals("start.exe")
+                    || low.contains("\\start.exe");
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     public Bitmask getDecorations() {
@@ -257,6 +304,37 @@ public class Window extends XResource {
     public long getHandle() {
         Property property = getProperty(Atom._NET_WM_HWND);
         return property != null ? property.getLong(0) : 0;
+    }
+
+    /**
+     * 0.1.115 P0-K: Dig114 Wine create_win_data has HWND/XID but never sets
+     * {@code _NET_WM_HWND} → getHandle() forever 0. Fall back to X window id as
+     * usable hwnd surrogate for non-helper dialog/app so marker/Present/APP_HWND_WAIT
+     * can ready (want hwnd≠0).
+     */
+    public long getHandleOrXid() {
+        long hwnd = 0L;
+        try { hwnd = getHandle(); } catch (Throwable ignored) {}
+        if (hwnd != 0L) return hwnd;
+        try {
+            if (isDesktopWindow() || isHelperProcess()) return 0L;
+        } catch (Throwable ignored) {
+            return 0L;
+        }
+        boolean usable = false;
+        try { usable = isApplicationWindow(); } catch (Throwable ignored) {}
+        try { if (!usable) usable = isDialogLike(); } catch (Throwable ignored) {}
+        try {
+            if (!usable) {
+                Drawable c = getContent();
+                if (c != null) {
+                    int ww = c.width & 0xffff;
+                    int hh = c.height & 0xffff;
+                    if (ww > 1 && hh > 1 && isDialogSized()) usable = true;
+                }
+            }
+        } catch (Throwable ignored) {}
+        return usable ? (id & 0xffffffffL) : 0L;
     }
 
     public boolean isApplicationWindow() {

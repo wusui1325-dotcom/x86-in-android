@@ -18,10 +18,18 @@ import com.winlator.xserver.events.Expose;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicLong;
 
 public abstract class DrawRequests {
     public enum Format {BITMAP, XY_PIXMAP, Z_PIXMAP}
     private enum CoordinateMode {ORIGIN, PREVIOUS}
+
+    /** 0.1.115 P0-L: dig stamps for Boss XPutImage/XCopyArea hard-require. */
+    public static final AtomicLong x11PutImageCount = new AtomicLong();
+    public static final AtomicLong x11CopyAreaCount = new AtomicLong();
+
+    public static long putImageCount() { return x11PutImageCount.get(); }
+    public static long copyAreaCount() { return x11CopyAreaCount.get(); }
 
     public static void putImage(XClient client, XInputStream inputStream, XOutputStream outputStream) throws XRequestError {
         Format format = Format.values()[client.getRequestData()];
@@ -65,6 +73,7 @@ public abstract class DrawRequests {
                 else throw new BadMatch();
                 break;
         }
+        if (width > 1 && height > 1) x11PutImageCount.incrementAndGet();
     }
 
     public static void getImage(XClient client, XInputStream inputStream, XOutputStream outputStream) throws IOException, XRequestError {
@@ -148,6 +157,7 @@ public abstract class DrawRequests {
         if (srcDrawable.visual.depth != dstDrawable.visual.depth) throw new BadMatch();
 
         dstDrawable.copyArea(srcX, srcY, dstX, dstY, width, height, srcDrawable, graphicsContext.getFunction());
+        if (width > 1 && height > 1) x11CopyAreaCount.incrementAndGet();
     }
 
     public static void polyLine(XClient client, XInputStream inputStream, XOutputStream outputStream) throws XRequestError {

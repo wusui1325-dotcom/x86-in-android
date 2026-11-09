@@ -292,7 +292,10 @@ path_is_mounted() {
 # 0.1.114 Dig113: NSIS ncrypt seed (crypt32 import); session Loaded App stamp (leave 0x014c);
 #   HWND_WAIT ~30s (was ~8s / mislabeled 800ms); canary started_pid_cmd true positive;
 #   Present retarget first non-explorer hwnd after APP_LOAD (KEEP desk-marker split).
-WINE_LAUNCH_STAMP=0.1.114
+# 0.1.115 Dig114: P0-J status metric no-feedback; P0-K HWND/xid + exclude rundll32
+#   + clear stale .x86-x11-ready on WINE_START; P0-L PutImage/CopyArea/SHM dig + Expose;
+#   P0-M present_black/guestPresented require hwnd!=0; P1-N MAP_WAIT desk=1; P1-O canary=skip pe_amd64.
+WINE_LAUNCH_STAMP=0.1.115
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -3238,6 +3241,11 @@ log "WINE_START begin (WINEARCH=$WINEARCH WINEDEBUG=$WINEDEBUG argv=$* )"
 : > /mnt/data/wine-run.out
 stamp_wine_run "WINE_RUN_OUT cleared at WINE_START stamp=$WINE_LAUNCH_STAMP"
 stamp_wine_run "WINE_START begin argv=$*"
+# 0.1.115 P0-K/P1-N Dig114: stale .x86-x11-ready (rundll32 desk=0 app=1 hwnd=0 @t=0ms)
+# faked MAP_WAIT ready. Clear before explorer so host must rewrite desk=1.
+rm -f /mnt/data/.x86-x11-ready /mnt/data/.x86-nohwnd-req 2>/dev/null || true
+log "WINE_START clear stale .x86-x11-ready (0.1.115 P0-K/P1-N reject rundll32 residue)"
+stamp_wine_run "WINE_START clear_stale_x11_ready=1"
 set +e
 
 # Ensure Z: -> / so unix paths are visible if needed
@@ -3293,25 +3301,43 @@ MAP_WAIT_MAX="${X86_MAP_WAIT_MAX:-150}"
 MAP_WAIT_EXTEND="${X86_MAP_WAIT_EXTEND:-300}"
 MAP_WAIT_I=0
 DESKTOP_READY=0
+# 0.1.115 P1-N Dig114: prefer desk=1 class=explorer; reject rundll32 app=1 hwnd=0 fake ready.
+map_wait_marker_desk_ok() {
+  [ -f /mnt/data/.x86-x11-ready ] || return 1
+  _mm=$(head -c 200 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
+  case "$_mm" in
+    *rundll32*) return 1 ;;
+  esac
+  case "$_mm" in
+    *" desk=1 "*|*" desk=1") return 0 ;;
+  esac
+  case "$_mm" in
+    *class=explorer*) return 0 ;;
+  esac
+  return 1
+}
 # Marker cleared by Session/DesktopHelper before X start — do not rm after explorer
 # (desktop may already have mapped and written it).
 log "MAP_WAIT desktop marker .x86-x11-ready (max ${MAP_WAIT_MAX}x0.1s=$((MAP_WAIT_MAX * 100))ms; extend=${MAP_WAIT_EXTEND}x0.1s; 0.1.103 t=I*100ms display; 0.1.102 gate)"
-while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]; do
+while ! map_wait_marker_desk_ok && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]; do
   # explorer died early?
   if ! kill -0 "$WINE_PID" 2>/dev/null; then
     log "MAP_WAIT abort explorer dead pid=$WINE_PID t=$((MAP_WAIT_I * 100))ms"
     break
   fi
+  if [ -f /mnt/data/.x86-x11-ready ] && [ $((MAP_WAIT_I % 20)) -eq 0 ]; then
+    log "MAP_WAIT reject non-desk marker t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+  fi
   sleep 0.1
   MAP_WAIT_I=$((MAP_WAIT_I + 1))
 done
-if [ -f /mnt/data/.x86-x11-ready ]; then
+if map_wait_marker_desk_ok; then
   DESKTOP_READY=1
   log "MAP_WAIT desktop ready t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
 else
   log "MAP_WAIT desktop timeout t=$((MAP_WAIT_I * 100))ms — long-retry extend=${MAP_WAIT_EXTEND}x0.1s (0.1.102 NO APP_LOAD hard-open)"
   _ext=0
-  while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$_ext" -lt "$MAP_WAIT_EXTEND" ]; do
+  while ! map_wait_marker_desk_ok && [ "$_ext" -lt "$MAP_WAIT_EXTEND" ]; do
     if ! kill -0 "$WINE_PID" 2>/dev/null; then
       log "MAP_WAIT extend abort explorer dead pid=$WINE_PID t=$(((MAP_WAIT_I+_ext) * 100))ms"
       break
@@ -3321,7 +3347,7 @@ else
   done
   MAP_WAIT_I=$((MAP_WAIT_I + _ext))
   unset _ext
-  if [ -f /mnt/data/.x86-x11-ready ]; then
+  if map_wait_marker_desk_ok; then
     DESKTOP_READY=1
     log "MAP_WAIT desktop ready (after extend) t=$((MAP_WAIT_I * 100))ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
   else
@@ -4285,6 +4311,9 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     app_load_wow64_canary || true
     APP_SPAWN_MODE=wow64_machine_i386
   else
+    # 0.1.115 P1-O Dig114: amd64 (0x8664) absolute ladder — no i386 canary; stamp skip
+    log "APP_LOAD canary=skip reason=pe_amd64 machine=0x${PE_MACH:-?} (0.1.115 P1-O absolute ladder)"
+    stamp_wine_run "canary=skip reason=pe_amd64 machine=0x${PE_MACH:-?}"
     APP_SPAWN_MODE=absolute
   fi
   _cui_wrap_mode="${X86_CUI_WRAP:-auto}"

@@ -160,6 +160,13 @@ public class WindowManager extends XResourceManager {
             } catch (Throwable ignored) {
             }
             if (desk) continue;
+            boolean helper = false;
+            try { helper = window.isHelperProcess(); } catch (Throwable ignored) {}
+            // 0.1.115 P0-K: exclude rundll32 / helpers from NOHWND candidates
+            if (helper) continue;
+            if (hwnd == 0L) {
+                try { hwnd = window.getHandleOrXid(); } catch (Throwable ignored) {}
+            }
             boolean classHit = false;
             if (!hint.isEmpty() && cn != null && !cn.isEmpty()) {
                 String cnLow = cn.toLowerCase();
@@ -176,6 +183,7 @@ public class WindowManager extends XResourceManager {
             try { app = window.isApplicationWindow(); } catch (Throwable ignored) {}
             try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
             // 0.1.81: #32770 / Type.DIALOG always a candidate (MessageBox may lack HWND early)
+            // 0.1.115: dialog-sized / xid hwnd also candidates
             if (classHit || app || dialog) {
                 matched.add(window);
             } else if (hwnd != 0L) {

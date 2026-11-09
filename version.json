@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.114",
-  "versionCode": 116,
-  "notes": "0.1.114: Dig113 FAIL — P0-A desk marker OK but App=NSIS missing ncrypt → crypt32/StdUtils fail → 0× Loaded App stamp (loaddll only in wine-run) → Boss sticky「檢查映像機型 0x014c」; HWND_WAIT bail ~8s (mislabeled 800ms); Present desktopOnly=1; canary started_pid_cmd false-FAIL. Knives: (E) seed ncrypt pe32/pe64 with crypt32/comdlg32; (F) session Loaded App / Loaded L\"C:\\App\\app.exe\" stamp (LaunchStatusLines leave index8→RUNNING); (G) HWND_WAIT_MAX≈300 (~30s) + ms fix; (H) canary_dig require app L\"…cmd\" / NtCreate cmd pid; (I) Present retarget first non-explorer hwnd after APP_LOAD. KEEP 113 desk-marker split / GRAN_ALIGN / amd64_wow64 / mmap32_guest=0 / NOEXEC / cmdline / anti-FP. No trampoline/hot/FF/Coolify. vc116.",
-  "tipSha": "4939787"
+  "versionName": "0.1.115",
+  "versionCode": 117,
+  "notes": "0.1.115: Dig114 FAIL — ncrypt+Loaded+HWND30s OK but WinRAR dialog exists while marker/Present hwnd forever 0 (stuck rundll32); 0× PutImage/CopyArea; status Present nest spam; present_black clear on mappedKids without hwnd; MAP_WAIT accepted rundll32 desk=0 @0ms; amd64 ladder silent 0× canary. Knives: (J) status metric never from status body; (K) HWND/xid fallback + exclude rundll32 + clear stale .x86-x11-ready + forceMap retarget; (L) host PutImage/CopyArea/SHM counters + Expose nudge for Wine GDI→Present; (M) guestPresented/present_black require hwnd≠0; (N) MAP_WAIT desk=1/explorer; (O) canary=skip reason=pe_amd64. KEEP ncrypt/Loaded/HWND30s/desk-split/GRAN_ALIGN/amd64_wow64/mmap32=0/NOEXEC. No soft Xvfb/hot/FF/Coolify. vc117.",
+  "tipSha": ""
 }

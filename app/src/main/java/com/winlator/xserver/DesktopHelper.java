@@ -93,8 +93,13 @@ public abstract class DesktopHelper {
                     long hwnd = window.getHandle();
                     boolean desk = window.isDesktopWindow();
                     boolean app = window.isApplicationWindow();
+                    boolean helper = false;
+                    try { helper = window.isHelperProcess(); } catch (Throwable ignored2) {}
                     boolean dialog = false;
                     try { dialog = window.isDialogLike(); } catch (Throwable ignored2) {}
+                    if (hwnd == 0L && !desk && !helper) {
+                        try { hwnd = window.getHandleOrXid(); } catch (Throwable ignored2) {}
+                    }
                     // P0-A: explorer desktop mapped (WM_STATE/SET_DRAWABLE/WM_CLASS) unlocks
                     // APP_LOAD via marker; do NOT wait for app=1 or nonzero App hwnd.
                     if (desk) {
@@ -115,7 +120,8 @@ public abstract class DesktopHelper {
                         maybeWriteReadyMarker(window, null);
                         return;
                     }
-                    if (app || hwnd != 0L || dialog) {
+                    // 0.1.115: skip rundll32 helpers; force-map real App/dialog (+ xid hwnd)
+                    if (!helper && (app || hwnd != 0L || dialog)) {
                         try {
                             if (!window.attributes.isMapped()) {
                                 boolean mapped = xServer.windowManager.forceMapIfNeeded(window);
@@ -124,7 +130,7 @@ public abstract class DesktopHelper {
                                             + Integer.toHexString(window.id)
                                             + " hwnd=0x" + Long.toHexString(hwnd)
                                             + " atom=" + (property != null ? property.nameAsString() : "?")
-                                            + " (0.1.112)");
+                                            + " (0.1.115 xid-fallback)");
                                 }
                             } else {
                                 xServer.windowManager.raiseWindow(window);
@@ -239,12 +245,19 @@ public abstract class DesktopHelper {
             boolean wasMapped = false;
             long hwnd = 0L;
             String cn = "";
+            boolean helper = false;
             try {
                 wasMapped = w.attributes.isMapped();
                 hwnd = w.getHandle();
                 cn = w.getClassName();
                 if (cn == null) cn = "";
+                helper = w.isHelperProcess();
             } catch (Throwable ignored) {
+            }
+            // 0.1.115: skip helpers in NOHWND scan (rundll32 must not win)
+            if (helper) continue;
+            if (hwnd == 0L) {
+                try { hwnd = w.getHandleOrXid(); } catch (Throwable ignored) {}
             }
             boolean mappedNow = wasMapped;
             if (!wasMapped) {
@@ -303,13 +316,21 @@ public abstract class DesktopHelper {
         if (window == null) return;
         boolean desk = false;
         boolean dialog = false;
+        boolean helper = false;
         try { desk = window.isDesktopWindow(); } catch (Throwable ignored) {}
         try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
+        try { helper = window.isHelperProcess(); } catch (Throwable ignored) {}
         if (desk) return;
+        // 0.1.115 P0-K: NEVER sticky rundll32 / helpers (Dig114 residue)
+        if (helper) return;
         // 0.1.81: dialog-like (#32770 / Type.DIALOG) sticky even without isApplicationWindow
         if (!(app || hwnd != 0L || dialog)) return;
         stickyAppId = window.id;
-        if (hwnd != 0L) stickyHwnd = hwnd;
+        long useHwnd = hwnd;
+        if (useHwnd == 0L) {
+            try { useHwnd = window.getHandleOrXid(); } catch (Throwable ignored) {}
+        }
+        if (useHwnd != 0L) stickyHwnd = useHwnd;
         stickyIsApp = app || dialog || stickyIsApp;
         try {
             String cn = window.getClassName();
@@ -363,23 +384,35 @@ public abstract class DesktopHelper {
             boolean app = false;
             long hwnd = 0L;
             String cn = "";
+            boolean helper = false;
             try {
                 desk = window.isDesktopWindow();
                 app = window.isApplicationWindow();
                 hwnd = window.getHandle();
                 cn = window.getClassName();
                 if (cn == null) cn = "";
+                helper = window.isHelperProcess();
             } catch (Throwable ignored) {
             }
             boolean dialog = false;
             try { dialog = window.isDialogLike(); } catch (Throwable ignored) {}
+            // 0.1.115: xid fallback when Wine never sets _NET_WM_HWND
+            if (hwnd == 0L && !desk && !helper) {
+                try { hwnd = window.getHandleOrXid(); } catch (Throwable ignored) {}
+            }
+            // Helpers never count as App for marker app=1 / hwnd (Dig114 rundll32)
+            if (helper) {
+                app = false;
+                dialog = false;
+                hwnd = 0L;
+            }
             // Desktop map unlocks APP_LOAD (desk=1 alone is enough — 0.1.113 Dig112).
             // HWND/dialog map refreshes marker for APP_HWND_WAIT / Present DIAG.
             if (!(desk || app || hwnd != 0L || dialog || (nohwndScan != null && !nohwndScan.isEmpty()))) {
                 // Still allow sticky refresh when property updates an already-sticky window.
                 if (stickyAppId == 0 || window.id != stickyAppId) return;
             }
-            if (!desk && (app || hwnd != 0L || dialog)) {
+            if (!desk && !helper && (app || hwnd != 0L || dialog)) {
                 rememberSticky(window, app || dialog, hwnd);
             }
 

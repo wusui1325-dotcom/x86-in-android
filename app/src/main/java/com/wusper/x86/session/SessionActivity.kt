@@ -735,6 +735,7 @@ class SessionActivity : ComponentActivity() {
                             // 0.1.105 UX: ≥100 dynamic status lines (zh-TW), rotate by tick+phase
                             statusTick += 1
                             val hb = Regex("""WINE_HB t=(\d+)s pid=(\d+)""").findAll(logText).lastOrNull()
+                            // 0.1.115 P0-J: RUNNING/WAIT_PRESENT metric = hb or empty — never status body
                             val metric = when {
                                 !sawWineStart && rpcBusy -> {
                                     if ("RpcSs ready" in logText) "RpcSs ready" else "RPCSS"
@@ -747,9 +748,7 @@ class SessionActivity : ComponentActivity() {
                                     "t=${tSec}s reg=${regB}B"
                                 }
                                 hb != null -> "pid=${hb.groupValues[2]} t=${hb.groupValues[1]}s"
-                                status.startsWith("執行中") || status.startsWith("正在初始化") ||
-                                    status.startsWith("RpcSs") || status.startsWith("啟動") ->
-                                    status.substringAfter(' ', missingDelimiterValue = "").ifBlank { "…" }
+                                // 0.1.115 P0-J: never derive metric from status (Present nest spam)
                                 else -> ""
                             }
                             val hint = when {
@@ -823,10 +822,9 @@ class SessionActivity : ComponentActivity() {
                                 blueScreenReasonKey = key
                             }
                         }
-                        // 0.1.112: guestPresented ONLY on live PRESENT_DIAG sample —
-                        // desktopOnly=0 AND (mappedKids≥1 OR App hwnd≠0); forbid latch+Loaded alone.
-                        // Dig111: overlay latch FP (hardcoded desktopOnly=0) while live stream
-                        // stayed desktopOnly=1 mappedKids=0 hwnd=0x0 → Boss 純黑.
+                        // 0.1.115 P0-M Dig114: guestPresented requires hwnd≠0 (ban bare mappedKids);
+                        // exclude rundll32 — present_black clear only on live App hwnd.
+                        // Dig111/112 anti-FP kept (no latch+Loaded alone / no desktopOnly=0 FP).
                         val mappedKids = Regex("""\bmappedKids=(\d+)""").find(stats)
                             ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                         val hwndTok = Regex("""\bhwnd=(0x[0-9a-fA-F]+)""").find(stats)
@@ -836,6 +834,9 @@ class SessionActivity : ComponentActivity() {
                             ?.groupValues?.getOrNull(1) ?: "none"
                         val wmClass = Regex("""\bwmClass=([^\s]+)""").find(stats)
                             ?.groupValues?.getOrNull(1) ?: "-"
+                        val helperClass = wmClass.contains("rundll32", ignoreCase = true)
+                            || wmClass.contains("wineboot", ignoreCase = true)
+                            || wmClass.contains("services", ignoreCase = true)
                         val loadedHint =
                             ("APP_LOAD fingerprint seen" in logText) ||
                                 (
@@ -861,20 +862,21 @@ class SessionActivity : ComponentActivity() {
                             val ok = okMatch?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
                             val nbg = Regex("""\bnonBlackGuest=(\d+)""").find(stats)
                                 ?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
-                            val liveApp = mappedKids >= 1 || hwndOk
+                            // 0.1.115 P0-M: hwnd≠0 required; ban mappedKids-only + helpers
+                            val liveApp = hwndOk && !helperClass
                             if ((presented || ok > 0) && loadedHint && liveApp) {
                                 guestPresented = true
                                 appendSticky(
                                     "PRESENT_DIAG guestPresented=true ok=$ok nonBlackGuest=$nbg " +
                                         "loadedHint=1 desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok " +
                                         "wmClass=$wmClass guestSample=$guestSample " +
-                                        "overlay_keep=live_app_required (0.1.112)"
+                                        "overlay_keep=live_hwnd_required (0.1.115)"
                                 )
                                 // 0.1.113 P1-D: clear sticky present_black ONLY on live App sample
                                 if ("present_black=1" in uiStickyLog && "present_black=0" !in uiStickyLog) {
                                     appendSticky(
                                         "PRESENT_DIAG present_black=0 cleared live_app " +
-                                            "desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok (0.1.113)"
+                                            "desktopOnly=0 mappedKids=$mappedKids hwnd=$hwndTok (0.1.115)"
                                     )
                                 }
                             } else if ((presented || ok > 0) && loadedHint && !liveApp) {

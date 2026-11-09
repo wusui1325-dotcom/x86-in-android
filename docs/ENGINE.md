@@ -1,3 +1,20 @@
+## 0.1.50 — WINE_PE_SMOKE soft-continue (live wineboot ≠ FATAL hang)
+
+**Bug (0.1.49 smoke):** PE finally runs (`NTDLL_ANON_PE ok`, no `map_image … noexec`);
+`wineboot --init` reaches `services.exe` / `rundll32 setupapi` / `explorer.exe /desktop`,
+but `WINE_PE_SMOKE` 45s timeout still `FATAL: WINE_PE_SMOKE HANG (exit 124)` and aborts
+before `WINE_RUN`. Root cause: hang gate treated any timeout as hard fail, ignoring boot
+markers.
+
+**Fix:** Default smoke timeout 90s; early soft-pass when `system.reg` / services|explorer
+markers appear; on timeout soft-continue if `PE_BOOT_OK` or mid+inf known. Kill smoke
+prefix cleanly and continue to `WINE_RUN` / `WINE_START`. Keep NTDLL_ANON_PE + pe_ok FATAL.
+Note missing `libxkbregistry.so.0` (non-fatal).
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.50` → `NTDLL_ANON_PE ok` → `PREFIX_EXEC ok … pe_ok=yes`
+→ `HOLEFIT ok` → `WINE_PE_SMOKE progress soft-pass` **or** `hang soft-continue` → `WINE_RUN` /
+`WINE_START` → **no** `FATAL: WINE_PE_SMOKE HANG` when boot progressed → no `map_image … noexec`.
+
 ## 0.1.49 — NTDLL_ANON_PE (Wine W^X / false pe_ok green)
 
 **Bug (0.1.48 smoke):** `pe_ok=yes` / `PREFIX_EXEC ok` / HOLEFIT ok, but Wine still

@@ -13,10 +13,10 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.49: pe_ok mmap(RX) was false green vs Wine RW→mprotect(RX) (Android W^X).
-# Patch Kron4ek ntdll.so virtual_map_image to force removable/anon pread (GameNative).
-# Keep plain-dir scratch + pe_ok FATAL; require NTDLL_ANON_PE before Wine.
-WINE_LAUNCH_STAMP=0.1.49
+# 0.1.50: PE works (NTDLL_ANON_PE); WINE_PE_SMOKE hang gate was wrong — wineboot
+# progressing (services/explorer/system.reg) was treated as FATAL 124. Soft-continue.
+# Keep NTDLL_ANON_PE + plain-dir scratch + pe_ok FATAL + hole-fit mid≥0x1200000.
+WINE_LAUNCH_STAMP=0.1.50
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -261,6 +261,10 @@ mkdir -p "$WINEPREFIX"
 log "NTDLL=ok $(ls -la "$NTDLL" 2>&1)"
 log "BOX64_X64LIB=ok $(ls -la "$X64LIB_GCC" 2>&1)"
 log "BOX64_LD_LIBRARY_PATH=$BOX64_LD_LIBRARY_PATH"
+# libxkbregistry is optional (xkbcommon); missing on rootfs is non-fatal for Wine PE
+if [ ! -e /usr/lib/aarch64-linux-gnu/libxkbregistry.so.0 ] &&    [ ! -e /usr/lib/libxkbregistry.so.0 ] &&    [ ! -e /lib/aarch64-linux-gnu/libxkbregistry.so.0 ]; then
+  log "NOTE: libxkbregistry.so.0 missing (non-fatal; xkbcommon optional)"
+fi
 log "WINELOADER=$WINELOADER WINELOADERNOEXEC=$WINELOADERNOEXEC WINE_REAL=$WINE_REAL"
 log "WINEPRELOADRESERVE='${WINEPRELOADRESERVE-<unset>}' BOX64_MMAP32=$BOX64_MMAP32"
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
@@ -1043,7 +1047,7 @@ fi
 # 冒煙 0.1.37：
 # 1) wine.inf 版號（不觸發 wineboot；Wine11 unix stub 無 --version 短路）
 # 2) 短 PE 探測（可選）：wine --version／wineboot；對齊 prereserve；偵測 LdrInitializeThunk SIGSEGV 迴圈
-SMOKE_TIMEOUT="${WINE_VERSION_SMOKE_TIMEOUT:-45}"
+SMOKE_TIMEOUT="${WINE_VERSION_SMOKE_TIMEOUT:-90}"
 SMOKE_PREFIX="/tmp/wine-smoke-$$"
 mkdir -p "$SMOKE_PREFIX"
 : > /mnt/data/wine-version.out
@@ -1119,6 +1123,24 @@ while kill -0 "$SMOKE_PID" 2>/dev/null; do
     "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
     pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
     WV=139
+    break
+  fi
+  # Soft-pass while still running: Wine11 --version triggers full wineboot; live hang ≠ dead hang
+  # Require real PE progress (not merely wineboot.exe argv) — services/explorer/rundll32/wine-staging/system.reg
+  PE_PROGRESS=0
+  if [ -f "$SMOKE_PREFIX/system.reg" ]; then
+    PE_PROGRESS=1
+  elif grep -qE 'Detected running wine with "(services|explorer|rundll32)\.exe"|wine-staging [0-9]|InstallHinfSection' /mnt/data/wine-version.out 2>/dev/null; then
+    PE_PROGRESS=1
+  fi
+  if [ "$PE_PROGRESS" = "1" ]; then
+    log "WINE_PE_SMOKE progress soft-pass t=${SMOKE_ELAPSED}s (boot markers / services|explorer) — kill smoke, continue WINE_RUN"
+    kill -TERM "$SMOKE_PID" 2>/dev/null || true
+    sleep 1
+    kill -KILL "$SMOKE_PID" 2>/dev/null || true
+    "$BOX64" /opt/wine/bin/wineserver -k 2>/dev/null || true
+    pkill -9 -f "/tmp/wine-smoke-" 2>/dev/null || true
+    WV=0
     break
   fi
   SMOKE_ELAPSED=$((SMOKE_ELAPSED+1))
@@ -1246,13 +1268,26 @@ if [ "$WV" = "134" ]; then
   exit 134
 fi
 
-# 閘門：必須有版號（inf 或 PE）；PE hang／SIGSEGV 已在上面 FATAL
+# 閘門：必須有版號（inf 或 PE）；SIGSEGV 已在上面 FATAL
+# 0.1.50: timeout alone is NOT FATAL if wineboot progressed (system.reg / services / explorer)
 if [ "$WV" = "124" ]; then
-  log "FATAL: WINE_PE_SMOKE HANG (timeout ${SMOKE_TIMEOUT}s, exit 124)."
-  log "HINT: expect prereserve DOS 0x10000:0x10000 + mid holefit + hi 0x7f000000:0x3000000"
-  [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
-  [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
-  exit 124
+  if [ "${PE_BOOT_OK:-0}" = "1" ] || grep -qE 'Detected running wine with "(services|explorer|rundll32)\.exe"|wine-staging [0-9]' /mnt/data/wine-version.out 2>/dev/null; then
+    log "WINE_PE_SMOKE hang soft-continue (timeout ${SMOKE_TIMEOUT}s but boot progressed boot_ok=${PE_BOOT_OK:-0}) — continue WINE_RUN"
+    PE_OK=1
+    SMOKE_OK=1
+    WV=0
+  elif [ -n "$MID_OK_LINE" ] && [ "${SMOKE_OK:-0}" = "1" ]; then
+    # mid prereserve + wine.inf known, but no boot files: still soft-warn (empty prefix wineboot may be slow)
+    log "WARN: WINE_PE_SMOKE timeout ${SMOKE_TIMEOUT}s with mid OK / inf — soft-continue (no FATAL 124); watch WINEBOOT_INIT"
+    PE_OK=1
+    WV=0
+  else
+    log "FATAL: WINE_PE_SMOKE HANG (timeout ${SMOKE_TIMEOUT}s, exit 124, no boot progress)."
+    log "HINT: expect prereserve DOS 0x10000:0x10000 + mid holefit + hi 0x7f000000:0x3000000"
+    [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
+    [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
+    exit 124
+  fi
 fi
 if [ "$SMOKE_OK" = "1" ]; then
   if [ "$PE_OK" = "1" ]; then

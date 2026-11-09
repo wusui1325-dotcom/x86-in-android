@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.49",
-  "versionCode": 50,
-  "notes": "0.1.49: NTDLL_ANON_PE — force Wine PE anon/pread (fix pe_ok vs W^X mprotect noexec); keep plain-dir scratch + pe_ok FATAL"
+  "versionName": "0.1.50",
+  "versionCode": 51,
+  "notes": "0.1.50: WINE_PE_SMOKE soft-continue on progressing wineboot (no FATAL hang); keep NTDLL_ANON_PE + pe_ok FATAL"
 }

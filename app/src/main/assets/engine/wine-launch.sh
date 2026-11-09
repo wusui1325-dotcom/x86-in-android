@@ -3318,7 +3318,7 @@ map_wait_marker_desk_ok() {
 }
 # Marker cleared by Session/DesktopHelper before X start — do not rm after explorer
 # (desktop may already have mapped and written it).
-log "MAP_WAIT desktop marker .x86-x11-ready (max ${MAP_WAIT_MAX}x0.1s=$((MAP_WAIT_MAX * 100))ms; extend=${MAP_WAIT_EXTEND}x0.1s; 0.1.103 t=I*100ms display; 0.1.102 gate)"
+log "MAP_WAIT desktop marker .x86-x11-ready desk=1/explorer (max ${MAP_WAIT_MAX}x0.1s=$((MAP_WAIT_MAX * 100))ms; extend=${MAP_WAIT_EXTEND}x0.1s; 0.1.115 reject rundll32)"
 while ! map_wait_marker_desk_ok && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]; do
   # explorer died early?
   if ! kill -0 "$WINE_PID" 2>/dev/null; then

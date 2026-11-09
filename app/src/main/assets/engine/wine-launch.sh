@@ -14,6 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.66: Present ahb CPU-first default (X86_PRESENT_GPU=1 for EGL); APP_LOAD unix harden (no C:/ fallback).
 # 0.1.65: APP_LOAD unix path (no C:/ → start.exe/ShellExecute); Present CPU-first (no EGL steal).
 # 0.1.64: explorer desktop alone then APP_LOAD; APP_RELAUNCH; no fake Present.
 # 0.1.63: Present→Surface diag + overlay clear; APP_WIN=C:/App/app.exe (no BEL in logs).
@@ -26,7 +27,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.65
+WINE_LAUNCH_STAMP=0.1.66
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -2119,8 +2120,24 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
   APP_PID=$!
   log "APP_LOAD pid=$APP_PID target=$APP_TARGET"
+  # 0.1.66: quick-exit / no Loaded → clear APP_LOAD unix failed (never fall back to C:/App)
+  sleep 2
+  if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+    wait "$APP_PID" 2>/dev/null
+    APP_RC=$?
+    log "APP_LOAD unix failed: process exited quickly pid=$APP_PID rc=${APP_RC:-?} target=$APP_TARGET"
+    log "APP_LOAD unix failed: refusing C:/App Windows path fallback (0.1.66)"
+    if grep -qE 'ShellExecuteEx failed|Application could not be started|c0000135|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null; then
+      grep -E 'ShellExecuteEx failed|Application could not be started|c0000135|err:module|err:process' /mnt/data/wine-run.out 2>/dev/null | head -10 | while IFS= read -r ln; do
+        log "APP_LOAD unix failed: $ln"
+      done || true
+    fi
+  else
+    log "APP_LOAD unix alive after 2s pid=$APP_PID"
+  fi
 elif [ -n "$APP_WIN" ]; then
-  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.64 ShellExecuteEx)"
+  log "APP_LOAD WARN no unix file — refusing Windows path $APP_WIN (0.1.66 no C:/ fallback)"
+  log "APP_LOAD unix failed: APP_UNIX missing or not a file (argv had Windows-only seed)"
 fi
 
 # X window tree diagnostic (best-effort) after a short settle
@@ -2220,9 +2237,16 @@ while kill -0 "$WINE_PID" 2>/dev/null; do
         fi
         APP_RELAUNCHED=1
         log "APP_RELAUNCH once target=$APP_TARGET (unix; no Loaded fingerprint by t=${HB}s)"
+        log "APP_LOAD unix failed: no Loaded fingerprint by t=${HB}s — relaunch once (still no C:/App)"
         "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
         APP_PID=$!
         log "APP_RELAUNCH pid=$APP_PID"
+        sleep 2
+        if [ -n "$APP_PID" ] && ! kill -0 "$APP_PID" 2>/dev/null; then
+          wait "$APP_PID" 2>/dev/null
+          APP_RC=$?
+          log "APP_LOAD unix failed: relaunch exited quickly pid=$APP_PID rc=${APP_RC:-?} (no C:/ fallback)"
+        fi
       else
         APP_RELAUNCHED=1
         log "APP_LOAD confirmed by t=${HB}s — no relaunch"

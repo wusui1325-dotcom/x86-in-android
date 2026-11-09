@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.65",
-  "versionCode": 66,
-  "notes": "0.1.65: Present CPU-first (fix EGL steal of ANativeWindow); APP_LOAD unix path (no start.exe/ShellExecute)"
+  "versionName": "0.1.66",
+  "versionCode": 67,
+  "notes": "0.1.66: Present ahb CPU-first default (X86_PRESENT_GPU=1 opt-in); APP_LOAD unix harden (no C:/ fallback); DIAG path="
 }

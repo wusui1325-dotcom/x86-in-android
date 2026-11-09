@@ -39,6 +39,8 @@ public:
     bool eglReady() const { return egl_ok_ && egl_surf_ != EGL_NO_SURFACE; }
     int lastPresentRc() const { return last_present_rc_; }
     int lockFailCount() const { return lock_fail_count_; }
+    /** 0.1.66: "ahb_cpu" | "ahb_gpu" | "" */
+    const char* lastPresentPath() const { return last_present_path_; }
 
 private:
     PresentEngine() = default;
@@ -60,6 +62,7 @@ private:
     int stride_ = 0;
     int last_present_rc_ = 0;
     int lock_fail_count_ = 0;
+    const char* last_present_path_ = "";
 
     EGLDisplay egl_dpy_ = EGL_NO_DISPLAY;
     EGLContext egl_ctx_ = EGL_NO_CONTEXT;
@@ -96,5 +99,7 @@ JNIEXPORT jboolean JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresent
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLastRc(
         JNIEnv*, jclass);
 JNIEXPORT jint JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLockFails(
+        JNIEnv*, jclass);
+JNIEXPORT jstring JNICALL Java_com_wusper_x86_engine_NativeEngine_nativePresentLastPath(
         JNIEnv*, jclass);
 }

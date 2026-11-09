@@ -21,6 +21,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.64: only count presentOk when native returns 0 with Surface attached
  * ({@link NativeEngine#nativePresentReady()} == window_). Nearly-black frames get a
  * bright 8px HUD bar so Boss can see Present works.
+ * 0.1.66: AHB path is CPU-first by default; DIAG includes path=; AHB ok may also
+ * try BGRA once when drawable data is non-black (no double presentOk).
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -42,6 +44,7 @@ public final class PresentXFramePump extends Thread {
     private int presentFail;
     private int nonBlackHits;
     private int hudHits;
+    private int bgraAfterAhb;
     private int lastW;
     private int lastH;
     private int lastChildId;
@@ -160,6 +163,17 @@ public final class PresentXFramePump extends Thread {
                 boolean black = data == null || isNearlyBlack(data, width, height, strideBytes);
                 if (!black) {
                     nonBlackHits++;
+                    // 0.1.66 optional: also push drawable CPU pixels once if AHB rc==0
+                    // but guest data is non-black (AHB buffer may be empty). No double ok.
+                    if (data != null && bgraAfterAhb < 2) {
+                        ByteBuffer dup = data.duplicate();
+                        dup.rewind();
+                        int brc = NativeEngine.nativePresentBgra(dup, width, height, strideBytes);
+                        if (brc == 0) {
+                            bgraHits++;
+                        }
+                        bgraAfterAhb++;
+                    }
                 } else {
                     // Prove Surface path with HUD when AHB frame is empty/black
                     presentHudBar(width, height, frameIndex);
@@ -167,6 +181,7 @@ public final class PresentXFramePump extends Thread {
                 maybeLog(frameIndex, kids);
                 return;
             }
+            // AHB failed — fall through to BGRA (must not early-return)
             presentFail++;
         }
 
@@ -396,7 +411,8 @@ public final class PresentXFramePump extends Thread {
                 + " ready=" + NativeEngine.nativePresentReady()
                 + " egl=" + NativeEngine.nativePresentEglReady()
                 + " lastRc=" + NativeEngine.nativePresentLastRc()
-                + " lockFail=" + NativeEngine.nativePresentLockFails();
+                + " lockFail=" + NativeEngine.nativePresentLockFails()
+                + " path=" + NativeEngine.nativePresentLastPath();
     }
 
     public int presentOkCount() {

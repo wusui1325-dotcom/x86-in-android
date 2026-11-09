@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.65-box64-wine64k-holefit-anonpe-rpcss-win64",
+  "runtimeId": "wine-gpustack-v0.1.66-box64-wine64k-holefit-anonpe-rpcss-win64-present-cpufirst",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.62: explorer+C:\\\\App\\\\app.exe launch; +x11drv debug; RpcSs alive gate"
+  "notes": "0.1.66: Present ahb CPU-first default; APP_LOAD unix harden; present-cpufirst"
 }

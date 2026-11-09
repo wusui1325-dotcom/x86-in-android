@@ -1,3 +1,19 @@
+## 0.1.66 — Present ahb CPU-first default + APP_LOAD harden
+
+**Smoke risk (0.1.65):** `presentAhb` still called `ensureEgl()` first (pump prefers AHB).
+GPU half-success / per-frame EGL rebuild could steal `ANativeWindow_lock` again.
+APP_LOAD unix may exit quickly with no Loaded fingerprint; no clear fail line.
+
+**Fix:**
+- `presentAhb`: default `releaseEgl` → `presentAhbCpu`; `X86_PRESENT_GPU=1` for GPU-first
+- Log once: `PRESENT path=ahb_cpu` / `ahb_gpu`; DIAG `path=` via `nativePresentLastPath`
+- `postAhbToWindow`: never `ensureEgl`; GPU only if env + existing surface
+- APP_LOAD: unix-only; quick-exit / no Loaded → `APP_LOAD unix failed` (no C:/ fallback)
+- KEY_LOG: `ANativeWindow_lock` / `lockFail` / `APP_PE` / `PRESENT path` / `cpu-first`
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.66`; `PRESENT path=ahb_cpu`; `PRESENT_DIAG … path=ahb_cpu ok>0 lockFail=0`;
+`APP_LOAD cmdline: wine /mnt/app/app.exe`; no ShellExecuteEx / no C:/App launch.
+
 ## 0.1.65 — Present CPU-first (fix EGL/ANativeWindow) + APP_LOAD unix
 
 **Smoke (0.1.64):** PRESENT_DIAG `nonBlack` rising but `ok=0 fail` rising, `egl=true`,

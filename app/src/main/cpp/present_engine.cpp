@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstring>
 #include <vector>
+#include <cstdlib>
 
 #define LOG_TAG "x86present"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -34,6 +35,16 @@ uniform sampler2D uTex;
 void main(){
   gl_FragColor = texture2D(uTex, vUv);
 })";
+
+/** 0.1.66: X86_PRESENT_GPU=1 → try EGL/AHB GPU first; default CPU-first. */
+static bool presentWantGpu() {
+    static int cached = -1;
+    if (cached < 0) {
+        const char* e = std::getenv("X86_PRESENT_GPU");
+        cached = (e != nullptr && e[0] == '1' && e[1] == '\0') ? 1 : 0;
+    }
+    return cached == 1;
+}
 
 PresentEngine& PresentEngine::instance() {
     static PresentEngine e;
@@ -277,18 +288,20 @@ int PresentEngine::postAhbToWindow() {
         last_present_rc_ = -EINVAL;
         return -EINVAL;
     }
-    // 0.1.65: CPU path first — do not ensureEgl here (would steal buffer queue).
-    // Optional GPU: only if already have window surface from presentAhb.
-    if (egl_ok_ && egl_surf_ != EGL_NO_SURFACE) {
+    // 0.1.65/0.1.66: CPU path — never ensureEgl here (would steal buffer queue).
+    // GPU only if X86_PRESENT_GPU=1 AND window surface already exists.
+    if (presentWantGpu() && egl_ok_ && egl_surf_ != EGL_NO_SURFACE) {
         int rc = presentAhbGpu(ahb_, width_, height_);
         if (rc == 0) {
             last_present_rc_ = 0;
+            last_present_path_ = "ahb_gpu";
             return 0;
         }
         releaseEglWindowSurfaceForCpu();
     } else {
         releaseEglWindowSurfaceForCpu();
     }
+    last_present_path_ = "ahb_cpu";
     void* ahbPixels = nullptr;
     int rc = AHardwareBuffer_lock(
             ahb_, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN, -1, nullptr, &ahbPixels);
@@ -479,16 +492,35 @@ int PresentEngine::presentAhb(AHardwareBuffer* external, int width, int height) 
     }
     // 0.1.64: never fake-success without Surface
     if (!window_) return -EINVAL;
-    // Try GPU on demand; on failure release EGL window surface before CPU lock
-    if (ensureEgl() == 0) {
-        int rc = presentAhbGpu(external, width, height);
-        if (rc == 0) {
-            last_present_rc_ = 0;
-            return 0;
+
+    // 0.1.66: default CPU-first so ANativeWindow_lock is never stolen mid-frame.
+    // Opt-in GPU: env X86_PRESENT_GPU=1.
+    static bool logged_cpu = false;
+    static bool logged_gpu = false;
+    if (presentWantGpu()) {
+        last_present_path_ = "ahb_gpu";
+        if (!logged_gpu) {
+            LOGI("PRESENT path=ahb_gpu (X86_PRESENT_GPU=1)");
+            logged_gpu = true;
         }
-        LOGW("presentAhbGpu failed rc=%d — falling back to CPU", rc);
+        if (ensureEgl() == 0) {
+            int rc = presentAhbGpu(external, width, height);
+            if (rc == 0) {
+                last_present_rc_ = 0;
+                return 0;
+            }
+            LOGW("presentAhbGpu failed rc=%d — falling back to CPU", rc);
+        }
+        releaseEglWindowSurfaceForCpu();
+        last_present_path_ = "ahb_cpu";
+    } else {
+        last_present_path_ = "ahb_cpu";
+        if (!logged_cpu) {
+            LOGI("PRESENT path=ahb_cpu (cpu-first default)");
+            logged_cpu = true;
+        }
+        releaseEglWindowSurfaceForCpu();
     }
-    releaseEglWindowSurfaceForCpu();
     int rc = presentAhbCpu(external, width, height);
     last_present_rc_ = rc;
     return rc;
@@ -671,4 +703,10 @@ Java_com_wusper_x86_engine_NativeEngine_nativePresentLastRc(JNIEnv*, jclass) {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wusper_x86_engine_NativeEngine_nativePresentLockFails(JNIEnv*, jclass) {
     return PresentEngine::instance().lockFailCount();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_wusper_x86_engine_NativeEngine_nativePresentLastPath(JNIEnv* env, jclass) {
+    const char* p = PresentEngine::instance().lastPresentPath();
+    return env->NewStringUTF(p ? p : "");
 }

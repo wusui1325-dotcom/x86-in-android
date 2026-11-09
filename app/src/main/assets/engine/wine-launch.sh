@@ -14,6 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.72: DXGI Present — dxvk.conf deferSurfaceCreation + Direct3D/X11 reg + WINEESYNC.
 # 0.1.71: Turnip ICD library_path guest-absolute + DllOverrides reg + TURNIP_DLOPEN probe.
 # 0.1.70: Present forceGpu ahb_gpu (no-CPU AHB / guestBlack sticky); keep 0.1.69 HUD sample + DXVK_DIAG.
 # 0.1.68: DXVK_LOG/HUD/cache + DXVK_DIAG (ICD/dll/kgsl) + guestBlack Present DIAG;
@@ -32,7 +33,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.71
+WINE_LAUNCH_STAMP=0.1.72
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -89,7 +90,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       *mscoree,mshtml=*) _audio_ov="mscoree,mshtml=;$_audio_ov" ;;
     esac
     export WINEDLLOVERRIDES="d3d8,d3d9,d3d10core,d3d11,dxgi=b;$_audio_ov"
-    unset DXVK_HUD DXVK_LOG_LEVEL DXVK_STATE_CACHE_PATH 2>/dev/null || true
+    unset DXVK_HUD DXVK_LOG_LEVEL DXVK_STATE_CACHE_PATH DXVK_CONFIG_FILE 2>/dev/null || true
     unset _audio_ov
     ;;
   *)
@@ -117,12 +118,37 @@ case "${X86_DXWRAPPER:-dxvk}" in
       *) export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}" ;;
     esac
     export DXVK_STATE_CACHE_PATH="${DXVK_STATE_CACHE_PATH:-/mnt/data/dxvk-cache}"
-    log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} (Present skips HUD band)"
+    # 0.1.72: seed dxvk.conf — defer VkSurface until first Present (post-create black)
+    _dxvk_conf="${DXVK_CONFIG_FILE:-/mnt/data/dxvk.conf}"
+    mkdir -p "$(dirname "$_dxvk_conf")"
+    if [ "${X86_DXVK_CONF:-}" = "keep" ] && [ -f "$_dxvk_conf" ]; then
+      log "DXVK_CONFIG keep existing $_dxvk_conf"
+    else
+      cat > "$_dxvk_conf" <<'DXVKEOF'
+# x86-in-android 0.1.72 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
+dxgi.deferSurfaceCreation = True
+d3d9.deferSurfaceCreation = True
+# Cap reported VRAM — Turnip uncapped/odd heaps confuse some titles
+dxgi.maxDeviceMemory = 2048
+# Prefer fifo; tearFree=True → mailbox often unsupported on mobile WSI
+dxvk.tearFree = False
+DXVKEOF
+      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0"
+    fi
+    export DXVK_CONFIG_FILE="$_dxvk_conf"
+    log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} config=${DXVK_CONFIG_FILE:-off} (Present skips HUD band)"
+    log "BISECT_HINT if guestBlack sticky after create: echo wined3d > /mnt/data/dxwrapper"
+    unset _dxvk_conf
     ;;
 esac
 
 # 0.1.69 Knife #3: Vulkan loader fingerprint (Turnip vkCreate / ICD)
 export VK_LOADER_DEBUG="${VK_LOADER_DEBUG:-error}"
+
+# 0.1.72: Winlator-align esync (eventfd fences; no fsync/futex2)
+export WINEESYNC="${WINEESYNC:-1}"
+log "WINEESYNC=${WINEESYNC}"
 
 # 定案 A：客體 ALSA android_aserver → 宿主 AAudio（由 GpuStack 寫入 asound.conf）
 if [ -n "${ANDROID_ALSA_SERVER:-}" ]; then
@@ -1378,10 +1404,18 @@ ensure_graphics_x11_reg() {
     while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-dll.out || true
   fi
   unset _dll_mode
+  # 0.1.72: Direct3D VideoMemorySize/csmt + X11 GrabFullscreen/Managed/UseTakeFocus
+  set +e
+  wine_reg_helper patch-present-knobs > /mnt/data/wine-present.out 2>&1
+  PRESENT_RC=$?
+  set -e
+  if [ -f /mnt/data/wine-present.out ]; then
+    while read -r line; do log "DRIVER_REG $line"; done < /mnt/data/wine-present.out || true
+  fi
   if [ "$GFX_RC" = "0" ]; then
     return 0
   fi
-  log "DRIVER_REG skip (user.reg not ready rc=$GFX_RC dll_rc=${DLL_RC:-}) — wineboot must create regs first"
+  log "DRIVER_REG skip (user.reg not ready rc=$GFX_RC dll_rc=${DLL_RC:-} present_rc=${PRESENT_RC:-}) — wineboot must create regs first"
   return 0
 }
 

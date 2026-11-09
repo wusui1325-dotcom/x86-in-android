@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.71",
-  "versionCode": 72,
-  "notes": "0.1.71: Turnip ICD library_path guest-absolute + DllOverrides reg + TURNIP_DLOPEN probe (vkCreate/DXGI create path)"
+  "versionName": "0.1.72",
+  "versionCode": 73,
+  "notes": "0.1.72: DXGI Present \u2014 dxvk.conf deferSurfaceCreation + Direct3D VideoMemorySize/X11 GrabFullscreen + WINEESYNC"
 }

@@ -377,9 +377,76 @@ def cmd_patch_dll_overrides(prefix):
 
 
 
+def _upsert_section(text, section, kv_pairs):
+    """Ensure [section] exists and set/replace listed "Key"="Value" or dword lines.
+    kv_pairs: list of (key, full_assignment_line_without_newline) e.g. ('"VideoMemorySize"', '"VideoMemorySize"="2048"')
+    Keys matched by startswith(key+'=').
+    """
+    keys = [k for k, _ in kv_pairs]
+    lines = []
+    for ln in text.splitlines(True):
+        s = ln.strip()
+        drop = False
+        for k in keys:
+            if s.startswith(k + "="):
+                drop = True
+                break
+        if not drop:
+            lines.append(ln if ln.endswith("\n") else ln + "\n")
+    text = "".join(lines)
+    assignments = [a if a.endswith("\n") else a + "\n" for _, a in kv_pairs]
+    if section in text:
+        out = []
+        done = False
+        for ln in text.splitlines(True):
+            out.append(ln if ln.endswith("\n") else ln + "\n")
+            if (not done) and ln.strip() == section:
+                for a in assignments:
+                    out.append(a)
+                done = True
+        if not done:
+            out.append("\n" + section + "\n" + "".join(assignments))
+        text = "".join(out)
+    else:
+        if not text.endswith("\n"):
+            text += "\n"
+        text += "\n" + section + "\n" + "".join(assignments)
+    return text
+
+
+def cmd_patch_present_knobs(prefix):
+    """0.1.72: Wine Direct3D VideoMemorySize/csmt + X11 Driver grab/focus knobs.
+    Usage: wine_reg_helper.py patch-present-knobs <prefix>
+    Helps DXGI/DXVK post-create black (surface timing still needs dxvk.conf) and
+    wined3d bisect paint. Never invent user.reg before wineboot.
+    """
+    path = os.path.join(prefix, "user.reg")
+    info = detect(path)
+    if not info["exists"] or not info["valid"] or info["text"] is None:
+        print("presentknobs skip user.reg ready=0")
+        sys.exit(3)
+    text = info["text"]
+    d3d = "[Software\\\\Wine\\\\Direct3D]"
+    text = _upsert_section(text, d3d, [
+        ('"VideoMemorySize"', '"VideoMemorySize"="2048"'),
+        ('"csmt"', '"csmt"=dword:00000001'),
+        ('"EnableCSMT"', '"EnableCSMT"="Y"'),
+    ])
+    x11 = "[Software\\\\Wine\\\\X11 Driver]"
+    text = _upsert_section(text, x11, [
+        ('"GrabFullscreen"', '"GrabFullscreen"="N"'),
+        ('"Managed"', '"Managed"="Y"'),
+        ('"UseTakeFocus"', '"UseTakeFocus"="N"'),
+    ])
+    text = ensure_header_and_arch(text, "win64")
+    write_utf8(path, text)
+    print("presentknobs VideoMemorySize=2048 csmt=1 GrabFullscreen=N Managed=Y UseTakeFocus=N")
+    sys.exit(0)
+
+
 def main():
     if len(sys.argv) < 3:
-        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|patch-graphics|patch-dll-overrides> <prefix> [native|builtin]")
+        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|patch-graphics|patch-dll-overrides|patch-present-knobs> <prefix> [native|builtin]")
         sys.exit(1)
     cmd, prefix = sys.argv[1], sys.argv[2]
     {
@@ -389,6 +456,7 @@ def main():
         "inject-rpcss": cmd_inject_rpcss,
         "patch-graphics": cmd_patch_graphics,
         "patch-dll-overrides": cmd_patch_dll_overrides,
+        "patch-present-knobs": cmd_patch_present_knobs,
     }[cmd](prefix)
 
 if __name__ == "__main__":

@@ -122,6 +122,9 @@
   `/mnt/gpu/turnip/libvulkan_freedreno.so` (bare filename needs system search; Winlator
   uses `/usr/lib`, we bind `/mnt/gpu/turnip`). wine-launch rewrites ICD every start +
   `TURNIP_DLOPEN` probe. `DllOverrides` reg backup for d3d*/dxgi. No hard-block KGSL.
+- **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
+  `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
+  Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
 - **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
 
 ### 還缺

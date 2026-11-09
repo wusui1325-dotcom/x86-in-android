@@ -1,3 +1,22 @@
+## 0.1.72 — DXGI Present deferSurface + Wine Direct3D/X11 knobs
+
+**Smoke risk (0.1.71):** ICD absolute + DllOverrides can make `vkCreate`/`DXVK:` Adapter
+OK while the window stays black — VkSurface bound at swapchain create before the
+APP_LOAD HWND is mapped/sized; Turnip uncapped heaps; exclusive fullscreen grab on
+in-process X.
+
+**Fix:**
+- Seed `/mnt/data/dxvk.conf` + `DXVK_CONFIG_FILE`: `dxgi.deferSurfaceCreation=True`,
+  `d3d9.deferSurfaceCreation=True`, `dxgi.maxDeviceMemory=2048`, `dxvk.tearFree=False`
+- `patch-present-knobs`: `VideoMemorySize=2048`, `csmt=1`/`EnableCSMT=Y`,
+  `GrabFullscreen=N`, `Managed=Y`, `UseTakeFocus=N`
+- `WINEESYNC=1` (Winlator-align); `BISECT_HINT` for wined3d if still sticky black
+- Keep 071 ICD absolute / 070 ahb_gpu / Present CPU-first default
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.72`; `DXVK_CONFIG deferSurface=1`;
+`DRIVER_REG presentknobs VideoMemorySize=2048 GrabFullscreen=N`; `WINEESYNC=1`;
+`guestBlack=0` with real pixels after first Present.
+
 ## 0.1.71 — Turnip ICD absolute library_path + DllOverrides (vkCreate)
 
 **Smoke risk (0.1.70):** Present `ahb_gpu` can be healthy while DXVK never gets a Vulkan

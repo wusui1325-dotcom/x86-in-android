@@ -171,7 +171,11 @@ object GpuStack {
             if (logLevel != null) env += "DXVK_LOG_LEVEL=$logLevel"
             if (hud != null) env += "DXVK_HUD=$hud"
             env += "DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache"
+            // 0.1.72: dxvk.conf seeded by wine-launch (deferSurfaceCreation / maxDeviceMemory)
+            env += "DXVK_CONFIG_FILE=/mnt/data/dxvk.conf"
         }
+        // 0.1.72: Winlator-align esync for DXGI/DXVK fence waits
+        env += "WINEESYNC=1"
         // Knife #3 cheap: loader warn/error for Turnip/vkCreate fingerprint
         val vkDbg = System.getenv("VK_LOADER_DEBUG")
             ?: ctx.getSharedPreferences("x86", Context.MODE_PRIVATE).getString("vk_loader_debug", null)

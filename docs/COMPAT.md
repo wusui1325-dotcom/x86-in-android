@@ -1,3 +1,22 @@
+## 0.1.86 — ensure_vulkan_seed (vulkan-1 + winevulkan)
+
+**Smoke risk (0.1.85 residual):** awk abort fixed so APP_LOAD / DXVK / vkCreate now run;
+DXVK `LoadLibrary(vulkan-1.dll)` → winevulkan under seed-copy prefix. pe_dir ships
+`vulkan-1.dll` + `winevulkan.dll` (x86_64 + i386) but PREFIX_EXEC seed_list + DXVK
+reseed omit them — same class as 080 CRT / 084 d3dcompiler. Miss → vkCreate fail /
+guestBlack after HWND ready.
+
+**Fix:**
+- `ensure_vulkan_seed` → system32 from x86_64-windows + SysWOW64 from i386-windows
+- Log `APP_VULKAN_SEED … vulkan1=yes winevulkan=yes`
+- PREFIX_EXEC seed_list +vulkan-1/winevulkan; call after d3dcompiler / on missing_dll relaunch
+- DXVK_DIAG also fingerprints system32 `vulkan-1` (+ winevulkan) size/MISSING
+- Keep 085 awk POSIX + forceGpu / 084 d3dcompiler / 083 Present cpuAccess / 082 sync /
+  081 msgbox / 080 CRT / 079 CUI / 078 sticky / 076 TU_GMEM / 070 ahb_gpu
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.86`; `APP_VULKAN_SEED … vulkan1=yes winevulkan=yes`;
+DXVK_DIAG `vulkan-1:NNNN` (not MISSING); DXVK can LoadLibrary vulkan-1.
+
 ## 0.1.85 — awk→POSIX + Present forceGpu ahbCpuAccess0
 
 **Boss smoke (0.1.84):** `/usr/local/bin/wine-launch.sh: 428: awk: not found` — imagefs has

@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.85-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu",
+  "runtimeId": "wine-gpustack-v0.1.86-box64-wine64k-holefit-anonpe-rpcss-win64-turnip-queue-tu-gmem-auto-appload-fp-nohwnd-map-cui-wineconsole-crt-seed-msgbox-title-dxgi-sync-present-gpuimage-d3dcompiler-seed-ahb-forcegpu-vulkan-seed",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.85: awk→POSIX + Present forceGpu ahbCpuAccess0; keep 0.1.84 d3dcompiler/083 Present cpuAccess/082 syncInterval/081 msgbox/080 CRT"
+  "notes": "0.1.86: ensure_vulkan_seed (vulkan-1+winevulkan); keep 0.1.85 awk POSIX + forceGpu / 084 d3dcompiler / 083 Present / 082 sync / 081 msgbox / 080 CRT"
 }

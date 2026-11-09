@@ -27,6 +27,11 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.86: vulkan-1 + winevulkan seed — pe_dir ships both arches; PREFIX_EXEC seed_list
+# + DXVK reseed omit them. DXVK LoadLibrary(vulkan-1.dll) → winevulkan; seed-copy
+# prefix needs file-visible PE in system32 (same class as 080 CRT / 084 d3dcompiler).
+# Log APP_VULKAN_SEED; DXVK_DIAG also checks vulkan-1 (+ winevulkan). Keep 085 awk
+# POSIX + forceGpu / 084 d3dcompiler / 083 Present / 082 sync / 081–070.
 # 0.1.85: (1) P0 awk→POSIX — imagefs has no awk; set -e + TURNIP probe `ls|awk` → exit 127
 # → UI「客體命令不存在」; APP_LOAD/d3dcompiler/Present never ran. Kill all awk → wc /
 # while-read /proc/mounts (path_is_mounted, wipe bind). No busybox awk / no install.
@@ -88,7 +93,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.85
+WINE_LAUNCH_STAMP=0.1.86
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -420,7 +425,8 @@ else
   [ -e /dev/kgsl-3d0 ] && _kgsl=yes
   _dlls=""
   _dll_miss=0
-  for _d in d3d11 dxgi d3d9 d3d10core d3d8; do
+  # 0.1.86: also fingerprint vulkan-1 (+ winevulkan) — DXVK LoadLibrary path
+  for _d in d3d11 dxgi d3d9 d3d10core d3d8 vulkan-1 winevulkan; do
     _f="/home/xuser/.wine/drive_c/windows/system32/${_d}.dll"
     if [ -f "$_f" ]; then
       _sz=$(wc -c < "$_f" 2>/dev/null || echo 0)
@@ -873,6 +879,44 @@ ensure_d3dcompiler_seed() {
   return 0
 }
 
+# 0.1.86: seed vulkan-1.dll + winevulkan.dll into system32 + SysWOW64.
+# pe_dir ships both arches; PREFIX_EXEC seed_list + DXVK reseed omit them →
+# DXVK LoadLibrary(vulkan-1.dll) → winevulkan fails under seed-copy prefix
+# (no bind-over) → vkCreate / guestBlack after HWND ready. Same class as 080/084.
+ensure_vulkan_seed() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local sys32="$WINEPREFIX/drive_c/windows/system32"
+  local wow64="$WINEPREFIX/drive_c/windows/syswow64"
+  local vk_list="vulkan-1.dll winevulkan.dll"
+  mkdir -p "$sys32" 2>/dev/null || true
+  mkdir -p "$wow64" 2>/dev/null || true
+  local n64=0 n32=0 miss="" d
+  for d in $vk_list; do
+    if [ -f "$pe64/$d" ]; then
+      if cp -f "$pe64/$d" "$sys32/$d" 2>/dev/null; then
+        n64=$((n64+1))
+      else
+        miss="$miss $d"
+      fi
+    else
+      miss="$miss pe64:$d"
+    fi
+    if [ -f "$pe32/$d" ]; then
+      if cp -f "$pe32/$d" "$wow64/$d" 2>/dev/null; then
+        n32=$((n32+1))
+      fi
+    else
+      miss="$miss pe32:$d"
+    fi
+  done
+  local v1=no wv=no
+  [ -f "$sys32/vulkan-1.dll" ] && v1=yes
+  [ -f "$sys32/winevulkan.dll" ] && wv=yes
+  log "APP_VULKAN_SEED pe64→sys32=$n64 pe32→syswow64=$n32 vulkan1=$v1 winevulkan=$wv miss=${miss:-none}"
+  return 0
+}
+
 ensure_prefix_exec() {
   # 0.1.52: NTDLL_ANON_PE already bypasses Android W^X (anon/pread). Binding a
   # scratch tree OVER $WINEPREFIX/.../system32 HIDES wineboot-created DLLs and
@@ -942,6 +986,7 @@ ensure_prefix_exec() {
   # 0.1.80: + VS CRT redistributables (msvcp140/vcruntime140/…) — pe_dir has them;
   # 079 seed only ucrtbase/msvcrt → GUI CREATEWINDOW_MISS missing_dll.
   # 0.1.84: + d3dcompiler_47/46/43 (ensure_d3dcompiler_seed also seeds 33–42).
+  # 0.1.86: + vulkan-1.dll winevulkan.dll (ensure_vulkan_seed also seeds SysWOW64).
   local seed_list="ntdll.dll kernel32.dll kernelbase.dll advapi32.dll bcrypt.dll
     sechost.dll ucrtbase.dll msvcrt.dll rpcrt4.dll ws2_32.dll dnsapi.dll
     user32.dll gdi32.dll win32u.dll imm32.dll setupapi.dll cfgmgr32.dll
@@ -953,7 +998,8 @@ ensure_prefix_exec() {
     msvcp140.dll msvcp140_1.dll msvcp140_2.dll vcruntime140.dll vcruntime140_1.dll
     concrt140.dll msvcp120.dll msvcr120.dll msvcp110.dll msvcr110.dll
     msvcp100.dll msvcr100.dll
-    d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll"
+    d3dcompiler_47.dll d3dcompiler_46.dll d3dcompiler_43.dll
+    vulkan-1.dll winevulkan.dll"
   local seeded=0
   local skipped=0
   local d
@@ -1021,6 +1067,8 @@ ensure_prefix_exec() {
   ensure_vs_crt_seed
   # 0.1.84: seed d3dcompiler_* into sys32 + SysWOW64 (idempotent)
   ensure_d3dcompiler_seed
+  # 0.1.86: seed vulkan-1 + winevulkan into sys32 + SysWOW64 (idempotent)
+  ensure_vulkan_seed
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no
@@ -2907,6 +2955,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
         app_load_classify_nocreate
         ensure_vs_crt_seed
         ensure_d3dcompiler_seed
+        ensure_vulkan_seed
         _scan_body=$(head -c 240 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')
         _scan_none=0
         case "$_scan_body" in
@@ -2959,6 +3008,7 @@ if [ -n "${APP_TARGET:-}" ] && [ -n "${APP_PID:-}" ]; then
           APP_CRT_RELAUNCHED=1
           ensure_vs_crt_seed
           ensure_d3dcompiler_seed
+          ensure_vulkan_seed
           log "APP_CRT_RELAUNCH once reason=${APP_MISS_REASON} sig=${APP_CRT_SIG:-none} scan_none=${_scan_none} pe_mach=0x${PE_MACH:-?}"
           if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
             kill -TERM "$APP_PID" 2>/dev/null || true

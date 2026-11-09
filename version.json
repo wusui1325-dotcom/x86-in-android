@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.85",
-  "versionCode": 86,
-  "notes": "0.1.85: awk\u2192POSIX (TURNIP probe/path_is_mounted/wipe; imagefs no awk) + Present forceGpu when ahbCpuAccess=0 (reason=ahbCpuAccess0); keep 084\u2013070"
+  "versionName": "0.1.86",
+  "versionCode": 87,
+  "notes": "0.1.86: ensure_vulkan_seed (vulkan-1 + winevulkan pe→sys32/SysWOW64; APP_VULKAN_SEED; DXVK_DIAG); keep 085 awk POSIX + forceGpu / 084 d3dcompiler / 083–070"
 }

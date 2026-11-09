@@ -13,8 +13,8 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.42: fingerprint; mid must not overlap Wine stack 0x800000-0xa00000; prefix exec try
-WINE_LAUNCH_STAMP=0.1.42
+# 0.1.43: fingerprint; hole-fit keeps 0.1.42 stack exclusion; PREFIX_EXEC real PE probe+tmpfs
+WINE_LAUNCH_STAMP=0.1.43
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -264,49 +264,155 @@ log "WINEPRELOADRESERVE='${WINEPRELOADRESERVE-<unset>}' BOX64_MMAP32=$BOX64_MMAP
 log "PRELOADER=$(ls -la /opt/wine/lib/wine/x86_64-unix/wine-preloader /opt/wine/bin/wine-preloader 2>&1)"
 log "WINEPREFIX=$WINEPREFIX"
 
-# ---- 0.1.42: try make WINEPREFIX / drive_c exec (Android/proot often MS_NOEXEC) ----
-# Wine map_image_into_view needs PROT_EXEC on PE .text (ntdll.dll). Remount may work
-# under some proot/kernels; chmod alone cannot clear MS_NOEXEC. Log outcome for dig.
+# ---- 0.1.43: REAL PE exec for Wine builtins (not remount-false-green) ----
+# Under PRoot, mount -o remount,exec on filesDir often returns 0 while host MS_NOEXEC
+# remains → 0.1.42 logged "PREFIX_EXEC remount … ok" then still
+# map_image_into_view … ntdll.dll … noexec. Remount is NEVER success alone.
+#
+# Hot path is /opt/wine/lib/wine/x86_64-windows/*.dll (Wine opens PE from WINEDLLPATH;
+# NT name may still show C:\windows\system32\ntdll.dll). system32-only tmpfs misses it.
+# Winlator-style: copy PE windows tree (+ system32) onto tmpfs(exec), bind over; verify
+# with python3 mmap PROT_EXEC on ntdll.dll before claiming ok.
+probe_pe_exec() {
+  local f="$1"
+  [ -f "$f" ] || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$f" <<'PY'
+import mmap, os, sys
+path = sys.argv[1]
+fd = os.open(path, os.O_RDONLY)
+try:
+    sz = os.fstat(fd).st_size
+    if sz <= 0:
+        sys.exit(1)
+    length = min(65536, sz)
+    m = mmap.mmap(fd, length, prot=mmap.PROT_READ | mmap.PROT_EXEC)
+    m.close()
+except Exception as e:
+    sys.stderr.write("probe_pe_exec: %s\n" % e)
+    sys.exit(1)
+finally:
+    os.close(fd)
+sys.exit(0)
+PY
+    return $?
+  fi
+  # No python3: refuse to trust remount; require tmpfs bind marker
+  return 1
+}
+
 ensure_prefix_exec() {
   local p="${WINEPREFIX:-/home/xuser/.wine}"
-  mkdir -p "$p/drive_c/windows/system32" 2>/dev/null || true
-  local ok=0
+  local pe_dir=/opt/wine/lib/wine/x86_64-windows
+  local pe_ntdll="$pe_dir/ntdll.dll"
+  local sys32="$p/drive_c/windows/system32"
+  local scratch=/tmp/.wine-pe-exec
+  local ok_marker="$scratch/.prefix-exec-ok"
+  mkdir -p "$sys32" 2>/dev/null || true
+
+  if [ -f "$ok_marker" ] && [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"; then
+    log "PREFIX_EXEC skip (already ok) pe=$pe_ntdll"
+    return 0
+  fi
+
+  # Remount attempts: log as claimed only — never set success from return code
   if mount -o remount,exec,rw "$p" 2>/dev/null; then
-    log "PREFIX_EXEC remount WINEPREFIX ok"
-    ok=1
+    log "PREFIX_EXEC remount WINEPREFIX claimed (not trusted alone)"
   fi
   if mount -o remount,exec,rw "$p/drive_c" 2>/dev/null; then
-    log "PREFIX_EXEC remount drive_c ok"
-    ok=1
+    log "PREFIX_EXEC remount drive_c claimed (not trusted alone)"
   fi
   if mount -o remount,exec,rw /opt/wine 2>/dev/null; then
-    log "PREFIX_EXEC remount /opt/wine ok"
-    ok=1
+    log "PREFIX_EXEC remount /opt/wine claimed (not trusted alone)"
   fi
-  # Best-effort: tmpfs scratch for PE system32 if remount failed (Winlator-style)
-  if [ "$ok" -eq 0 ]; then
-    local scratch=/tmp/.wine-system32-exec
+  if [ -d "$pe_dir" ] && mount -o remount,exec,rw "$pe_dir" 2>/dev/null; then
+    log "PREFIX_EXEC remount x86_64-windows claimed (not trusted alone)"
+  fi
+
+  if [ -f "$pe_ntdll" ] && probe_pe_exec "$pe_ntdll"; then
+    log "PREFIX_EXEC ok mode=probe pe=$pe_ntdll (fs already exec)"
     mkdir -p "$scratch"
-    if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=256M tmpfs "$scratch" 2>/dev/null; then
-      if [ -d "$p/drive_c/windows/system32" ]; then
-        cp -a "$p/drive_c/windows/system32"/. "$scratch"/ 2>/dev/null || true
-      fi
-      mkdir -p "$p/drive_c/windows/system32"
-      if mount --bind "$scratch" "$p/drive_c/windows/system32" 2>/dev/null \
-         || mount -o bind "$scratch" "$p/drive_c/windows/system32" 2>/dev/null; then
-        log "PREFIX_EXEC tmpfs+bind system32 ok ($scratch)"
-        ok=1
-      else
-        log "WARN: PREFIX_EXEC tmpfs ok but bind system32 failed"
-      fi
+    echo "mode=probe" > "$ok_marker"
+    return 0
+  fi
+  log "PREFIX_EXEC probe fail pe=$pe_ntdll — forcing tmpfs+bind for x86_64-windows"
+
+  mkdir -p "$scratch"
+  if ! awk -v s="$scratch" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=768M tmpfs "$scratch" 2>/dev/null; then
+      log "PREFIX_EXEC tmpfs scratch ok size=768M path=$scratch"
+    elif mount -t tmpfs -o rw,exec,nosuid,mode=755,size=512M tmpfs "$scratch" 2>/dev/null; then
+      log "PREFIX_EXEC tmpfs scratch ok size=512M path=$scratch"
     else
-      log "WARN: PREFIX_EXEC tmpfs scratch failed (need wine remount or patched map_image)"
+      log "FATAL: PREFIX_EXEC tmpfs scratch failed — cannot place PE ntdll on exec fs"
+      exit 1
+    fi
+  else
+    log "PREFIX_EXEC tmpfs scratch already mounted path=$scratch"
+  fi
+
+  # Copy Wine PE builtins (hot path). ~334M once per session.
+  if [ ! -f "$scratch/x86_64-windows/ntdll.dll" ]; then
+    if [ ! -d "$pe_dir" ]; then
+      log "FATAL: PREFIX_EXEC missing $pe_dir"
+      exit 1
+    fi
+    log "PREFIX_EXEC copying $pe_dir → tmpfs (one-time)"
+    mkdir -p "$scratch/x86_64-windows"
+    if ! cp -a "$pe_dir"/. "$scratch/x86_64-windows"/; then
+      log "FATAL: PREFIX_EXEC cp x86_64-windows failed"
+      exit 1
+    fi
+    log "PREFIX_EXEC copy x86_64-windows done"
+  fi
+
+  # Bind tmpfs PE tree over /opt/wine/.../x86_64-windows
+  if ! awk -v s="$pe_dir" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
+       || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
+      log "PREFIX_EXEC bind x86_64-windows ok"
+    else
+      log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
+      exit 1
+    fi
+  else
+    log "PREFIX_EXEC bind x86_64-windows already mounted"
+  fi
+
+  # system32 also on tmpfs (wineboot may materialize PE there; NT path often system32)
+  mkdir -p "$scratch/system32"
+  if [ ! -f "$scratch/system32/.copied" ]; then
+    if [ -d "$sys32" ]; then
+      cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
+    fi
+    cp -f "$scratch/x86_64-windows/ntdll.dll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
+    touch "$scratch/system32/.copied"
+  fi
+  mkdir -p "$sys32"
+  if ! awk -v s="$sys32" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    if mount --bind "$scratch/system32" "$sys32" 2>/dev/null \
+       || mount -o bind "$scratch/system32" "$sys32" 2>/dev/null; then
+      log "PREFIX_EXEC bind system32 ok"
+    else
+      log "WARN: PREFIX_EXEC bind system32 failed (x86_64-windows bind may still suffice)"
     fi
   fi
-  chmod -R u+x "$p/drive_c/windows/system32" 2>/dev/null || true
-  if [ "$ok" -eq 0 ]; then
-    log "WARN: PREFIX_EXEC no remount/tmpfs — PE PROT_EXEC may still hit noexec"
+
+  chmod -R u+x "$scratch/x86_64-windows" "$scratch/system32" 2>/dev/null || true
+
+  if probe_pe_exec "$pe_ntdll"; then
+    log "PREFIX_EXEC ok mode=tmpfs+bind pe=$pe_ntdll"
+    echo "mode=tmpfs+bind" > "$ok_marker"
+    return 0
   fi
+  if [ -f "$sys32/ntdll.dll" ] && probe_pe_exec "$sys32/ntdll.dll"; then
+    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll"
+    echo "mode=tmpfs+bind-sys32" > "$ok_marker"
+    return 0
+  fi
+
+  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved"
+  exit 1
 }
 ensure_prefix_exec
 
@@ -574,7 +680,7 @@ PY
 }
 
 if ! box64_holefit_mid; then
-  log "FATAL: hole-fit failed — install 0.1.42+ script + wine64k box64; mid must avoid 0x800000-0xa00000; clear sticky marker"
+  log "FATAL: hole-fit failed — install 0.1.43+ script + wine64k box64; mid must avoid 0x800000-0xa00000; clear sticky marker"
   exit 134
 fi
 

@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.42",
-  "versionCode": 43,
-  "notes": "0.1.42: hole-fit excludes Wine stack 0x800000-0xa00000 (mid >=0x1000000); clear sticky 0x800000 marker; ensure_prefix_exec remount/tmpfs for noexec ntdll; WINE_LAUNCH_STAMP=0.1.42"
+  "versionName": "0.1.43",
+  "versionCode": 44,
+  "notes": "0.1.43: PREFIX_EXEC real fix — never trust remount; probe PROT_EXEC on /opt/wine/.../x86_64-windows/ntdll.dll; tmpfs+bind PE windows tree (+system32); KEY_LOG stamp/HOLEFIT/PREFIX_EXEC/noexec; runtimeId bump; WINE_LAUNCH_STAMP=0.1.43"
 }

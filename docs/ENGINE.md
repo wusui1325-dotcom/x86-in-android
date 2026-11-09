@@ -1,3 +1,25 @@
+## 0.1.43 — PREFIX_EXEC real fix (noexec ntdll / false remount green)
+
+**Symptom (0.1.42 dig):** Hole-fit OK (`addr≠0x800000`), but still
+`map_image_into_view … ntdll.dll … noexec` → `WINE_EXIT=1`. Log showed
+`PREFIX_EXEC remount … ok` then noexec — remount return code is a **false green**
+under PRoot+filesDir. system32-only tmpfs also misses the real PE path
+`/opt/wine/lib/wine/x86_64-windows/ntdll.dll`.
+
+**Fix:**
+- Remount logged as `claimed (not trusted alone)`; success only after
+  `python3` `mmap(PROT_READ|PROT_EXEC)` probe on ntdll.dll.
+- On probe fail: tmpfs (768M/512M) + copy `x86_64-windows` + bind over
+  `/opt/wine/lib/wine/x86_64-windows` (and system32). Hard **FATAL** if still fail.
+- Session `KEY_LOG_PATTERNS`: `WINE_LAUNCH_STAMP` / `HOLEFIT` / `PREFIX_EXEC` /
+  `noexec` / `map_image` / `stack overflow` / `WINEBOOT_INIT`.
+- `runtimeId` → `…v0.1.43…peexec`; stamp `0.1.43`.
+
+**Retest:** Cover-install **0.1.43** → `WINE_LAUNCH_STAMP=0.1.43` →
+`PREFIX_EXEC ok mode=tmpfs+bind` (or `mode=probe`) → `HOLEFIT ok addr≠0x800000` →
+no `noexec` / no `0x800ec0` stack overflow → `WINE_EXIT=0` (or next unmuted err).
+Note: 0.1.42 still OK to smoke for hole-fit only; **0.1.43 is the noexec real fix**.
+
 ## 0.1.42 — mid overlaps Wine stack + noexec ntdll
 
 **Symptom (0.1.41 Boss):** `WINE_LAUNCH_STAMP=0.1.41`, `HOLEFIT ok (cached) 0x800000:0x10000000`,

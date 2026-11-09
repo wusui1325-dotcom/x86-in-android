@@ -991,6 +991,13 @@ class SessionActivity : ComponentActivity() {
         /** Session log 關鍵行（跳轉／高亮） */
         private val KEY_LOG_PATTERNS = listOf(
             "FATAL:",
+            "WINE_LAUNCH_STAMP",
+            "HOLEFIT",
+            "PREFIX_EXEC",
+            "noexec",
+            "map_image",
+            "stack overflow",
+            "WINEBOOT_INIT",
             "WINE_VERSION_SMOKE",
             "WINE_PE_SMOKE",
             "WINE_PRERESERVE",

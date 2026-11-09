@@ -14,6 +14,8 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.68: DXVK_LOG/HUD/cache + DXVK_DIAG (ICD/dll/kgsl) + guestBlack Present DIAG;
+# optional X86_DXWRAPPER=wined3d bisect (default stays DXVK). Soft WARN if no KGSL.
 # 0.1.67: APP_LOAD start /unix retry + PE/noexec WARN; Present prefer app over explorer desktop.
 # 0.1.66: Present ahb CPU-first default (X86_PRESENT_GPU=1 for EGL); APP_LOAD unix harden (no C:/ fallback).
 # 0.1.65: APP_LOAD unix path (no C:/ → start.exe/ShellExecute); Present CPU-first (no EGL steal).
@@ -28,7 +30,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.67
+WINE_LAUNCH_STAMP=0.1.68
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -65,6 +67,39 @@ if [ ! -f /opt/wine/share/wine/mono/wine-mono-10.1.0-x86.msi ] && \
    [ ! -d /opt/wine/share/wine/mono/wine-mono-10.1.0 ]; then
   export WINEDLLOVERRIDES="mscoree,mshtml=;$WINEDLLOVERRIDES"
 fi
+
+# 0.1.68: DXVK observability + optional wined3d bisect (X86_DXWRAPPER=wined3d)
+# Default wrapper=dxvk. wined3d clears d3d* native so Wine builtin paints (align Winlator factory).
+case "${X86_DXWRAPPER:-dxvk}" in
+  wined3d|WINE_D3D|builtin)
+    log "DXVK_DIAG wrapper=wined3d — d3d* → builtin (bisect; DXVK HUD/log cleared)"
+    # Force builtin D3D; keep audio overrides if present
+    _audio_ov=""
+    case ";$WINEDLLOVERRIDES;" in
+      *winealsa.drv=b*) _audio_ov="winepulse.drv=d;winealsa.drv=b" ;;
+      *) _audio_ov="winepulse.drv=d" ;;
+    esac
+    case ";$WINEDLLOVERRIDES;" in
+      *mscoree,mshtml=*) _audio_ov="mscoree,mshtml=;$_audio_ov" ;;
+    esac
+    export WINEDLLOVERRIDES="d3d8,d3d9,d3d10core,d3d11,dxgi=b;$_audio_ov"
+    unset DXVK_HUD DXVK_LOG_LEVEL DXVK_STATE_CACHE_PATH 2>/dev/null || true
+    unset _audio_ov
+    ;;
+  *)
+    # Ensure native DXVK overrides present even if guestEnv omitted them
+    case ";$WINEDLLOVERRIDES;" in
+      *d3d11=n*|*d3d11,*=n*|*d3d8,d3d9,d3d10core,d3d11,dxgi=n*) ;;
+      *)
+        export WINEDLLOVERRIDES="d3d8,d3d9,d3d10core,d3d11,dxgi=n,b;$WINEDLLOVERRIDES"
+        ;;
+    esac
+    mkdir -p "${DXVK_STATE_CACHE_PATH:-/mnt/data/dxvk-cache}"
+    export DXVK_LOG_LEVEL="${DXVK_LOG_LEVEL:-info}"
+    export DXVK_HUD="${DXVK_HUD:-devinfo,fps}"
+    export DXVK_STATE_CACHE_PATH="${DXVK_STATE_CACHE_PATH:-/mnt/data/dxvk-cache}"
+    ;;
+esac
 
 # 定案 A：客體 ALSA android_aserver → 宿主 AAudio（由 GpuStack 寫入 asound.conf）
 if [ -n "${ANDROID_ALSA_SERVER:-}" ]; then
@@ -136,6 +171,37 @@ else
   else
     echo "WARN: libvulkan.so.1 missing in rootfs (need x11-overlay)" >> /mnt/data/gpu-stack.log
   fi
+  # 0.1.68 DXVK_DIAG fingerprint (ICD size / system32 dlls / kgsl / HUD)
+  _icd_ok=no
+  _icd_sz=0
+  if [ -f /mnt/gpu/turnip/freedreno_icd.json ] && [ -f /mnt/gpu/turnip/libvulkan_freedreno.so ]; then
+    _icd_ok=yes
+    _icd_sz=$(wc -c < /mnt/gpu/turnip/libvulkan_freedreno.so 2>/dev/null || echo 0)
+  fi
+  _kgsl=no
+  [ -e /dev/kgsl-3d0 ] && _kgsl=yes
+  _dlls=""
+  _dll_miss=0
+  for _d in d3d11 dxgi d3d9 d3d10core d3d8; do
+    _f="/home/xuser/.wine/drive_c/windows/system32/${_d}.dll"
+    if [ -f "$_f" ]; then
+      _sz=$(wc -c < "$_f" 2>/dev/null || echo 0)
+      _dlls="${_dlls}${_d}:${_sz} "
+    else
+      _dlls="${_dlls}${_d}:MISSING "
+      _dll_miss=$((_dll_miss + 1))
+      log "WARN: DXVK dll missing system32/${_d}.dll (after seed)"
+    fi
+  done
+  log "DXVK_DIAG icd=${_icd_ok} icd_so=${_icd_sz}B dxvk_dlls=[${_dlls}] kgsl=${_kgsl} hud=${DXVK_HUD:-off} log=${DXVK_LOG_LEVEL:-off} cache=${DXVK_STATE_CACHE_PATH:-off} wrapper=${X86_DXWRAPPER:-dxvk} overrides=${WINEDLLOVERRIDES:-}"
+  log "DXVK_DIAG note: expect wine-run.out loaddll native d3d11/dxgi (not only builtin); DXVK: info lines when LOG_LEVEL=info"
+  if [ "$_dll_miss" -gt 0 ] && [ "${X86_DXWRAPPER:-dxvk}" != "wined3d" ]; then
+    log "WARN: DXVK_DIAG ${_dll_miss} dll(s) missing — DXVK may silently fall back"
+  fi
+  if [ "$_kgsl" = "no" ]; then
+    log "WARN: DXVK_DIAG kgsl=no — Turnip almost certainly black on non-Adreno (soft WARN, session still allowed)"
+  fi
+  unset _icd_ok _icd_sz _kgsl _dlls _dll_miss _d _f _sz
   # Gladio 客體 libGL（Wine OpenGL → GLX → 宿主 gladiorenderer）
   if [ -f /opt/gladio/lib/libGL.so.1.7.0 ] || [ -f /opt/gladio/lib/libGL.so.1 ]; then
     export LD_LIBRARY_PATH="/opt/gladio/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -1425,6 +1491,10 @@ wipe_wine_prefix() {
         cp -f "/mnt/gpu/dxvk/x64/${dll}.dll" "$p/drive_c/windows/system32/" 2>/dev/null || true
       fi
     done
+    _d11="$p/drive_c/windows/system32/d3d11.dll"
+    _dxgi="$p/drive_c/windows/system32/dxgi.dll"
+    log "DXVK_DIAG reseed d3d11=$([ -f "$_d11" ] && wc -c < "$_d11" || echo MISSING) dxgi=$([ -f "$_dxgi" ] && wc -c < "$_dxgi" || echo MISSING) prefix=$p"
+    unset _d11 _dxgi
   fi
   ensure_prefix_exec
   log "WINEBOOT_WIPE done path=$p"

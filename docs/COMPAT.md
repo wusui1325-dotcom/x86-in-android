@@ -1,3 +1,18 @@
+## 0.1.68 — DXVK/Turnip diagnostic knife (guestBlack)
+
+**Smoke risk (0.1.67):** Loaded + mappedKids>0 + Present ok can still be **guest-black**
+(HUD-only / Turnip silent fail). No `DXVK_LOG_*` / `DXVK_HUD` / ICD-dll fingerprints.
+
+**Fix:**
+- guestEnv + wine-launch: `DXVK_LOG_LEVEL=info`, `DXVK_HUD=devinfo,fps`, `DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache`
+- `DXVK_DIAG icd=… dxvk_dlls=… kgsl=…` (+ soft WARN if kgsl missing / dll missing)
+- Present DIAG sticky `guestBlack=1` when ok rises but pixels stay black/HUD-only (~45 frames)
+- Optional bisect: `X86_DXWRAPPER=wined3d` → d3d*=builtin (default stays DXVK)
+- KEY_LOG: DXVK_DIAG / DXVK_HUD / guestBlack / d3d11.dll / freedreno / ICD / DXVK: / err:vulkan
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.68`; `DXVK_DIAG icd=yes … kgsl=yes`; loaddll native d3d11;
+`PRESENT_DIAG … guestBlack=0` with real nonBlack (not only hud) when picture is real.
+
 ## 0.1.67 — APP_LOAD start /unix + Present prefer-app
 
 **Smoke risk (0.1.66):** unix CreateProcess may still quick-exit (deps/cwd); relative

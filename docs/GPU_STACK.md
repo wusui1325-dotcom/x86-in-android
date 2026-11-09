@@ -108,6 +108,9 @@
 - `VK_ICD_FILENAMES`／`VK_DRIVER_FILES` → `/mnt/gpu/turnip/freedreno_icd.json`（`library_path` 相對同目錄）
 - `ComponentInstaller`：GpuStack 亦拉取 **x11-overlay**（`libvulkan`／drm／xcb）
 - `wine-launch.sh`：記錄 ICD／KGSL／loader；`TU_DEBUG=noconform`
+- **0.1.68 診斷契約**：`DXVK_LOG_LEVEL=info`／`DXVK_HUD=devinfo,fps`／`DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache`；
+  啟動指紋 `DXVK_DIAG icd=… dxvk_dlls=… kgsl=…`；Present `guestBlack=` 拆 HUD 假綠燈。
+  二分：`X86_DXWRAPPER=wined3d` 清 d3d* native（預設仍 DXVK）。KGSL 缺＝軟 WARN，不硬擋 Session。
 - **不做** adrenotools／Vortek IPC（Mali／非 Adreno 另檔）
 
 ### 還缺

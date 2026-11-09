@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.67",
-  "versionCode": 68,
-  "notes": "0.1.67: APP_LOAD start /unix ladder; Present prefer app over explorer desktop; DIAG desktopOnly/mappedKids"
+  "versionName": "0.1.68",
+  "versionCode": 69,
+  "notes": "0.1.68: DXVK_LOG/HUD/cache + DXVK_DIAG fingerprints + Present guestBlack sticky; optional X86_DXWRAPPER=wined3d bisect"
 }

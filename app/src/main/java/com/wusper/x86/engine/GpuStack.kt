@@ -119,8 +119,11 @@ object GpuStack {
         val dxvk = dxvkDir(ctx)
         if (dxvk.isDirectory) {
             env += "HOST_DXVK_DIR=${dxvk.absolutePath}"
-            // Audio／DXVK override 於下方合併
         }
+        // 0.1.68: DXVK observability (default stays DXVK; X86_DXWRAPPER=wined3d bisects in wine-launch)
+        env += "DXVK_LOG_LEVEL=info"
+        env += "DXVK_HUD=devinfo,fps"
+        env += "DXVK_STATE_CACHE_PATH=/mnt/data/dxvk-cache"
         env += "X86_GPU_STATUS=${statusMessage(ctx)}"
         env += "X86_WS_DATA=$wsDataAbs"
         env += "PRESENT_SHM=/mnt/data/present.shm"
@@ -131,15 +134,20 @@ object GpuStack {
             // nativeLibraryDir 的 libtalloc.so／libandroid-shmem.so。
             // 客體 Gladio／Turnip 路徑由 wine-launch.sh 在 PRoot 內 prepend。
         }
+        // DXVK native overrides always (audio flags merged below). wine-launch may
+        // strip d3d* when X86_DXWRAPPER=wined3d for black-screen bisect.
+        val dllOverride = StringBuilder("d3d8,d3d9,d3d10core,d3d11,dxgi=n,b")
         if (AAUDIO_READY) {
             env += "ANDROID_ALSA_SERVER=/tmp/.sound/AS0"
             env += "ANDROID_ASERVER_USE_SHM=true"
             env += "ALSA_PLUGIN_DIR=/usr/lib/aarch64-linux-gnu/alsa-lib"
             env += "ALSA_CONFIG_PATH=/usr/share/alsa/alsa.conf"
-            // 啟用 winealsa；關掉 winepulse
-            env += "WINEDLLOVERRIDES=d3d8,d3d9,d3d10core,d3d11,dxgi=n,b;winepulse.drv=d;winealsa.drv=b"
+            dllOverride.append(";winepulse.drv=d;winealsa.drv=b")
             env += "X86_AUDIO=alsa_aaudio"
+        } else {
+            dllOverride.append(";winepulse.drv=d")
         }
+        env += "WINEDLLOVERRIDES=$dllOverride"
         return env
     }
 

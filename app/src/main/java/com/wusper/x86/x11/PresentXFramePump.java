@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * DIAG path=ahb_skip|bgra|hud|stub. HUD never mutates guest SHM.
  * 0.1.67: prefer application / non-desktop mapped window over explorer desktop
  * (largest-area desktop was hiding real app content). DIAG desktopOnly/mappedKids/wmClass.
+ * 0.1.68: sticky guestBlack=1 when presentOk rises but guest stays nearly-black / HUD-only
+ * for N frames (DXVK/Turnip black-screen observability; not a Present lock fail).
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -55,6 +57,10 @@ public final class PresentXFramePump extends Thread {
     private int emptyAfterReady;
     private String lastStatsLogged = "";
     private ByteBuffer hudScratch;
+    /** 0.1.68: sticky once presentOk grows while guest pixels stay black/HUD-only. */
+    private int guestBlackSticky;
+    private int consecutiveGuestBlack;
+    private static final int GUEST_BLACK_FRAMES = 45;
 
     public PresentXFramePump(XServer xServer, FrameSink sink) {
         super("x86-x-present-pump");
@@ -173,6 +179,7 @@ public final class PresentXFramePump extends Thread {
                 ahbHits++;
                 presentOk++;
                 emptyAfterReady = 0;
+                // no virtualData to sample — do not clear guestBlack streak
                 maybeLog(frameIndex, kids);
                 return;
             }
@@ -188,8 +195,13 @@ public final class PresentXFramePump extends Thread {
                 presentOk++;
                 emptyAfterReady = 0;
                 boolean black = isNearlyBlack(data, width, height, strideBytes);
-                if (!black) nonBlackHits++;
-                else presentHudBar(width, height, frameIndex);
+                if (!black) {
+                    nonBlackHits++;
+                    noteGuestContent(true, frameIndex);
+                } else {
+                    presentHudBar(width, height, frameIndex);
+                    noteGuestContent(false, frameIndex);
+                }
                 maybeLog(frameIndex, kids);
                 return;
             }
@@ -206,16 +218,19 @@ public final class PresentXFramePump extends Thread {
             dup.rewind();
             if (!black) {
                 nonBlackHits++;
+                noteGuestContent(true, frameIndex);
             } else {
                 // 0.1.66 P1: NEVER paint HUD into guest SHM (duplicate shares backing).
                 // Use independent hudScratch via presentHudBar instead.
                 if (presentHudBar(width, height, frameIndex)) {
                     presentOk++;
                     emptyAfterReady = 0;
+                    noteGuestContent(false, frameIndex);
                     maybeLog(frameIndex, kids);
                     return;
                 }
                 // fall through to try raw (black) BGRA if HUD present failed
+                noteGuestContent(false, frameIndex);
             }
             if (sink != null) {
                 ByteBuffer rgba = ByteBuffer.allocateDirect(width * height * 4);
@@ -256,11 +271,14 @@ public final class PresentXFramePump extends Thread {
                     height > 1 ? height : DesktopLayout.HEIGHT, frameIndex)) {
                 stubHits++;
                 presentOk++;
+                noteGuestContent(false, frameIndex);
             } else {
                 int rc = NativeEngine.nativePresentStub(frameIndex);
                 stubHits++;
-                if (rc == 0) presentOk++;
-                else presentFail++;
+                if (rc == 0) {
+                    presentOk++;
+                    noteGuestContent(false, frameIndex);
+                } else presentFail++;
             }
             if ((frameIndex % 30) == 0 || emptyAfterReady == 60 || emptyAfterReady == 15) {
                 logDiag(frameIndex, "stub-fallback kids=" + kids);
@@ -516,6 +534,27 @@ public final class PresentXFramePump extends Thread {
         }
     }
 
+
+    /** 0.1.68: mark guest-black streak; sticky log when threshold hit. */
+    private void noteGuestContent(boolean guestLit, int frameIndex) {
+        if (guestLit) {
+            consecutiveGuestBlack = 0;
+            return;
+        }
+        consecutiveGuestBlack++;
+        if (guestBlackSticky == 0 && consecutiveGuestBlack >= GUEST_BLACK_FRAMES && presentOk > 0) {
+            guestBlackSticky = 1;
+            String path = NativeEngine.nativePresentLastPath();
+            Log.w(TAG, "PRESENT_DIAG guestBlack=1 path=" + path
+                    + " desktopOnly=" + lastDesktopOnly
+                    + " mappedKids=" + lastMappedKids
+                    + " nonBlack=" + nonBlackHits
+                    + " hud=" + hudHits
+                    + " ok=" + presentOk
+                    + " frame=" + frameIndex);
+        }
+    }
+
     public String pathStats() {
         return "ahb=" + ahbHits
                 + " bgra=" + bgraHits
@@ -535,7 +574,8 @@ public final class PresentXFramePump extends Thread {
                 + " egl=" + NativeEngine.nativePresentEglReady()
                 + " lastRc=" + NativeEngine.nativePresentLastRc()
                 + " lockFail=" + NativeEngine.nativePresentLockFails()
-                + " path=" + NativeEngine.nativePresentLastPath();
+                + " path=" + NativeEngine.nativePresentLastPath()
+                + " guestBlack=" + guestBlackSticky;
     }
 
     public int presentOkCount() {

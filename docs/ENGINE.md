@@ -1,3 +1,19 @@
+## 0.1.75 — map+raise / CreateSwapChain timing
+
+**Smoke risk (0.1.74):** HWND prefer + UseXRandR/ScreenDepth can still leave a black window when
+DXGI CreateSwapChain binds before MapWindow/raise, Present samples desktop while HWND is
+UNVIEWABLE/zero-geom, or APP_LOAD races explorer desktop map.
+
+**Fix:**
+- Host WM: `raiseWindow` (ABOVE + ConfigureNotify + Expose) on MapWindow for app/HWND/desktop
+- Ready marker `/mnt/data/.x86-x11-ready` → wine-launch `MAP_WAIT` before APP_LOAD
+- Present: require `MapState.VIEWABLE`; pending HWND wait (no desktop steal); DIAG `mapState=`/`mapWait=`
+- dxvk.conf: `dxgi.maxFrameLatency=1` + `dxgi.numBackBuffers=3` (keep deferSurface/dialogMode)
+- `X86_TU_GMEM` stays opt-in; keep 074 HWND/FS knobs
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.75`; `MAP_WAIT desktop ready`; `DXVK_CONFIG … maxFrameLatency=1`;
+Present `mapState=VIEWABLE hwnd=0x… desktopOnly=0`; `guestBlack=0`.
+
 ## 0.1.74 — winex11 HWND / exclusive FS / depth
 
 **Smoke risk (0.1.73):** `noubwc,sysmem` + Mesa cache can still leave a black window when

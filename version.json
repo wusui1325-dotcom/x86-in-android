@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.74",
-  "versionCode": 75,
-  "notes": "0.1.74: winex11 HWND/FS — UseXRandR/UseXVidMode/DXGrab=N ScreenDepth=32 Decorated=N + Present HWND prefer + dxvk dialogMode; X86_TU_GMEM=1 bisect"
+  "versionName": "0.1.75",
+  "versionCode": 76,
+  "notes": "0.1.75: map+raise before CreateSwapChain — host raiseWindow + MAP_WAIT .x86-x11-ready; Present VIEWABLE/mapState; dxvk maxFrameLatency=1 numBackBuffers=3"
 }

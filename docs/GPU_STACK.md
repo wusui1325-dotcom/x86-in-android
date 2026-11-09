@@ -125,6 +125,7 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.75 map+raise / CreateSwapChain：** host `raiseWindow` on MapWindow; MAP_WAIT `.x86-x11-ready` before APP_LOAD; Present VIEWABLE + `mapState=`/`mapWait=`; dxvk `maxFrameLatency=1` + `numBackBuffers=3`. No Present CPU-first flip.
 - **0.1.74 winex11 HWND/FS：** X11 `UseXRandR=N`/`UseXVidMode=N`/`DXGrab=N`/`ScreenDepth=32`/`Decorated=N`;
   Present prefer `_NET_WM_HWND`; dxvk `enableDialogMode` + `allowFse=False`; optional
   `X86_TU_GMEM=1` → `TU_DEBUG=…,gmem` (default sysmem unchanged). No Present CPU-first flip.

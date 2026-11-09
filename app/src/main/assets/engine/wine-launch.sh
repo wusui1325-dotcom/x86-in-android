@@ -14,6 +14,9 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
 }
 
+# 0.1.75: map+raise before CreateSwapChain — host raiseWindow + MAP_WAIT .x86-x11-ready
+# before APP_LOAD; Present VIEWABLE gate + mapState/mapWait DIAG; dxvk maxFrameLatency=1
+# + numBackBuffers=3. Keep 074 HWND/FS knobs; X86_TU_GMEM stays opt-in.
 # 0.1.74: winex11 HWND/FS — UseXRandR/UseXVidMode/DXGrab=N ScreenDepth=32 Decorated=N;
 # Present prefer _NET_WM_HWND; dxvk dialogMode; optional X86_TU_GMEM=1 (a710/720 bisect).
 # 0.1.73: Turnip queue — TU_DEBUG noconform,noubwc,sysmem + Mesa shader cache under /mnt/data;
@@ -37,7 +40,7 @@ log() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.74
+WINE_LAUNCH_STAMP=0.1.75
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs
@@ -129,7 +132,7 @@ case "${X86_DXWRAPPER:-dxvk}" in
       log "DXVK_CONFIG keep existing $_dxvk_conf"
     else
       cat > "$_dxvk_conf" <<'DXVKEOF'
-# x86-in-android 0.1.74 — managed (set X86_DXVK_CONF=keep to preserve edits)
+# x86-in-android 0.1.75 — managed (set X86_DXVK_CONF=keep to preserve edits)
 # Defer VkSurface until IDXGISwapChain::Present (window may stay black otherwise)
 dxgi.deferSurfaceCreation = True
 d3d9.deferSurfaceCreation = True
@@ -140,8 +143,13 @@ dxvk.tearFree = False
 # 0.1.74: avoid exclusive-ish D3D8/9 paths; FSE is Windows-only (explicit off)
 d3d9.enableDialogMode = True
 dxvk.allowFse = False
+# 0.1.75: timing — fewer queued frames into settling HWND; stable WSI image count
+dxgi.maxFrameLatency = 1
+d3d9.maxFrameLatency = 1
+dxgi.numBackBuffers = 3
+d3d9.numBackBuffers = 3
 DXVKEOF
-      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0 dialogMode=1 allowFse=0"
+      log "DXVK_CONFIG wrote $_dxvk_conf deferSurface=1 maxDeviceMemory=2048 tearFree=0 dialogMode=1 allowFse=0 maxFrameLatency=1 numBackBuffers=3"
     fi
     export DXVK_CONFIG_FILE="$_dxvk_conf"
     log "DXVK_DIAG hud_sample_policy=exclude_top64 hud=${DXVK_HUD:-off} config=${DXVK_CONFIG_FILE:-off} (Present skips HUD band)"
@@ -2321,6 +2329,28 @@ log "WINE_START cmdline: explorer /desktop=x86,${W}x${H},x11 (desktop only)"
 "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine explorer /desktop=x86,${W}x${H},x11 >>/mnt/data/wine-run.out 2>&1 &
 WINE_PID=$!
 log "WINE_START pid=$WINE_PID (explorer desktop; app via APP_LOAD)"
+
+# 0.1.75: wait for host DesktopHelper MapWindow raise → /mnt/data/.x86-x11-ready
+# so APP_LOAD CreateSwapChain does not race explorer desktop UNMAPPED.
+MAP_WAIT_MAX="${X86_MAP_WAIT_MAX:-150}"
+MAP_WAIT_I=0
+# Marker cleared by Session/DesktopHelper before X start — do not rm after explorer
+# (desktop may already have mapped and written it).
+log "MAP_WAIT desktop marker .x86-x11-ready (max ${MAP_WAIT_MAX}x0.1s)"
+while [ ! -f /mnt/data/.x86-x11-ready ] && [ "$MAP_WAIT_I" -lt "$MAP_WAIT_MAX" ]; do
+  # explorer died early?
+  if ! kill -0 "$WINE_PID" 2>/dev/null; then
+    log "MAP_WAIT abort explorer dead pid=$WINE_PID t=${MAP_WAIT_I}0ms"
+    break
+  fi
+  sleep 0.1
+  MAP_WAIT_I=$((MAP_WAIT_I + 1))
+done
+if [ -f /mnt/data/.x86-x11-ready ]; then
+  log "MAP_WAIT desktop ready t=${MAP_WAIT_I}0ms marker=$(head -c 120 /mnt/data/.x86-x11-ready 2>/dev/null | tr '\n' ' ')"
+else
+  log "MAP_WAIT desktop timeout t=${MAP_WAIT_I}0ms — APP_LOAD anyway (raise may still land)"
+fi
 
 APP_PID=""
 APP_RELAUNCHED=0

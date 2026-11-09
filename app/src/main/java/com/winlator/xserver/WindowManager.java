@@ -226,6 +226,29 @@ public class WindowManager extends XResourceManager {
         }
     }
 
+    /**
+     * 0.1.75: host-side XRaiseWindow equivalent — stack ABOVE + ConfigureNotify so
+     * winex11 sees the HWND as raised/mapped before DXGI CreateSwapChain/Present.
+     */
+    public void raiseWindow(Window window) {
+        if (window == null || window == rootWindow) return;
+        Window parent = window.getParent();
+        if (parent == null) return;
+        changeWindowZOrder(Window.StackMode.ABOVE, window, null);
+        Window previousSibling = window.previousSibling();
+        boolean overrideRedirect = window.attributes.isOverrideRedirect();
+        short x = window.getX();
+        short y = window.getY();
+        short width = window.getWidth();
+        short height = window.getHeight();
+        short borderWidth = window.getBorderWidth();
+        window.sendEvent(Event.STRUCTURE_NOTIFY, new ConfigureNotify(window, window, previousSibling, x, y, width, height, borderWidth, overrideRedirect));
+        parent.sendEvent(Event.SUBSTRUCTURE_NOTIFY, new ConfigureNotify(parent, window, previousSibling, x, y, width, height, borderWidth, overrideRedirect));
+        if (window.isInputOutput() && window.attributes.isMapped()) {
+            window.sendEvent(Event.EXPOSURE, new Expose(window));
+        }
+    }
+
     private void changeWindowZOrder(Window.StackMode stackMode, Window window, Window sibling) {
         Window parent = window.getParent();
         switch (stackMode) {

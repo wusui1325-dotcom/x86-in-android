@@ -78,6 +78,7 @@ import com.wusper.x86.BuildConfig
 import com.wusper.x86.engine.ComponentInstaller
 import com.wusper.x86.engine.ExitStatusMessages
 import com.wusper.x86.engine.GpuStack
+import com.winlator.xserver.DesktopHelper
 import com.wusper.x86.x11.InProcessX
 import com.wusper.x86.audio.InProcessAudio
 import com.wusper.x86.x11.InProcessXInput
@@ -579,6 +580,10 @@ class SessionActivity : ComponentActivity() {
                         lastPresentDiag = ""
                         uiStickyLog = ""
                         appendSticky("啟動 Winlator Java X → Present…")
+                        // 0.1.75: clear+set desktop ready marker before XServer (DesktopHelper.attachTo)
+                        val readyMarker = java.io.File(ws.dataDir, ".x86-x11-ready")
+                        DesktopHelper.setReadyMarker(readyMarker)
+                        DesktopHelper.clearReadyMarker()
                         val x = InProcessX(this@SessionActivity)
                         NativeEngine.nativePresentCreate(1280, 720)
                         x.start()
@@ -1371,6 +1376,14 @@ class SessionActivity : ComponentActivity() {
             "allowFse",
             "TURNIP_GMEM",
             "X86_TU_GMEM",
+            "MAP_WAIT",
+            "MAP_RAISE",
+            "mapState=",
+            "mapWait=",
+            "pendingHwnd=",
+            "maxFrameLatency",
+            "numBackBuffers",
+            ".x86-x11-ready",
             "hud_sample_policy",
             "WINELOADER=",
             "WINEPRELOADRESERVE",

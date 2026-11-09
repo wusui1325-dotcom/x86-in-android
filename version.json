@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.56",
-  "versionCode": 57,
-  "notes": "0.1.56: wineboot soft-continue when system.reg large+stable; seed winedevice/ntoskrnl; ensure RpcSs/MountMgr service reg before RPCSS_PRESTART; GIT_SHA=commit-then-build"
+  "versionName": "0.1.57",
+  "versionCode": 58,
+  "notes": "0.1.57: OFFLINE system.reg inject for RpcSs/MountMgr (never wine reg); direct rpcss + timed PRESTART; GUI_SEED win32u/user32; GIT_SHA=commit-then-build"
 }

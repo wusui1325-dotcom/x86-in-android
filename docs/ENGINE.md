@@ -1,3 +1,27 @@
+## 0.1.57 — offline system.reg RpcSs/MountMgr (no wine reg)
+
+**Bug (0.1.56 smoke):** Prefix complete (`system.reg≈1.5MB`) skipped wineboot; seed bins
+OK; `RPCSS_REG precheck file_rpcss=no file_mountmgr=no` then **hung forever** on
+in-Wine `reg.exe add` (chicken-egg: reg/COM needs RpcSs). Never reached
+`RPCSS_REG ensure done` / `RPCSS_DIAG` / `RPCSS_PRESTART` / `WINE_START`. Secondary:
+grep used 1 backslash so even present keys could read as missing; after X death
+`start.exe` hit c0000135 missing win32u/user32.
+
+**Fix:**
+- **Offline** Python text-patch of `system.reg` (Wine registry file format) injecting
+  `CurrentControlSet` + `ControlSet001` `Services\RpcSs` and `Services\MountMgr`
+  with ImagePath/Type/Start/ErrorControl — **never** `wine reg` / `reg.exe`.
+- `wineserver -k` before patch so next wine reloads file.
+- Detection via `grep -F 'Services\\Name]'` (two backslashes).
+- PRESTART: **direct `rpcss.exe` first**, then timed `winedevice MountMgr` / `net` / `sc`
+  (hard timeouts; never hang).
+- Always run ensure even when prefix complete; `GUI_SEED` re-copy win32u/user32/gdi32.
+
+**Expect KEY_LOG:** `WINE_LAUNCH_STAMP=0.1.57` → `RPCSS_REG precheck` →
+`RPCSS_REG.py: offline … now_rpc=True` → `RPCSS_REG ensure done offline=yes file_rpcss=yes` →
+`RPCSS_DIAG … reg_rpcss=yes` → `RPCSS_PRESTART … alive=1` → `WINE_START` → Present or
+next clear err (not hang after precheck).
+
 ## 0.1.56 — wineboot soft-continue + RpcSs/MountMgr service reg
 
 **Bug (0.1.55 smoke):** Soft-kill fixed — `system.reg` grew ~51KB→~850KB over ~75s with

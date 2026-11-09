@@ -1,5 +1,5 @@
 {
-  "runtimeId": "wine-gpustack-v0.1.45-box64-wine64k-holefit-peexec-sys32",
+  "runtimeId": "wine-gpustack-v0.1.46-box64-wine64k-holefit-peexec-durable",
   "approxDownloadBytes": 455000000,
   "components": [
     {
@@ -68,5 +68,5 @@
     }
   ],
   "graphicsDefault": "gpu",
-  "notes": "0.1.45: PREFIX_EXEC scratch mkdir tolerant of existing mountpoint (no File exists FATAL); keep sys32 tmpfs+bind + STACK_HEAD mid>=0x1200000"
+  "notes": "0.1.46: PREFIX_EXEC durable scratch under $WINEPREFIX/.pe-exec (verify exists+writable+mounted); keep sys32 tmpfs+bind + mid>=0x1200000"
 }

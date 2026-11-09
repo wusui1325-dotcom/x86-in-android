@@ -13,9 +13,9 @@ log() {
   echo "$@" >> /mnt/data/gpu-stack.log
 }
 
-# 0.1.45: PREFIX_EXEC scratch mkdir never fatal on existing mountpoint;
-# keep 0.1.44 sys32 tmpfs+bind + STACK_HEAD mid>=0x1200000
-WINE_LAUNCH_STAMP=0.1.45
+# 0.1.46: PREFIX_EXEC scratch on durable $WINEPREFIX/.pe-exec (not ephemeral /tmp);
+# verify exists+writable+mounted after mount; keep sys32 bind + STACK_HEAD mid>=0x1200000
+WINE_LAUNCH_STAMP=0.1.46
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 export WINEDLLOVERRIDES="${WINEDLLOVERRIDES:-winepulse.drv=d}"
@@ -303,18 +303,15 @@ ensure_prefix_exec() {
   local pe_dir=/opt/wine/lib/wine/x86_64-windows
   local pe_ntdll="$pe_dir/ntdll.dll"
   local sys32="$p/drive_c/windows/system32"
-  local scratch=/tmp/.wine-pe-exec
-  # per-prefix marker so smoke prefix ≠ main prefix cannot false-skip
-  local ok_marker="$scratch/.prefix-exec-ok-$(echo "$p" | tr '/:' '__')"
+  # Durable marker on prefix (not /tmp) so early-skip works across PRoot /tmp flakes
+  local ok_marker="$p/.prefix-exec-ok"
+  local scratch=""
 
-  # Create dir; never fail if already exists as directory / mountpoint.
-  # toybox/busybox `mkdir -p` on a mountpoint parent often: EEXIST on the mount root.
   ensure_dir() {
     local d="$1"
     [ -d "$d" ] && return 0
     mkdir -p "$d" 2>/dev/null || true
     [ -d "$d" ] && return 0
-    # leaf-only after cd into existing parent (avoids mkdir -p walking mount root)
     local parent="${d%/*}"
     local leaf="${d##*/}"
     if [ -n "$parent" ] && [ -d "$parent" ] && [ -n "$leaf" ] && [ "$leaf" != "$d" ]; then
@@ -325,51 +322,116 @@ ensure_prefix_exec() {
     [ -d "$d" ]
   }
 
-  scratch_is_mounted() {
-    awk -v s="$scratch" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null
+  log_diag() {
+    local label="$1"
+    local path="$2"
+    ls -ld "$path" 2>&1 | while read -r line; do log "PREFIX_EXEC ls[$label]: $line"; done || true
+    if [ ! -e "$path" ]; then
+      log "PREFIX_EXEC ls[$label]: missing $path"
+    fi
+    awk -v s="$path" '$2==s {print}' /proc/mounts 2>/dev/null | while read -r line; do
+      log "PREFIX_EXEC mount[$label]: $line"
+    done || true
+    grep -E 'pe-exec|wine-pe' /proc/mounts 2>/dev/null | while read -r line; do
+      log "PREFIX_EXEC mountgrep[$label]: $line"
+    done || true
   }
 
-  # Prepare scratch mountpoint: reuse mount; else clean + mkdir without EEXIST fatal
+  path_is_mounted() {
+    local s="$1"
+    awk -v m="$s" '$2==m {found=1} END{exit !found}' /proc/mounts 2>/dev/null
+  }
+
+  scratch_verify() {
+    local s="$1"
+    if [ ! -d "$s" ]; then
+      log "PREFIX_EXEC verify FAIL not-dir path=$s"
+      return 1
+    fi
+    if ! touch "$s/.writetest" 2>/dev/null; then
+      log "PREFIX_EXEC verify FAIL not-writable path=$s"
+      return 1
+    fi
+    rm -f "$s/.writetest" 2>/dev/null || true
+    if ! path_is_mounted "$s"; then
+      log "PREFIX_EXEC verify FAIL not-in-/proc/mounts path=$s"
+      return 1
+    fi
+    # mkdir+rm probe on mount root (catches vanished mountpoint)
+    if ! mkdir "$s/.verify-mkdir" 2>/dev/null; then
+      log "PREFIX_EXEC verify FAIL cannot mkdir under path=$s"
+      return 1
+    fi
+    rmdir "$s/.verify-mkdir" 2>/dev/null || true
+    log "PREFIX_EXEC verify ok path=$s"
+    return 0
+  }
+
+  # Prefer durable guest paths; /tmp last (PRoot may claim mount then lose the path)
   prepare_scratch() {
-    if scratch_is_mounted; then
-      log "PREFIX_EXEC tmpfs scratch already mounted path=$scratch"
-      return 0
-    fi
-    # leftover file (not dir) blocks mount
-    if [ -e "$scratch" ] && [ ! -d "$scratch" ]; then
-      rm -f "$scratch" 2>/dev/null || true
-    fi
-    if [ ! -d "$scratch" ]; then
-      mkdir -p "$scratch" 2>/dev/null || true
-    fi
-    if [ ! -d "$scratch" ]; then
-      umount "$scratch" 2>/dev/null || umount -l "$scratch" 2>/dev/null || true
-      rm -rf "$scratch" 2>/dev/null || true
-      mkdir -p "$scratch" 2>/dev/null || true
-    fi
-    if [ ! -d "$scratch" ]; then
-      log "FATAL: PREFIX_EXEC cannot create scratch mountpoint $scratch"
-      exit 1
-    fi
-    if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=768M tmpfs "$scratch" 2>/dev/null; then
-      log "PREFIX_EXEC tmpfs scratch ok size=768M path=$scratch"
-    elif mount -t tmpfs -o rw,exec,nosuid,mode=755,size=512M tmpfs "$scratch" 2>/dev/null; then
-      log "PREFIX_EXEC tmpfs scratch ok size=512M path=$scratch"
-    else
-      # mount may fail if somehow became mounted between check and mount — reuse
-      if scratch_is_mounted; then
-        log "PREFIX_EXEC tmpfs scratch became mounted path=$scratch (reuse)"
+    local candidates="$p/.pe-exec /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec"
+    local c
+    for c in $candidates; do
+      log "PREFIX_EXEC scratch try path=$c"
+      if path_is_mounted "$c"; then
+        log_diag already-mounted "$c"
+        if scratch_verify "$c"; then
+          scratch="$c"
+          log "PREFIX_EXEC tmpfs scratch already mounted path=$scratch"
+          return 0
+        fi
+        log "PREFIX_EXEC scratch mount stale/vanished — umount $c"
+        umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
+      fi
+      # ensure parent exists
+      case "$c" in
+        */*) mkdir -p "${c%/*}" 2>/dev/null || true ;;
+      esac
+      if [ -e "$c" ] && [ ! -d "$c" ]; then
+        rm -f "$c" 2>/dev/null || true
+      fi
+      if [ ! -d "$c" ]; then
+        mkdir -p "$c" 2>/dev/null || true
+      fi
+      if [ ! -d "$c" ]; then
+        log "PREFIX_EXEC scratch mkdir mountpoint fail path=$c"
+        log_diag mkdirfail "$c"
+        continue
+      fi
+      log_diag pre-mount "$c"
+      local size_ok=""
+      if mount -t tmpfs -o rw,exec,nosuid,mode=755,size=768M tmpfs "$c" 2>/dev/null; then
+        size_ok=768M
+      elif mount -t tmpfs -o rw,exec,nosuid,mode=755,size=512M tmpfs "$c" 2>/dev/null; then
+        size_ok=512M
+      else
+        log "PREFIX_EXEC tmpfs mount syscall failed path=$c"
+        log_diag mountfail "$c"
+        if path_is_mounted "$c" && scratch_verify "$c"; then
+          scratch="$c"
+          log "PREFIX_EXEC tmpfs scratch ok (race-reuse) path=$scratch"
+          return 0
+        fi
+        continue
+      fi
+      log "PREFIX_EXEC tmpfs mount claimed size=$size_ok path=$c"
+      log_diag post-mount "$c"
+      if scratch_verify "$c"; then
+        scratch="$c"
+        log "PREFIX_EXEC tmpfs scratch ok size=$size_ok path=$scratch"
         return 0
       fi
-      log "FATAL: PREFIX_EXEC tmpfs scratch failed — cannot place PE ntdll on exec fs"
-      exit 1
-    fi
+      log "PREFIX_EXEC scratch vanished after mount — try next durable path"
+      umount "$c" 2>/dev/null || umount -l "$c" 2>/dev/null || true
+    done
+    log "FATAL: PREFIX_EXEC no durable tmpfs scratch (tried $p/.pe-exec /home/xuser/.wine-pe-exec /tmp/.wine-pe-exec)"
+    exit 1
   }
 
   ensure_dir "$sys32" || true
+  ensure_dir "$p" || true
 
   sys32_ok() {
-    # No ntdll in prefix yet: not OK — wineboot will materialize onto this fs
     [ -f "$sys32/ntdll.dll" ] || return 1
     probe_pe_exec "$sys32/ntdll.dll"
   }
@@ -396,11 +458,8 @@ ensure_prefix_exec() {
     log "PREFIX_EXEC remount x86_64-windows claimed (not trusted alone)"
   fi
 
-  # Even if /opt/wine PE probes exec, prefix system32 often does not — do not early-return
   if pe_ok && sys32_ok; then
     log "PREFIX_EXEC ok mode=probe pe=$pe_ntdll sys32=$sys32/ntdll.dll (fs already exec)"
-    # ok_marker may live on scratch; ensure scratch exists as dir at least
-    ensure_dir "$scratch" || true
     echo "mode=probe" > "$ok_marker" 2>/dev/null || true
     return 0
   fi
@@ -413,16 +472,23 @@ ensure_prefix_exec() {
   fi
 
   prepare_scratch
+  if [ -z "$scratch" ] || ! scratch_verify "$scratch"; then
+    log "FATAL: PREFIX_EXEC scratch not verified after prepare path=${scratch:-unset}"
+    log_diag fatal-scratch "${scratch:-/}"
+    exit 1
+  fi
 
   if [ ! -f "$scratch/x86_64-windows/ntdll.dll" ]; then
     if [ ! -d "$pe_dir" ]; then
       log "FATAL: PREFIX_EXEC missing $pe_dir"
       exit 1
     fi
-    log "PREFIX_EXEC copying $pe_dir → tmpfs (one-time)"
+    log "PREFIX_EXEC copying $pe_dir → tmpfs (one-time) scratch=$scratch"
+    log_diag pre-copy "$scratch"
     if ! ensure_dir "$scratch/x86_64-windows"; then
       log "FATAL: PREFIX_EXEC cannot mkdir $scratch/x86_64-windows"
-      ls -lad "$scratch" "$scratch/x86_64-windows" 2>&1 | while read -r line; do log "PREFIX_EXEC ls: $line"; done || true
+      log_diag mkdir-x64w "$scratch"
+      log_diag mkdir-x64w-child "$scratch/x86_64-windows"
       exit 1
     fi
     if ! cp -a "$pe_dir"/. "$scratch/x86_64-windows"/; then
@@ -431,16 +497,18 @@ ensure_prefix_exec() {
     fi
     log "PREFIX_EXEC copy x86_64-windows done"
   else
-    log "PREFIX_EXEC reuse tmpfs x86_64-windows copy"
+    log "PREFIX_EXEC reuse tmpfs x86_64-windows copy scratch=$scratch"
   fi
 
   if ! pe_ok; then
-    if ! awk -v s="$pe_dir" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+    if ! path_is_mounted "$pe_dir"; then
       if mount --bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null \
          || mount -o bind "$scratch/x86_64-windows" "$pe_dir" 2>/dev/null; then
         log "PREFIX_EXEC bind x86_64-windows ok"
+        log_diag bind-x64w "$pe_dir"
       else
         log "FATAL: PREFIX_EXEC bind x86_64-windows failed"
+        log_diag bindfail-x64w "$pe_dir"
         exit 1
       fi
     else
@@ -453,9 +521,9 @@ ensure_prefix_exec() {
   # ALWAYS put system32 on tmpfs so wineboot copies / NT maps land on exec
   if ! ensure_dir "$scratch/system32"; then
     log "FATAL: PREFIX_EXEC cannot mkdir $scratch/system32"
+    log_diag mkdir-sys32 "$scratch"
     exit 1
   fi
-  # Refresh ntdll into scratch every call (prefix may have new/noexec copy)
   if [ -d "$sys32" ]; then
     cp -a "$sys32"/. "$scratch/system32"/ 2>/dev/null || true
   fi
@@ -463,17 +531,18 @@ ensure_prefix_exec() {
     || cp -f "$pe_ntdll" "$scratch/system32/ntdll.dll" 2>/dev/null || true
   touch "$scratch/system32/.copied" 2>/dev/null || true
   ensure_dir "$sys32" || true
-  if ! awk -v s="$sys32" '$2==s {found=1} END{exit !found}' /proc/mounts 2>/dev/null; then
+  if ! path_is_mounted "$sys32"; then
     if mount --bind "$scratch/system32" "$sys32" 2>/dev/null \
        || mount -o bind "$scratch/system32" "$sys32" 2>/dev/null; then
       log "PREFIX_EXEC bind system32 ok path=$sys32"
+      log_diag bind-sys32 "$sys32"
     else
       log "FATAL: PREFIX_EXEC bind system32 failed path=$sys32 — C:\\windows\\system32 will stay noexec"
+      log_diag bindfail-sys32 "$sys32"
       exit 1
     fi
   else
     log "PREFIX_EXEC bind system32 already mounted path=$sys32"
-    # Remount may still be stale copy — refresh ntdll on the tmpfs side
     cp -f "$scratch/x86_64-windows/ntdll.dll" "$sys32/ntdll.dll" 2>/dev/null \
       || cp -f "$pe_ntdll" "$sys32/ntdll.dll" 2>/dev/null || true
   fi
@@ -482,22 +551,24 @@ ensure_prefix_exec() {
 
   if sys32_ok; then
     if pe_ok; then pe_state=yes; else pe_state=no; fi
-    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=$pe_state"
-    echo "mode=tmpfs+bind-sys32" > "$ok_marker"
+    log "PREFIX_EXEC ok mode=tmpfs+bind sys32=$sys32/ntdll.dll pe_ok=$pe_state scratch=$scratch"
+    echo "mode=tmpfs+bind-sys32 scratch=$scratch" > "$ok_marker"
     return 0
   fi
   if pe_ok; then
-    # sys32 ntdll still missing (pre-wineboot) but bind is up — OK to continue
     if [ ! -f "$sys32/ntdll.dll" ]; then
-      log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 (ntdll will land on exec tmpfs)"
-      echo "mode=tmpfs+bind-preseed" > "$ok_marker"
+      log "PREFIX_EXEC ok mode=tmpfs+bind-preseed pe=$pe_ntdll sys32_bound=$sys32 scratch=$scratch (ntdll will land on exec tmpfs)"
+      echo "mode=tmpfs+bind-preseed scratch=$scratch" > "$ok_marker"
       return 0
     fi
   fi
 
-  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32)"
+  log "FATAL: PREFIX_EXEC probe still fail after tmpfs+bind — noexec ntdll unresolved (sys32=$sys32 scratch=$scratch)"
+  log_diag final-sys32 "$sys32"
+  log_diag final-scratch "$scratch"
   exit 1
 }
+
 ensure_prefix_exec
 
 # 自證：unix wine 必須存在
@@ -781,7 +852,7 @@ PYINNER
 }
 
 if ! box64_holefit_mid; then
-  log "FATAL: hole-fit failed — install 0.1.45+ script + wine64k box64; mid>=0x1200000 (STACK_HEAD 2MiB); avoid 0x800000-0xa00000; clear sticky marker"
+  log "FATAL: hole-fit failed — install 0.1.46+ script + wine64k box64; mid>=0x1200000 (STACK_HEAD 2MiB); avoid 0x800000-0xa00000; clear sticky marker"
   exit 134
 fi
 

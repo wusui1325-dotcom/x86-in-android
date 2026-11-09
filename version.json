@@ -1,6 +1,6 @@
 {
   "package": "com.wusper.x86",
-  "versionName": "0.1.45",
-  "versionCode": 46,
-  "notes": "0.1.45: auto-bump from 0.1.44 (code 45->46)"
+  "versionName": "0.1.46",
+  "versionCode": 47,
+  "notes": "0.1.46: PREFIX_EXEC durable scratch under WINEPREFIX/.pe-exec; verify mount sticky"
 }

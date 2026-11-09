@@ -1,3 +1,17 @@
+## 0.1.46 — PREFIX_EXEC durable scratch (PRoot /tmp flake)
+
+**Bug (0.1.45):** `PREFIX_EXEC tmpfs scratch ok … path=/tmp/.wine-pe-exec` then
+`FATAL: cannot mkdir /tmp/.wine-pe-exec/x86_64-windows` and `ls: cannot access … No such file`.
+Mount claimed OK on ephemeral `/tmp` but path vanished under PRoot.
+
+**Fix:** Prefer scratch `$WINEPREFIX/.pe-exec` (then `/home/xuser/.wine-pe-exec`, `/tmp` last).
+After every mount: verify dir exists + writable + in `/proc/mounts` + mkdir probe; log `ls -ld` / `mountgrep`.
+ok_marker moved to `$WINEPREFIX/.prefix-exec-ok`. Keep sys32 tmpfs+bind + mid>=0x1200000.
+
+**Retest:** Cover-install **0.1.46** → `WINE_LAUNCH_STAMP=0.1.46` →
+`PREFIX_EXEC tmpfs scratch ok … path=…/.pe-exec` (not only `/tmp`) →
+`PREFIX_EXEC ok mode=tmpfs+bind…` / `tmpfs+bind-preseed` → no vanish FATAL.
+
 ## 0.1.45 — PREFIX_EXEC scratch mkdir EEXIST fix
 
 **Symptom (0.1.44):** `WINE_LAUNCH_STAMP=0.1.44`, then

@@ -27,6 +27,7 @@ path_is_mounted() {
   return 1
 }
 
+# 0.1.88: InProcessX root GPUImage cpuAccess=false (Java; stamp bump). Keep 087 WoW64.
 # 0.1.87: WoW64 i386 APP_LOAD — Boss 0.1.85: Antigravity PE machine=0x014c (i386) under
 # win64; unix absolute `wine /mnt/app/app.exe` → ShellExecuteEx/missing-Loaded (app never
 # starts; Present desktopOnly/guestBlack). Fix: fingerprint 014c/14c → wine start
@@ -99,7 +100,7 @@ path_is_mounted() {
 # "not a valid registry file" → PREFIX_32BIT. Detect/purge invalid → wineboot
 # writes real regs → then offline UTF-8 patch RpcSs/MountMgr/#arch.
 # 0.1.58: WINEARCH heal attempt. 0.1.57: offline RpcSs. 0.1.52: seed-copy.
-WINE_LAUNCH_STAMP=0.1.87
+WINE_LAUNCH_STAMP=0.1.88
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 
 # Wine registry helper (UTF-8 "WINE REGISTRY Version 2") — never invent stubs

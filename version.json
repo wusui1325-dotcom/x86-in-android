@@ -1,6 +1,6 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.87",
-  "versionCode": 88,
-  "notes": "0.1.87: WoW64 i386 APP_LOAD (machine=0x014c \u2192 wine start C:/App/app.exe; ensure_wow64_seed; fix od 014c match); InProcessX defer; keep 086\u2013070"
+  "versionName": "0.1.88",
+  "versionCode": 89,
+  "notes": "0.1.88: InProcessX root GPUImage cpuAccess=false (align PresentExtension 0.1.83 / DRI3); keep pre-promote; keep 087 WoW64 / 086\u2013070"
 }

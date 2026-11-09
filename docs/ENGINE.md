@@ -1,3 +1,21 @@
+## 0.1.88 — InProcessX root GPUImage cpuAccess=false
+
+**Dig (deferred from 087):** `GPUImage.createOrObtain` keeps the first GPUImage forever.
+0.1.83 fixed `PresentExtension.selectInput` → `cpuAccess=false` (match DRI3), but
+`InProcessX.start` still pre-promoted root with `cpuAccess=true` before DRI3/Present →
+empty CPU AHB locked on root → desktopOnly / guestBlack early frames. Comment claimed
+alignment with PresentExtension but still passed `true`. PresentXFramePump 0.1.70: NEVER
+promote with cpuAccess=true.
+
+**Fix:**
+- `InProcessX`: `createOrObtain(xServer, root.getContent(), false, true)`; Log.i once
+  `InProcessX GPUImage cpuAccess=false`
+- Keep pre-promote (do not remove entirely this tip)
+- Keep 087 WoW64 i386 / 086 vulkan seed / 085 awk POSIX + forceGpu / 084–070
+
+**Expect:** `WINE_LAUNCH_STAMP=0.1.88`; `InProcessX GPUImage cpuAccess=false`; Present DIAG
+`ahbCpuAccess=0` on early root frames (not poisoned `=1`).
+
 ## 0.1.87 — WoW64 i386 APP_LOAD (machine=0x014c)
 
 **Boss smoke (0.1.85 full log):** workspace `Antigravity-x64` but `APP_PE machine=0x014c`

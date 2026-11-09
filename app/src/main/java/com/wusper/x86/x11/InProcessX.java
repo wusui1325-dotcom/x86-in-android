@@ -90,11 +90,15 @@ public final class InProcessX {
         framePump = new PresentXFramePump(xServer, sink);
         xServerView.setOnFrameRequest(framePump::requestPulse);
 
-        // 對齊 PresentExtension.selectInput：root content 掛 GPUImage（AHB＋GPU_SAMPLED）
+        // 0.1.88 / 0.1.83: align PresentExtension.selectInput + DRI3 — root content
+        // GPUImage with cpuAccess=false (AHB＋GPU_SAMPLED). createOrObtain keeps the
+        // first GPUImage forever; cpuAccess=true here poisoned root before DRI3/Present
+        // (empty virtualData → desktopOnly/guestBlack). Keep pre-promote (do not remove).
         try {
             Window root = xServer.windowManager.rootWindow;
             if (root != null && root.getContent() != null) {
-                GPUImage.createOrObtain(xServer, root.getContent(), true, true);
+                GPUImage.createOrObtain(xServer, root.getContent(), false, true);
+                Log.i(TAG, "InProcessX GPUImage cpuAccess=false");
             }
         } catch (Throwable t) {
             Log.w(TAG, "GPUImage promote failed: " + t.getMessage());

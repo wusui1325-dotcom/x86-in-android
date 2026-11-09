@@ -125,6 +125,7 @@
 - **0.1.72 present path：** `DXVK_CONFIG_FILE=/mnt/data/dxvk.conf` with
   `dxgi.deferSurfaceCreation=True` + `maxDeviceMemory=2048` + `tearFree=False`;
   Wine `VideoMemorySize=2048` / `GrabFullscreen=N`; `WINEESYNC=1`. No Present CPU-first flip.
+- **0.1.88 InProcessX root cpuAccess=false：** align PresentExtension 0.1.83 / DRI3；Log.i `InProcessX GPUImage cpuAccess=false`；keep pre-promote；keep 087 WoW64
 - **0.1.87 WoW64 i386 APP_LOAD：** machine=0x014c → `wine start C:/App/app.exe`；`ensure_wow64_seed`；fix od `014c` match；InProcessX defer
 - **0.1.86 ensure_vulkan_seed：** pe→sys32/SysWOW64 `vulkan-1.dll` + `winevulkan.dll`；`APP_VULKAN_SEED`；DXVK_DIAG 指紋 vulkan-1
 - **0.1.85 awk→POSIX + forceGpu ahbCpuAccess0：** wine-launch 無 awk（TURNIP probe／path_is_mounted）；GPU-only AHB → `forceGpu=ahb_gpu reason=ahbCpuAccess0`

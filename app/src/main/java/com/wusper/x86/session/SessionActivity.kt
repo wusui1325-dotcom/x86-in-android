@@ -1423,6 +1423,7 @@ class SessionActivity : ComponentActivity() {
             "presentInterval",
             "X86_DXGI_SYNC",
             "PresentExtension GPUImage",
+            "InProcessX GPUImage",
             "ahbCpuAccess",
             "ahbCpuAccess0",
             "cpuAccess=false",

@@ -1,3 +1,16 @@
+## 0.1.108 — App-only post-14c trampoline + NTSTATUS surface
+
+**Dig 107:** PRIMARY `start /machine x86 /wait /exec` restored App NtCreate **machine 14c**,
+but CreateProcess still returned without `started process`; FormatMessage failed;
+`wow64cpu_init=[]`. Direct 64-bit cmd still machine 0 + creator_detach.
+
+**Knives:** (1) PRIMARY trampoline — `/exec C:\windows\syswow64\cmd.exe /c C:\App\x86_launch.cmd`
+(KEEP machine-before-exec order; WoW64-create small i386 cmd, then 32→32 App);
+(2) wow64 canary; (3) dig stamps FormatMessage/GLE + err:ntdll + trampoline_dig.
+
+**Expect:** `canary_dig machine_cmd_014c=1 started_pid=1`; PRIMARY `started_pid_cmd=1` +
+`started_pid_after_app=1` + Loaded `C:\App\app.exe`; non-empty NTSTATUS/GLE when still failing.
+
 ## 0.1.106 — Loaded A2 + phase-bound UX (no tick-rotate / hideable log)
 
 **Smoke (0.1.105):** `/machine x86` real spawn + CPIW single-BS + NtCreate machine 14c PASS;

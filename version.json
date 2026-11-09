@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.107",
-  "versionCode": 109,
-  "notes": "0.1.107: P0 A2+BSOD. Dig106: ladder/dig/status/log OK but A2 REGRESS 14c→0 because PRIMARY start /exec /machine x86 → GetBinaryTypeW(\"/machine\") (/exec consumes rest); 0×MACHINE_TYPE; App machine0; ladder ends explorer (0×unix); Boss blueScreenSalt++ rotates BSOD ~2s + empty body. Knives: (1) PRIMARY start /machine x86 /wait /exec path (switches before /exec); (2) unix start /unix /wait /exec $SEED + faster explorer→unix; (3) create_fail=getbinarytype_flag_as_path; (4) overlay-keep require Loaded (no clear on nonBlackGuest alone); (5) BSOD lock by reason fingerprint — delete salt++; never blank ：（+≥1+footer. KEEP 102-106 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/stub/dblslash/phase status/logForceHidden/BSOD#0000AA. No hot/soft-continue/Present rewrite/DXVK x32/FF. vc109.",
-  "tipSha": "bc3b0c5"
+  "versionName": "0.1.108",
+  "versionCode": 110,
+  "notes": "0.1.108: P0 App-only. Dig107: PRIMARY machine-before-exec OK→App NtCreate machine 14c recovered but no started pid; FormatMessage failed; wow64cpu_init=[]; direct machine0 creator_detach. Knives: (1) PRIMARY trampoline start /machine x86 /wait /exec syswow64\\cmd /c stub (KEEP argv order; WoW64-create small i386 cmd then 32→32 App); (2) wow64 canary before App; (3) surface NTSTATUS/GLE (formatmessage_failed/gle_suspect=0, err+ntdll, trampoline_dig). KEEP 102-107 gates/quiet/cap40/MAP_WAIT/defer/NOEXEC/mmap32/PRIMARY order/dblslash/phase/log/BSOD. No hot/soft-continue/Present/DXVK x32/FF. vc110.",
+  "tipSha": "TBD"
 }

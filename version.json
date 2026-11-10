@@ -3,5 +3,5 @@
   "versionName": "0.1.121",
   "versionCode": 123,
   "notes": "0.1.121: KEEP 120 SxS comctl32 v6, 119 in-place launch / WINE_PE_SMOKE skip, 118 THEME_LIGHT/FONT_SMOOTH/WS_APPS, 117 direct touch + pad cursor + INPUT_TOUCH + CJK, 116 visual BGRA. P0: Chromium/Electron huge MEM_RESERVE (1.34TB/512GB/256GB) on 39-bit Box64 — Wine ntdll.so on-device patch (map_anon_area MAP_NORESERVE + cap 1TB/4GB-multiple alignment to 64KB so the 256GB V8-sandbox fallback can mmap). Do not assume 48-bit. Stamp NTDLL_VA_RESERVE / VA_RESERVE. No Box64 rebuild, no APP_LOAD rewrite, no 藍屏 / explorer-desktop. vc123.",
-  "tipSha": "5ac947d"
+  "tipSha": "35d1ab0"
 }

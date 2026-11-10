@@ -3,5 +3,5 @@
   "versionName": "0.1.119",
   "versionCode": 121,
   "notes": "0.1.119: KEEP 118 THEME_LIGHT/FONT_SMOOTH/WS_APPS scan, KEEP 117 direct touch + pad cursor + INPUT_TOUCH + CJK Noto TC/SC, KEEP 116 visual BGRA. Knives: (A) in-place launch of already-installed apps (Windows path + install-dir cwd); never copy onto exe/app.exe or C:\\App\\app.exe; once prefix has an installed app, entering the workspace defaults to that/last-used (do not re-run Setup); stamp WS_LAUNCH path=… in_place=1. Simple seed exes (WinRAR) keep the existing /mnt/app/app.exe ladder. (B) fast first frame: skip WINE_PE_SMOKE and the 3s APP_LOAD settle when the prefix is already initialized; skip 225MB seed recopy when sizes match; Present as soon as a real frame exists. (C) seed listed once; Uninstall-registry apps labelled installed not uninstall. No explorer-shell desktop this tip. No argv/ladder rewrite for simple seeds. No 藍屏 change. vc121.",
-  "tipSha": "pending"
+  "tipSha": "0173b9d"
 }

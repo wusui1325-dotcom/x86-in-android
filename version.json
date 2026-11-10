@@ -3,5 +3,5 @@
   "versionName": "0.1.116",
   "versionCode": 118,
   "notes": "0.1.116: Dig115 visual FAIL — Loaded/HWND KEEP (hwnd=0x1c00001) but x11_putimage=copyarea=shm=0, Host X had no RENDER, Present early child=0x3 ahb_gpu empty root, presentHudBar 8px flash, logText dropped last pathStats, nonBlackGuest not visual success. Knives: (P) in-process RENDER / XRender Composite + x11_render= stamp (core blit 0 because Wine GDI prefers XRender; all-count kept); (Q) after live hwnd composite App tree onto 1280x720 BGRA, never post empty root AHB; (R) ban presentHudBar after live hwnd; (S) PRESENT_DIAG_LAST keeps last pathStats; (T) Surface test button — shader pattern 3s then restore, SURFACE_SHOT + SURFACE_TEST stamps, shot in workspace logs/. KEEP 115 J/K/M, desk=1, seeds, GRAN_ALIGN, amd64_wow64, mmap32=0, no argv/ladder/UX-touch/BSOD. No soft Xvfb/hot/FF/Coolify. vc118.",
-  "tipSha": ""
+  "tipSha": "d33ff99"
 }

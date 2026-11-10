@@ -14,7 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
   # 0.1.91 K0c: durable APP_LOAD/WINE_START stamps — survive GRAPHICS_BACKEND wipe
   case "$*" in
-    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
+    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
       printf '%s\n' "$*" >> /mnt/data/app-load.stamp 2>/dev/null || true
       ;;
   esac
@@ -296,7 +296,7 @@ path_is_mounted() {
 #   + clear stale .x86-x11-ready on WINE_START; P0-L PutImage/CopyArea/SHM dig + Expose;
 #   P0-M present_black/guestPresented require hwnd!=0; P1-N MAP_WAIT desk=1; P1-O canary=skip pe_amd64.
 # 0.1.116 Dig115: P0-P RENDER/x11_render; P0-Q present App composite; P0-R no HUD after live hwnd; P1-S DIAG_LAST; P1-T surface test. No argv/ladder change.
-WINE_LAUNCH_STAMP=0.1.117
+WINE_LAUNCH_STAMP=0.1.118
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -2767,7 +2767,127 @@ ensure_cjk_font() {
   fi
   return 0
 }
+
+# 0.1.118 P1-A: Wine built-in Light (Aero-Light) visual style. No Microsoft theme files.
+ensure_light_theme() {
+  local dest_dir dest src theme_path
+  dest_dir="$WINEPREFIX/drive_c/windows/Resources/Themes/light"
+  mkdir -p "$dest_dir" 2>/dev/null || true
+  dest="$dest_dir/light.msstyles"
+  src=""
+  for c in \
+    "$dest" \
+    /opt/wine/lib/wine/x86_64-windows/light.msstyles \
+    /opt/wine/lib64/wine/x86_64-windows/light.msstyles \
+    /opt/wine/share/wine/light.msstyles \
+    /opt/wine/share/wine/themes/light/light.msstyles \
+    /usr/share/wine/light.msstyles \
+    /usr/lib/wine/x86_64-windows/light.msstyles
+  do
+    if [ -f "$c" ] && [ "$c" != "$dest" ]; then src="$c"; break; fi
+    if [ -f "$c" ] && [ "$c" = "$dest" ]; then src="$c"; break; fi
+  done
+  # Prefer a wine-tree copy if the prefix file is missing or empty.
+  if [ ! -s "$dest" ]; then
+    if [ -n "$src" ] && [ "$src" != "$dest" ]; then
+      cp -f "$src" "$dest" 2>/dev/null || true
+    else
+      # Last-ditch walk (bounded) of the Wine prefix + /opt/wine
+      src=$(find /opt/wine /usr/share/wine "$WINEPREFIX/drive_c/windows/Resources" -iname 'light.msstyles' 2>/dev/null | head -n 1 || true)
+      if [ -n "$src" ] && [ -f "$src" ] && [ "$src" != "$dest" ]; then
+        cp -f "$src" "$dest" 2>/dev/null || true
+      fi
+    fi
+  fi
+  theme_path="$dest_dir/light.theme"
+  if [ ! -s "$theme_path" ]; then
+    printf '%s\n' \
+      "[Theme]" \
+      "DisplayName=Light" \
+      "[VisualStyles]" \
+      "Path=%SystemRoot%\\Resources\\Themes\\light\\light.msstyles" \
+      "ColorStyle=NormalColor" \
+      "Size=NormalSize" \
+      > "$theme_path" 2>/dev/null || true
+  fi
+  local reg_ok=0
+  if [ -n "${WINEPREFIX:-}" ]; then
+    mkdir -p /mnt/data 2>/dev/null || true
+    set +e
+    wine_reg_helper inject-light-theme > /mnt/data/wine-light-theme.out 2>&1
+    _th_rc=$?
+    set -e
+    while read -r line; do log "THEME_REG $line"; done < /mnt/data/wine-light-theme.out 2>/dev/null || true
+    if [ "$_th_rc" = "0" ]; then reg_ok=1; fi
+    unset _th_rc
+  fi
+  if [ -s "$dest" ] && [ "$reg_ok" = "1" ]; then
+    log "THEME_LIGHT path=$dest style=light fallback=ok"
+  elif [ "$reg_ok" = "1" ]; then
+    log "THEME_LIGHT path=${dest:-}- style=light fallback=ok source=reg_only (msstyles after wineboot)"
+  else
+    log "THEME_LIGHT path=${dest:-}- style=light fallback=fail reg=$reg_ok"
+  fi
+  return 0
+}
+
+# 0.1.118 P1-B: force ClearType / antialiasing; ban bitmap UI fonts. Keep CJK Noto.
+ensure_font_smooth() {
+  local conf_src=/etc/fonts/conf.d/58-x86-smooth.conf
+  mkdir -p /etc/fonts/conf.d "$HOME/.config/fontconfig" 2>/dev/null || true
+  # Asset is staged by ComponentInstaller into rootfs; re-copy if a later overlay dropped it.
+  if [ -f /usr/local/share/fonts/58-x86-smooth.conf ] && [ ! -f "$conf_src" ]; then
+    cp -f /usr/local/share/fonts/58-x86-smooth.conf "$conf_src" 2>/dev/null || true
+  fi
+  if [ -d /etc/fonts ]; then
+    export FONTCONFIG_PATH=/etc/fonts
+  fi
+  command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
+  local reg_ok=0
+  if [ -n "${WINEPREFIX:-}" ]; then
+    mkdir -p /mnt/data 2>/dev/null || true
+    set +e
+    wine_reg_helper inject-font-smooth > /mnt/data/wine-font-smooth.out 2>&1
+    _fs_rc=$?
+    set -e
+    while read -r line; do log "FONT_SMOOTH_REG $line"; done < /mnt/data/wine-font-smooth.out 2>/dev/null || true
+    if [ "$_fs_rc" = "0" ]; then reg_ok=1; fi
+    unset _fs_rc
+  fi
+  local fc_ok=0
+  if [ -f "$conf_src" ]; then fc_ok=1; fi
+  if [ "$reg_ok" = "1" ]; then
+    log "FONT_SMOOTH ok fc=$fc_ok type=cleartype bitmap=off"
+  else
+    log "FONT_SMOOTH fail fc=$fc_ok reg=$reg_ok"
+  fi
+  return 0
+}
+
+# 0.1.118 P1-C: scan same-prefix Start Menu / Uninstall / Program Files into WS_APPS stamp.
+stamp_ws_apps() {
+  mkdir -p /mnt/data 2>/dev/null || true
+  set +e
+  wine_reg_helper scan-ws-apps > /mnt/data/ws-apps.out 2>&1
+  _wa_rc=$?
+  set -e
+  while read -r line; do
+    case "$line" in
+      WS_APPS*) log "$line" ;;
+      *) log "WS_APPS_SCAN $line" ;;
+    esac
+  done < /mnt/data/ws-apps.out 2>/dev/null || true
+  if [ "$_wa_rc" != "0" ]; then
+    log "WS_APPS count=0 fail=rc_$_wa_rc"
+  fi
+  unset _wa_rc
+  return 0
+}
+
 ensure_cjk_font
+ensure_light_theme
+ensure_font_smooth
+stamp_ws_apps
 
 # Display + driver diagnose before START
 X0_STATE=missing

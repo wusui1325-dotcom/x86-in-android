@@ -162,6 +162,9 @@ class MainActivity : ComponentActivity() {
                 }
 
                 val workspaces = remember(tick) { WorkspaceStore.listWorkspaces(this) }
+                val workspaceApps = remember(tick, workspaces) {
+                    workspaces.associate { it.id to WorkspaceApps.scan(it) }
+                }
                 val picked = remember(tick) { WorkspaceStore.loadPickedExes(this) }
                 val hasAllFiles = remember(tick) {
                     if (Build.VERSION.SDK_INT >= 30) {
@@ -665,6 +668,7 @@ class MainActivity : ComponentActivity() {
                     HomeScreen(
                         padding = padding,
                         workspaces = workspaces,
+                        workspaceApps = workspaceApps,
                         visibleExes = deviceExes,
                         hasAllFiles = hasAllFiles,
                         showDevChips = developerMode,
@@ -684,6 +688,14 @@ class MainActivity : ComponentActivity() {
                                 workspacePendingRebuild = ws
                             } else {
                                 launchWorkspace(ws)
+                                tick++
+                            }
+                        },
+                        onLaunchWorkspaceApp = { ws, app ->
+                            if (WorkspaceStore.isWorkspaceDirty(ws)) {
+                                workspacePendingRebuild = ws
+                            } else {
+                                launchWorkspace(ws, app)
                                 tick++
                             }
                         },
@@ -785,8 +797,18 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun launchWorkspace(ws: Workspace) {
+    private fun launchWorkspace(ws: Workspace, app: WorkspaceApp? = null) {
         WorkspaceStore.touchLaunch(this, ws)
+        try {
+            WorkspaceApps.prepareLaunchExe(ws, app)
+        } catch (t: Throwable) {
+            Toast.makeText(
+                this,
+                t.message ?: getString(R.string.workspace_app_missing),
+                Toast.LENGTH_LONG,
+            ).show()
+            return
+        }
         startActivity(
             Intent(this, SessionActivity::class.java)
                 .putExtra(SessionActivity.EXTRA_WORKSPACE_ID, ws.id),
@@ -888,6 +910,7 @@ class MainActivity : ComponentActivity() {
 private fun HomeScreen(
     padding: PaddingValues,
     workspaces: List<Workspace>,
+    workspaceApps: Map<String, List<WorkspaceApp>>,
     visibleExes: List<DeviceExe>,
     hasAllFiles: Boolean,
     showDevChips: Boolean,
@@ -895,6 +918,7 @@ private fun HomeScreen(
     onGrantAllFiles: () -> Unit,
     onScanExes: () -> Unit,
     onLaunchWorkspace: (Workspace) -> Unit,
+    onLaunchWorkspaceApp: (Workspace, WorkspaceApp) -> Unit,
     onDeleteWorkspace: (Workspace) -> Unit,
     onRebuildWorkspace: (Workspace) -> Unit,
     onLaunchExe: (DeviceExe) -> Unit,
@@ -988,6 +1012,8 @@ private fun HomeScreen(
         } else {
             items(workspaces, key = { it.id }) { ws ->
                 val dirty = WorkspaceStore.isWorkspaceDirty(ws)
+                val apps = workspaceApps[ws.id].orEmpty()
+                val installed = apps.filterNot { it.isSeed }
                 EntryCard(
                     title = if (dirty) {
                         "${ws.displayName} · " + stringResource(R.string.workspace_dirty_badge)
@@ -997,7 +1023,9 @@ private fun HomeScreen(
                         append('\n')
                         append("來源：${ws.sourceExeName.ifBlank { ws.sourceExePath.ifBlank { "（乾淨／未匯入）" } }}")
                         append('\n')
-                        append(if (dirty) "點擊可重建 Prefix；長按刪除" else "點擊啟動；長按刪除")
+                        append(stringResource(R.string.workspace_apps_count, apps.size))
+                        append('\n')
+                        append(if (dirty) "點擊可重建 Prefix；長按刪除" else "點擊啟動來源程式；長按刪除")
                     },
                     icon = {
                         Icon(
@@ -1009,9 +1037,25 @@ private fun HomeScreen(
                     onClick = { onLaunchWorkspace(ws) },
                     onLongClick = { onDeleteWorkspace(ws) },
                 )
+                if (installed.isNotEmpty()) {
+                    installed.forEach { app ->
+                        EntryCard(
+                            title = app.name,
+                            subtitle = stringResource(R.string.workspace_app_installed, app.windowsPath),
+                            icon = {
+                                Icon(
+                                    Icons.Default.PlayArrow,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                )
+                            },
+                            onClick = { onLaunchWorkspaceApp(ws, app) },
+                            modifier = Modifier.padding(start = 24.dp),
+                        )
+                    }
+                }
             }
         }
-
         item {
             Spacer(Modifier.height(8.dp))
             SectionTitle(stringResource(R.string.title_device_exes))
@@ -1087,9 +1131,10 @@ private fun EntryCard(
     icon: @Composable () -> Unit,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
 ) {
     Card(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .then(
                 if (onLongClick != null) {

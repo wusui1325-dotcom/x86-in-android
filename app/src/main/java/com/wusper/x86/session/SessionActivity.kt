@@ -199,6 +199,11 @@ class SessionActivity : ComponentActivity() {
                             appendLine("WINE_LAUNCH_STAMP=$stamp")
                             appendLine("workspace=${ws?.id ?: "-"} display=${ws?.displayName ?: "-"}")
                             appendLine("exportedAt=$ts (device local)")
+                            ws?.let { w ->
+                                runCatching {
+                                    appendLine(com.wusper.x86.WorkspaceApps.stampLine(w))
+                                }
+                            }
                             appendLine()
                         }
                         out.outputStream().buffered().use { os ->
@@ -226,6 +231,8 @@ class SessionActivity : ComponentActivity() {
                             appendFile("wineboot-init.out", dataDir?.let { File(it, "wineboot-init.out") })
                             appendFile("box64-selftest.out", dataDir?.let { File(it, "box64-selftest.out") })
                             appendFile("wine-prereserve-probe.out", dataDir?.let { File(it, "wine-prereserve-probe.out") })
+                            appendFile("ws-apps.json", dataDir?.let { File(it, "ws-apps.json") })
+                            appendFile("ws-apps.out", dataDir?.let { File(it, "ws-apps.out") })
                             os.write("\n===== surface-shot (P1-T, files stay in logs/) =====\n".toByteArray())
                             val shotDir = ws?.dir?.let { File(it, "logs") }
                             val shots = shotDir?.listFiles { f ->
@@ -753,6 +760,7 @@ class SessionActivity : ComponentActivity() {
                             appendSticky("輸入橋：預設直接觸控（按哪點哪／拖=滾輪／長按=右鍵；頂欄可切觸控板）")
                         }
                         appendSticky("InProcessX imagefs=${x.imageFsRoot.absolutePath}")
+                        ws?.let { w -> runCatching { appendSticky(com.wusper.x86.WorkspaceApps.stampLine(w)) } }
                     }
                     val result = LaunchPipeline.start(plan)
                     status = when {
@@ -1661,6 +1669,9 @@ class SessionActivity : ComponentActivity() {
             "INPUT_TOUCH",
             "INPUT_STYLE",
             "FONT_CJK",
+            "FONT_SMOOTH",
+            "THEME_LIGHT",
+            "WS_APPS",
             "x11_render",
             "guestPresented",
             "stub-fallback",

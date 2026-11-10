@@ -16,6 +16,10 @@
     <string name="workspace_imported">已匯入新工作區：%1$s（乾淨 prefix）</string>
     <string name="workspace_clean_created">已建立乾淨工作區：%1$s</string>
     <string name="workspace_dirty_badge">半殘／需重建</string>
+    <string name="workspace_apps_count">工作區程式：%1$d</string>
+    <string name="workspace_app_installed">已安裝 · %1$s</string>
+    <string name="workspace_app_seed">啟動程式</string>
+    <string name="workspace_app_missing">找不到該程式檔案</string>
     <string name="dialog_rebuild_title">重建乾淨 Prefix？</string>
     <string name="dialog_rebuild_message">「%1$s」看起來像半殘工作區（舊版殘留／不完整 wineprefix）。將只清除 wineprefix 與暫存 log，保留已匯入的 .exe。不會刪除裝置上的原始檔。是否重建？</string>
     <string name="dialog_rebuild_confirm">重建 Prefix</string>

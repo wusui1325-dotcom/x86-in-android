@@ -442,6 +442,7 @@ object ComponentInstaller {
         File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) ExecBits.force(it) }
         File(rootfs, "usr/bin/xdotool").let { if (it.exists()) ExecBits.force(it) }
         ensureCjkFont(ctx, rootfs)
+        ensureFontSmoothConf(ctx, rootfs)
         ensureInputAgent(ctx)
     }
 
@@ -472,6 +473,25 @@ object ComponentInstaller {
             )
         }.onFailure {
             android.util.Log.w("ComponentInstaller", "FONT_CJK install failed: $it")
+        }
+    }
+
+    /** 0.1.118 P1-B: fontconfig antialias + reject embedded bitmaps. */
+    fun ensureFontSmoothConf(ctx: Context, rootfs: File) {
+        runCatching {
+            val confDest = File(rootfs, "etc/fonts/conf.d/58-x86-smooth.conf")
+            confDest.parentFile?.mkdirs()
+            copyAsset(ctx, "engine/fonts/58-x86-smooth.conf", confDest, executable = false)
+            // Fallback copy in case /etc/fonts is later overlaid.
+            val alt = File(rootfs, "usr/local/share/fonts/58-x86-smooth.conf")
+            alt.parentFile?.mkdirs()
+            copyAsset(ctx, "engine/fonts/58-x86-smooth.conf", alt, executable = false)
+            android.util.Log.i(
+                "ComponentInstaller",
+                "FONT_SMOOTH conf=${confDest.absolutePath} size=${confDest.length()}",
+            )
+        }.onFailure {
+            android.util.Log.w("ComponentInstaller", "FONT_SMOOTH conf install failed: $it")
         }
     }
 

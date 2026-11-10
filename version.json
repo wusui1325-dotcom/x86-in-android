@@ -3,5 +3,5 @@
   "versionName": "0.1.117",
   "versionCode": 119,
   "notes": "0.1.117: Dig116 Visual P0 PASS, Touch FAIL — default was TOUCHPAD relative mouse, pointer starts at (0,0), BGRA Present had no cursor, tap clicked at cursor not finger, no top-bar toggle, zero INPUT stamps. Knives: (U) default 直接觸控 — DOWN move to letterbox 1280x720 desk then left down, UP left up, drag=wheel, long-press=right, never single-finger window/cursor drag; (V) top-bar 觸控板／直接觸控, pad mode composites X cursor or black arrow; (W) INPUT_TOUCH stamps even on light taps; (X) pointerInteropFilter + surfaceChanged/update rebind blitRect, log collapse must not steal Surface touch; (Y) never isRelativeMouseMovement=true, always xServer.injectPointer*; (Z) open-source Noto Sans CJK TC/SC in imagefs+Wine Fonts + fontconfig/Wine FontSubstitutes (SimSun, Microsoft YaHei, 微軟正黑體), FONT_CJK stamp, no commercial fonts. KEEP 116 visual BGRA composite, RENDER, no HUD after live hwnd, seeds, GRAN_ALIGN, amd64_wow64, mmap32=0, no argv/ladder/BSOD. vc119.",
-  "tipSha": "d33ff99"
+  "tipSha": "d0ea3fe"
 }

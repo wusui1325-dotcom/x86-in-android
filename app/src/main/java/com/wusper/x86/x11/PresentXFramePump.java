@@ -4,6 +4,7 @@ import android.util.Log;
 
 import com.winlator.renderer.GPUImage;
 import com.winlator.renderer.Texture;
+import com.winlator.xserver.Cursor;
 import com.winlator.xserver.Drawable;
 import com.winlator.xserver.Window;
 import com.winlator.xserver.XLock;
@@ -55,6 +56,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.116 Dig115: RENDER stamp x11_render=; after live hwnd composite App tree
  * onto 1280×720 BGRA (never child=0x3 empty root ahb_gpu); ban presentHudBar
  * after live hwnd; surface test pattern (not HUD) for P1-T.
+ * 0.1.117: optional cursor overlay on the BGRA canvas in trackpad mode
+ * (composite X cursor, else a black arrow). Off by default so direct-touch
+ * visual matches 116.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -112,6 +116,8 @@ public final class PresentXFramePump extends Thread {
     private ByteBuffer deskCanvas;
     /** 0.1.116 P1-T: shader test pattern until uptime millis (0 = off). */
     private volatile long surfaceTestUntilMs;
+    /** 0.1.117 P0-V: composite a visible cursor in trackpad mode only. */
+    private volatile boolean cursorOverlayEnabled;
     private ByteBuffer surfaceTestBuf;
     /** DXVK_HUD top band + bottom-left corner to ignore when sampling. */
     private static final int HUD_EXCLUDE_TOP = 64;
@@ -296,6 +302,9 @@ public final class PresentXFramePump extends Thread {
             } else {
                 // P0-R: do not overlay presentHudBar after live hwnd.
                 noteGuestContent(false, frameIndex);
+            }
+            if (cursorOverlayEnabled) {
+                compositePointerCursor(deskSnapshot, width, height);
             }
             NativeEngine.nativePresentMarkPath("bgra");
             int rc = NativeEngine.nativePresentBgra(deskSnapshot, width, height, strideBytes);
@@ -603,6 +612,146 @@ public final class PresentXFramePump extends Thread {
         }
         dst.rewind();
         src.rewind();
+    }
+
+    public void setCursorOverlayEnabled(boolean enabled) {
+        cursorOverlayEnabled = enabled;
+    }
+
+    public boolean isCursorOverlayEnabled() {
+        return cursorOverlayEnabled;
+    }
+
+    /**
+     * Composite the X cursor into a 1280×720 BGRA frame. If Wine has no
+     * visible cursor image, draw a black arrow so pad mode is never invisible.
+     */
+    private void compositePointerCursor(ByteBuffer dest, int destW, int destH) {
+        if (dest == null || destW <= 0 || destH <= 0) return;
+        int px;
+        int py;
+        try {
+            px = xServer.pointer.getClampedX() & 0xffff;
+            py = xServer.pointer.getClampedY() & 0xffff;
+        } catch (Throwable t) {
+            return;
+        }
+        Cursor cursor = null;
+        try {
+            Window w = xServer.windowManager.findPointWindow((short) px, (short) py);
+            if (w != null && w.attributes != null) cursor = w.attributes.getCursor();
+        } catch (Throwable ignored) {
+        }
+        boolean drew = false;
+        if (cursor != null && cursor.isVisible() && cursor.cursorImage != null) {
+            ByteBuffer src = cursor.cursorImage.getData();
+            int cw = cursor.cursorImage.width & 0xffff;
+            int ch = cursor.cursorImage.height & 0xffff;
+            if (src != null && cw > 0 && ch > 0) {
+                int hx = cursor.hotSpotX;
+                int hy = cursor.hotSpotY;
+                blitCursorPremul(src, cw, ch, dest, destW, destH, px - hx, py - hy);
+                drew = true;
+            }
+        }
+        if (!drew) {
+            blitBlackArrow(dest, destW, destH, px, py);
+        }
+        dest.rewind();
+    }
+
+    private static void blitCursorPremul(ByteBuffer src, int srcW, int srcH,
+                                         ByteBuffer dst, int dstW, int dstH,
+                                         int dstX, int dstY) {
+        ByteBuffer s = src.duplicate();
+        int srcStride = srcW * 4;
+        int dstStride = dstW * 4;
+        for (int y = 0; y < srcH; y++) {
+            int dy = dstY + y;
+            if (dy < 0 || dy >= dstH) continue;
+            for (int x = 0; x < srcW; x++) {
+                int dx = dstX + x;
+                if (dx < 0 || dx >= dstW) continue;
+                int soff = y * srcStride + x * 4;
+                if (soff + 4 > s.capacity()) continue;
+                int b = s.get(soff) & 0xff;
+                int g = s.get(soff + 1) & 0xff;
+                int r = s.get(soff + 2) & 0xff;
+                int a = s.get(soff + 3) & 0xff;
+                if (a == 0) continue;
+                int doff = dy * dstStride + dx * 4;
+                if (doff + 4 > dst.capacity()) continue;
+                if (a == 255) {
+                    dst.put(doff, (byte) b);
+                    dst.put(doff + 1, (byte) g);
+                    dst.put(doff + 2, (byte) r);
+                    dst.put(doff + 3, (byte) 0xff);
+                } else {
+                    int db = dst.get(doff) & 0xff;
+                    int dg = dst.get(doff + 1) & 0xff;
+                    int dr = dst.get(doff + 2) & 0xff;
+                    int ia = 255 - a;
+                    dst.put(doff, (byte) ((b * a + db * ia) / 255));
+                    dst.put(doff + 1, (byte) ((g * a + dg * ia) / 255));
+                    dst.put(doff + 2, (byte) ((r * a + dr * ia) / 255));
+                    dst.put(doff + 3, (byte) 0xff);
+                }
+            }
+        }
+    }
+
+    /** 12×19 classic black arrow with a white outline so it reads on dark and light. */
+    private static final byte[] ARROW = new byte[] {
+        2,0,0,0,0,0,0,0,0,0,0,0,
+        2,2,0,0,0,0,0,0,0,0,0,0,
+        2,1,2,0,0,0,0,0,0,0,0,0,
+        2,1,1,2,0,0,0,0,0,0,0,0,
+        2,1,1,1,2,0,0,0,0,0,0,0,
+        2,1,1,1,1,2,0,0,0,0,0,0,
+        2,1,1,1,1,1,2,0,0,0,0,0,
+        2,1,1,1,1,1,1,2,0,0,0,0,
+        2,1,1,1,1,1,1,1,2,0,0,0,
+        2,1,1,1,1,1,1,1,1,2,0,0,
+        2,1,1,1,1,1,2,2,2,2,0,0,
+        2,1,1,2,1,1,2,0,0,0,0,0,
+        2,1,2,0,2,1,1,2,0,0,0,0,
+        2,2,0,0,2,1,1,2,0,0,0,0,
+        2,0,0,0,0,2,1,1,2,0,0,0,
+        0,0,0,0,0,2,1,1,2,0,0,0,
+        0,0,0,0,0,0,2,1,1,2,0,0,
+        0,0,0,0,0,0,2,2,2,0,0,0,
+        0,0,0,0,0,0,0,0,0,0,0,0,
+    };
+    private static final int ARROW_W = 12;
+    private static final int ARROW_H = 19;
+
+    private static void blitBlackArrow(ByteBuffer dst, int dstW, int dstH, int hotX, int hotY) {
+        int dstStride = dstW * 4;
+        for (int y = 0; y < ARROW_H; y++) {
+            int dy = hotY + y;
+            if (dy < 0 || dy >= dstH) continue;
+            for (int x = 0; x < ARROW_W; x++) {
+                int dx = hotX + x;
+                if (dx < 0 || dx >= dstW) continue;
+                int cell = ARROW[y * ARROW_W + x] & 0xff;
+                if (cell == 0) continue;
+                int doff = dy * dstStride + dx * 4;
+                if (doff + 4 > dst.capacity()) continue;
+                if (cell == 1) {
+                    // black fill
+                    dst.put(doff, (byte) 0);
+                    dst.put(doff + 1, (byte) 0);
+                    dst.put(doff + 2, (byte) 0);
+                    dst.put(doff + 3, (byte) 0xff);
+                } else {
+                    // white outline
+                    dst.put(doff, (byte) 0xff);
+                    dst.put(doff + 1, (byte) 0xff);
+                    dst.put(doff + 2, (byte) 0xff);
+                    dst.put(doff + 3, (byte) 0xff);
+                }
+            }
+        }
     }
 
     private static boolean isHelperClassName(String c) {

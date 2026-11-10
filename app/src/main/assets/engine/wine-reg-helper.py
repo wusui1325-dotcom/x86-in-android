@@ -482,6 +482,74 @@ def _upsert_section(text, section, kv_pairs):
     return text
 
 
+
+def cmd_inject_cjk_fonts(prefix):
+    """0.1.117 P1-Z: Wine FontSubstitutes + Fonts\\Replacements for Noto Sans CJK.
+    Traditional aliases → Noto Sans CJK TC; Simplified aliases → Noto Sans CJK SC.
+    Never invent a hive before wineboot.
+    """
+    tc = "Noto Sans CJK TC"
+    sc = "Noto Sans CJK SC"
+    hk = "Noto Sans CJK HK"
+    # (windows_name, family)
+    aliases_tc = [
+        "Microsoft JhengHei", "Microsoft JhengHei UI", "微軟正黑體", "微軟正黑體 UI",
+        "MingLiU", "PMingLiU", "MingLiU-ExtB", "PMingLiU-ExtB", "MingLiU_HKSCS",
+        "新細明體", "細明體", "DFKai-SB", "標楷體",
+    ]
+    aliases_sc = [
+        "SimSun", "NSimSun", "SimSun-ExtB", "宋体", "新宋体",
+        "Microsoft YaHei", "Microsoft YaHei UI", "微软雅黑",
+        "SimHei", "黑体", "KaiTi", "楷体", "FangSong", "仿宋", "DengXian", "等线",
+    ]
+    # HKSCS better on HK face
+    alias_pairs = [(n, tc) for n in aliases_tc] + [(n, sc) for n in aliases_sc]
+    alias_pairs = [(n, hk) if n == "MingLiU_HKSCS" else (n, fam) for n, fam in alias_pairs]
+
+    def _pairs(family_value=True):
+        out = []
+        for name, fam in alias_pairs:
+            key = '"%s"' % name
+            line = '"%s"="%s"' % (name, fam)
+            out.append((key, line))
+        return out
+
+    user = os.path.join(prefix, "user.reg")
+    system = os.path.join(prefix, "system.reg")
+    info_u = detect(user)
+    info_s = detect(system)
+    if not info_u["exists"] and not info_s["exists"]:
+        print("cjkfonts skip regs=missing need_wineboot=1")
+        sys.exit(3)
+    wrote = []
+    if info_u["exists"] and info_u["valid"] and info_u["text"] is not None:
+        text = ensure_header_and_arch(info_u["text"], "win64")
+        text = _upsert_section(text, "[Software\\\\Wine\\\\Fonts\\\\Replacements]", _pairs())
+        write_utf8(user, text)
+        wrote.append("user.replacements")
+    if info_s["exists"] and info_s["valid"] and info_s["text"] is not None:
+        text = ensure_header_and_arch(info_s["text"], "win64")
+        text = _upsert_section(text, "[Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\FontSubstitutes]", _pairs())
+        font_lines = [
+            ('"Noto Sans CJK TC (TrueType)"', '"Noto Sans CJK TC (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans CJK SC (TrueType)"', '"Noto Sans CJK SC (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans CJK HK (TrueType)"', '"Noto Sans CJK HK (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans CJK JP (TrueType)"', '"Noto Sans CJK JP (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans CJK KR (TrueType)"', '"Noto Sans CJK KR (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans Mono CJK TC (TrueType)"', '"Noto Sans Mono CJK TC (TrueType)"="NotoSansCJK-Regular.ttc"'),
+            ('"Noto Sans Mono CJK SC (TrueType)"', '"Noto Sans Mono CJK SC (TrueType)"="NotoSansCJK-Regular.ttc"'),
+        ]
+        text = _upsert_section(text, "[Software\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\Fonts]", font_lines)
+        write_utf8(system, text)
+        wrote.append("system.substitutes")
+        wrote.append("system.fonts")
+    if not wrote:
+        print("cjkfonts skip regs=invalid")
+        sys.exit(2)
+    print("cjkfonts wrote=%s family=Noto Sans CJK TC aliases=%d ok=1" % (",".join(wrote), len(alias_pairs)))
+    sys.exit(0)
+
+
 def cmd_patch_present_knobs(prefix):
     """0.1.72/74: Wine Direct3D VideoMemorySize/csmt + X11 Driver grab/FS/depth knobs.
     Usage: wine_reg_helper.py patch-present-knobs <prefix>
@@ -520,7 +588,7 @@ def cmd_patch_present_knobs(prefix):
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|inject-exe-assoc|patch-graphics|patch-dll-overrides|patch-present-knobs> <prefix> [native|builtin]")
+        print("usage: wine_reg_helper.py <check|purge-invalid|heal-arch|inject-rpcss|inject-exe-assoc|inject-cjk-fonts|patch-graphics|patch-dll-overrides|patch-present-knobs> <prefix> [native|builtin]")
         sys.exit(1)
     cmd, prefix = sys.argv[1], sys.argv[2]
     {
@@ -532,6 +600,7 @@ def main():
         "patch-graphics": cmd_patch_graphics,
         "patch-dll-overrides": cmd_patch_dll_overrides,
         "patch-present-knobs": cmd_patch_present_knobs,
+        "inject-cjk-fonts": cmd_inject_cjk_fonts,
     }[cmd](prefix)
 
 if __name__ == "__main__":

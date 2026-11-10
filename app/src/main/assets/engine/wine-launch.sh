@@ -14,7 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
   # 0.1.91 K0c: durable APP_LOAD/WINE_START stamps — survive GRAPHICS_BACKEND wipe
   case "$*" in
-    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
+    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
       printf '%s\n' "$*" >> /mnt/data/app-load.stamp 2>/dev/null || true
       ;;
   esac
@@ -296,7 +296,7 @@ path_is_mounted() {
 #   + clear stale .x86-x11-ready on WINE_START; P0-L PutImage/CopyArea/SHM dig + Expose;
 #   P0-M present_black/guestPresented require hwnd!=0; P1-N MAP_WAIT desk=1; P1-O canary=skip pe_amd64.
 # 0.1.116 Dig115: P0-P RENDER/x11_render; P0-Q present App composite; P0-R no HUD after live hwnd; P1-S DIAG_LAST; P1-T surface test. No argv/ladder change.
-WINE_LAUNCH_STAMP=0.1.116
+WINE_LAUNCH_STAMP=0.1.117
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -2706,6 +2706,68 @@ for _svc in svchost.exe plugplay.exe services.exe sc.exe winedevice.exe ntoskrnl
   fi
 done
 log "WINE_PRESTART kernel32=yes ntdll=$([ -f "$WINEPREFIX/drive_c/windows/system32/ntdll.dll" ] && echo yes || echo no) winex11=$([ -f "$WINEPREFIX/drive_c/windows/system32/winex11.drv" ] && echo yes || echo NO) rpcss=$([ -f "$WINEPREFIX/drive_c/windows/system32/rpcss.exe" ] && echo yes || echo NO) mountmgr=$([ -f "$WINEPREFIX/drive_c/windows/system32/drivers/mountmgr.sys" ] && echo yes || echo NO) dlls=$(ls "$WINEPREFIX/drive_c/windows/system32"/*.dll 2>/dev/null | wc -l | tr -d ' ') complete=$(prefix_is_complete "$WINEPREFIX" && echo yes || echo no)"
+
+# 0.1.117 P1-Z: open-source CJK font + fontconfig/Wine substitution (no commercial fonts)
+ensure_cjk_font() {
+  local src="" dest conf_src conf_dst fonts_dir fc_home
+  fonts_dir="$WINEPREFIX/drive_c/windows/Fonts"
+  mkdir -p "$fonts_dir" /usr/share/fonts/opentype/noto /etc/fonts/conf.d /usr/local/share/fonts 2>/dev/null || true
+  mkdir -p "$HOME/.config/fontconfig" 2>/dev/null || true
+  for c in     /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc     /usr/local/share/fonts/NotoSansCJK-Regular.ttc     /usr/local/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
+  do
+    if [ -f "$c" ]; then src="$c"; break; fi
+  done
+  if [ -z "$src" ]; then
+    log "FONT_CJK path=- family=- fallback=fail reason=missing_ttf"
+    return 0
+  fi
+  dest="$fonts_dir/NotoSansCJK-Regular.ttc"
+  if [ ! -f "$dest" ] || [ "$src" -nt "$dest" ]; then
+    cp -f "$src" "$dest" 2>/dev/null || cp -f "$src" "$dest"
+  fi
+  # Keep a copy under the image/rootfs fonts path as well.
+  if [ "$src" != "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc" ]; then
+    cp -f "$src" /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc 2>/dev/null || true
+  fi
+  conf_src=/etc/fonts/conf.d/59-x86-cjk.conf
+  if [ ! -f "$conf_src" ]; then
+    # installer should have dropped it; if not, skip file write of aliases later via helper
+    conf_src=""
+  fi
+  fc_home="$HOME/.config/fontconfig/fonts.conf"
+  if [ -f /etc/fonts/conf.d/59-x86-cjk.conf ]; then
+    cp -f /etc/fonts/conf.d/59-x86-cjk.conf "$fc_home" 2>/dev/null || true
+  fi
+  # Point fontconfig at the system config (aliases live in conf.d). Do not
+  # override FONTCONFIG_FILE with a lone file that would drop other fonts.
+  if [ -d /etc/fonts ]; then
+    export FONTCONFIG_PATH=/etc/fonts
+  fi
+  command -v fc-cache >/dev/null 2>&1 && fc-cache -f >/dev/null 2>&1 || true
+
+  local reg_ok=0
+  if [ -n "${WINEPREFIX:-}" ]; then
+    mkdir -p /mnt/data 2>/dev/null || true
+    set +e
+    wine_reg_helper inject-cjk-fonts > /mnt/data/wine-cjk-font.out 2>&1
+    _cf_rc=$?
+    set -e
+    while read -r line; do log "FONT_CJK_REG $line"; done < /mnt/data/wine-cjk-font.out 2>/dev/null || true
+    if [ "$_cf_rc" = "0" ]; then reg_ok=1; fi
+    unset _cf_rc
+  fi
+  local fc_ok=0
+  if [ -f /etc/fonts/conf.d/59-x86-cjk.conf ] || [ -f "$fc_home" ]; then fc_ok=1; fi
+  if [ -f "$dest" ] && [ "$fc_ok" = "1" ] && [ "$reg_ok" = "1" ]; then
+    log "FONT_CJK path=$dest family=Noto Sans CJK TC fallback=ok"
+  elif [ -f "$dest" ] && [ "$fc_ok" = "1" ]; then
+    log "FONT_CJK path=$dest family=Noto Sans CJK TC fallback=ok reg=pending"
+  else
+    log "FONT_CJK path=${dest:-}- family=Noto Sans CJK TC fallback=fail fc=$fc_ok reg=$reg_ok"
+  fi
+  return 0
+}
+ensure_cjk_font
 
 # Display + driver diagnose before START
 X0_STATE=missing

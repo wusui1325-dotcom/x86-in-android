@@ -44,6 +44,8 @@
     <string name="btn_copy_log">複製 log</string>
     <string name="btn_export_log">匯出完整 log</string>
     <string name="btn_surface_test">測試畫面</string>
+    <string name="btn_input_direct">直接觸控</string>
+    <string name="btn_input_pad">觸控板</string>
     <string name="toast_surface_test">測試圖案 3 秒後還原</string>
     <string name="toast_log_exported">已匯出完整 log</string>
     <string name="toast_log_export_fail">匯出 log 失敗</string>

@@ -8,9 +8,8 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import com.winlator.inputcontrols.ExternalController
 import com.winlator.math.Mathf
-import com.winlator.winhandler.MouseEventFlags
-import com.winlator.winhandler.WinHandler
 import com.winlator.xserver.Pointer
+import com.winlator.xserver.Window
 import com.winlator.xserver.XKeycode
 import com.winlator.xserver.XServer
 import com.wusper.x86.graphics.DesktopLayout
@@ -18,19 +17,30 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * Session Surface → 進程內 X（WinHandler 級，對齊 Winlator TouchpadView）。
+ * Session Surface → 進程內 X.
  *
- * - 相對滑鼠：單指拖曳 → injectPointerMoveDelta／WinHandler.MOVE
- * - 左鍵：輕觸（tap）
- * - 右鍵：雙指輕觸 **或** 長按
- * - 滾輪：雙指垂直滑動；外接滑鼠 AXIS_VSCROLL／HSCROLL 多格強化
- * - 可選手把：gamepad／joystick → 方向鍵／WASD／常用鍵（非完整 dinput UDP）
+ * 0.1.117 default is direct touch (按哪點哪). Never set
+ * [XServer.isRelativeMouseMovement]; always [XServer.injectPointerMove] /
+ * [XServer.injectPointerButtonPress] / [XServer.injectPointerButtonRelease].
+ *
+ * Direct (TOUCHSCREEN):
+ *  - DOWN: move to letterbox-aligned 1280×720 desk, then left down
+ *  - UP: left up
+ *  - single-finger drag: scroll wheel (not cursor / window drag)
+ *  - long-press: right click
+ *
+ * Pad (TOUCHPAD):
+ *  - drag anywhere: relative mouse move
+ *  - single tap: left click at the cursor
+ *  - double tap: start left-button hold; another double tap ends it
+ *  - triple tap: right click
+ *  - two fingers: scroll wheel
  */
 class InProcessXInput(
     private val xServer: XServer,
     private val desktopW: Int = DesktopLayout.WIDTH,
     private val desktopH: Int = DesktopLayout.HEIGHT,
-    var style: Style = Style.TOUCHPAD,
+    var style: Style = Style.TOUCHSCREEN,
 ) {
     enum class Style { TOUCHPAD, TOUCHSCREEN }
 
@@ -38,6 +48,9 @@ class InProcessXInput(
     var blitRect: Rect = Rect(0, 0, desktopW, desktopH)
 
     var sensitivity: Float = 1.25f
+
+    /** Optional stamp sink (main thread). Format: INPUT_TOUCH action=… */
+    var onStamp: ((String) -> Unit)? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val fingers = arrayOfNulls<Finger>(MAX_FINGERS)
@@ -48,13 +61,56 @@ class InProcessXInput(
     private var fingerRight: Finger? = null
     private var longPressFinger: Finger? = null
     private var longPressFired = false
+    private var dragConvertedToWheel = false
     private val padHeld = HashSet<Int>()
+
+    // Pad multi-tap
+    private var padTapCount = 0
+    private var padTapArmed = false
+    private var padLeftHeld = false
+
+    private var lastDispatchKey = 0L
 
     private val longPressRunnable = Runnable {
         val f = longPressFinger ?: return@Runnable
+        if (style != Style.TOUCHSCREEN) return@Runnable
         if (numFingers == 1 && !longPressFired && f.travelDistance() < MAX_TAP_TRAVEL) {
             longPressFired = true
+            releaseLeftImmediate()
             pressRight(f)
+            stamp("down", f.viewX, f.viewY, "right")
+        }
+    }
+
+    private val padTapCommit = Runnable {
+        if (!padTapArmed) return@Runnable
+        val count = padTapCount
+        padTapArmed = false
+        padTapCount = 0
+        when (count) {
+            1 -> {
+                if (!padLeftHeld) {
+                    clickLeftAtCursor()
+                    stampCursor("down", "left")
+                    stampCursor("up", "left")
+                }
+            }
+            2 -> {
+                if (!padLeftHeld) {
+                    injectLeftDown()
+                    padLeftHeld = true
+                    stampCursor("down", "left")
+                } else {
+                    injectLeftUp()
+                    padLeftHeld = false
+                    stampCursor("up", "left")
+                }
+            }
+            else -> if (count >= 3) {
+                clickRightAtCursor()
+                stampCursor("down", "right")
+                stampCursor("up", "right")
+            }
         }
     }
 
@@ -64,6 +120,7 @@ class InProcessXInput(
     }
 
     fun onTouch(event: MotionEvent): Boolean {
+        if (isDuplicateDispatch(event)) return true
         if (event.isFromSource(InputDevice.SOURCE_MOUSE)) {
             return onExternalMouseTouch(event)
         }
@@ -77,18 +134,28 @@ class InProcessXInput(
                 val f = Finger(event.getX(actionIndex), event.getY(actionIndex))
                 fingers[pointerId] = f
                 numFingers++
-                if (style == Style.TOUCHSCREEN && numFingers == 1) {
+                if (style == Style.TOUCHSCREEN && event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    dragConvertedToWheel = false
+                    longPressFired = false
                     val mapped = mapDesktop(f.viewX, f.viewY)
                     if (mapped != null) {
                         xServer.injectPointerMove(mapped.first, mapped.second)
                         pressLeft(f)
                     }
-                } else if (numFingers == 1 && style == Style.TOUCHPAD) {
+                    longPressFinger = f
+                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    stamp("down", f.viewX, f.viewY, "left")
+                } else if (style == Style.TOUCHPAD && event.actionMasked == MotionEvent.ACTION_DOWN) {
                     longPressFinger = f
                     longPressFired = false
-                    handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
+                    // do not move cursor to the finger — pad clicks land at the cursor
                 } else {
                     cancelLongPressKeepRight()
+                    if (style == Style.TOUCHSCREEN && numFingers >= 2) {
+                        // Second finger: cancel left so we don't drag the window; scroll instead.
+                        releaseLeftImmediate()
+                        dragConvertedToWheel = true
+                    }
                 }
             }
             MotionEvent.ACTION_MOVE -> {
@@ -117,15 +184,20 @@ class InProcessXInput(
                     cancelLongPressKeepRight()
                     scrolling = false
                     scrollAccumY = 0f
+                    dragConvertedToWheel = false
                 }
             }
             MotionEvent.ACTION_CANCEL -> {
                 cancelLongPressKeepRight()
-                releaseLeft()
-                releaseRight()
+                releaseLeftImmediate()
+                releaseRightImmediate()
                 for (i in 0 until MAX_FINGERS) fingers[i] = null
                 numFingers = 0
                 scrolling = false
+                dragConvertedToWheel = false
+                padTapArmed = false
+                padTapCount = 0
+                handler.removeCallbacks(padTapCommit)
             }
         }
         return true
@@ -148,6 +220,7 @@ class InProcessXInput(
                     event.getAxisValue(MotionEvent.AXIS_VSCROLL),
                     event.getAxisValue(MotionEvent.AXIS_HSCROLL),
                 )
+                if (mapped != null) stamp("move", event.x, event.y, "wheel")
                 true
             }
             MotionEvent.ACTION_BUTTON_PRESS -> {
@@ -176,11 +249,15 @@ class InProcessXInput(
 
     fun shutdown() {
         handler.removeCallbacks(longPressRunnable)
+        handler.removeCallbacks(padTapCommit)
         longPressFinger = null
-        releaseLeft()
-        releaseRight()
+        releaseLeftImmediate()
+        releaseRightImmediate()
         for (i in 0 until MAX_FINGERS) fingers[i] = null
         numFingers = 0
+        padLeftHeld = false
+        padTapArmed = false
+        padTapCount = 0
         for (token in padHeld.toList()) {
             val key = tokenToKey(token) ?: continue
             try { xServer.injectKeyRelease(key) } catch (_: Throwable) {}
@@ -194,6 +271,12 @@ class InProcessXInput(
         if (longPressFinger === finger && finger.travelDistance() >= MAX_TAP_TRAVEL) {
             cancelLongPressKeepRight()
         }
+
+        if (style == Style.TOUCHSCREEN) {
+            handleDirectMove(finger)
+            return
+        }
+
         var skipMove = false
         val finger2 = if (numFingers == 2) findSecond(finger) else null
         if (finger2 != null) {
@@ -206,126 +289,164 @@ class InProcessXInput(
                 scrollAccumY += ((finger.y + finger2.y) * 0.5f) -
                     ((finger.lastY + finger2.lastY) * 0.5f)
                 when {
-                    scrollAccumY < -100f -> {
+                    scrollAccumY < -WHEEL_STEP -> {
                         clickScroll(Pointer.Button.BUTTON_SCROLL_DOWN)
+                        stamp("move", finger.viewX, finger.viewY, "wheel")
                         scrollAccumY = 0f
                     }
-                    scrollAccumY > 100f -> {
+                    scrollAccumY > WHEEL_STEP -> {
                         clickScroll(Pointer.Button.BUTTON_SCROLL_UP)
+                        stamp("move", finger.viewX, finger.viewY, "wheel")
                         scrollAccumY = 0f
                     }
                 }
                 scrolling = true
-            } else if (
-                dist >= MAX_TWO_FINGER_SCROLL_DIST &&
-                !xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT) &&
-                finger2.travelDistance() < MAX_TAP_TRAVEL
-            ) {
-                pressLeft(finger)
-                skipMove = true
             }
         }
 
-        if (!scrolling && numFingers <= 2 && !skipMove) {
-            when (style) {
-                Style.TOUCHSCREEN -> {
-                    if (numFingers == 1) {
-                        val mapped = mapDesktop(finger.viewX, finger.viewY) ?: return
-                        xServer.injectPointerMove(mapped.first, mapped.second)
-                    }
-                }
-                Style.TOUCHPAD -> {
-                    val dx = finger.deltaX(sensitivity)
-                    val dy = finger.deltaY(sensitivity)
-                    if (dx != 0 || dy != 0) moveRelative(dx, dy)
+        if (!scrolling && numFingers == 1 && !skipMove) {
+            val dx = finger.deltaX(sensitivity)
+            val dy = finger.deltaY(sensitivity)
+            if (dx != 0 || dy != 0) {
+                moveRelative(dx, dy)
+                if (abs(dx) + abs(dy) >= MOVE_STAMP_MIN) {
+                    stamp("move", finger.viewX, finger.viewY, "")
                 }
             }
         }
+    }
+
+    private fun handleDirectMove(finger: Finger) {
+        if (numFingers >= 2) {
+            val finger2 = findSecond(finger) ?: return
+            scrollAccumY += ((finger.y + finger2.y) * 0.5f) -
+                ((finger.lastY + finger2.lastY) * 0.5f)
+            drainWheel(finger)
+            return
+        }
+        if (numFingers != 1) return
+        if (finger.travelDistance() < MAX_TAP_TRAVEL) return
+        // Drag must not move the cursor or drag the window.
+        if (!dragConvertedToWheel) {
+            releaseLeftImmediate()
+            dragConvertedToWheel = true
+            cancelLongPressKeepRight()
+        }
+        scrollAccumY += (finger.y - finger.lastY).toFloat()
+        drainWheel(finger)
+    }
+
+    private fun drainWheel(finger: Finger) {
+        while (scrollAccumY <= -WHEEL_STEP) {
+            clickScroll(Pointer.Button.BUTTON_SCROLL_DOWN)
+            stamp("move", finger.viewX, finger.viewY, "wheel")
+            scrollAccumY += WHEEL_STEP
+        }
+        while (scrollAccumY >= WHEEL_STEP) {
+            clickScroll(Pointer.Button.BUTTON_SCROLL_UP)
+            stamp("move", finger.viewX, finger.viewY, "wheel")
+            scrollAccumY -= WHEEL_STEP
+        }
+        scrolling = true
     }
 
     private fun handleFingerUp(finger: Finger) {
-        when (numFingers) {
-            1 -> {
-                if (style == Style.TOUCHPAD && !longPressFired && finger.isTap()) {
-                    pressLeft(finger)
+        when (style) {
+            Style.TOUCHSCREEN -> {
+                val btn = when {
+                    longPressFired -> "right"
+                    dragConvertedToWheel -> "wheel"
+                    else -> "left"
                 }
+                if (longPressFired) {
+                    releaseRightImmediate()
+                } else if (!dragConvertedToWheel) {
+                    releaseLeftImmediate()
+                } else {
+                    releaseLeftImmediate()
+                }
+                stamp("up", finger.viewX, finger.viewY, btn)
             }
-            2 -> {
-                val other = findSecond(finger)
-                if (other != null && finger.isTap()) {
-                    pressRight(finger)
+            Style.TOUCHPAD -> {
+                if (numFingers == 1 && !scrolling && finger.isTap()) {
+                    notePadTap()
                 }
+                // two-finger is wheel only; do not treat two-finger tap as right click
             }
         }
-        releaseLeft(finger)
-        releaseRight(finger)
+        if (fingerLeft === finger) fingerLeft = null
+        if (fingerRight === finger) {
+            releaseRightImmediate()
+        }
         if (longPressFinger === finger) cancelLongPressKeepRight()
     }
 
-    private fun moveRelative(dx: Int, dy: Int) {
-        if (xServer.isRelativeMouseMovement) {
-            val wh: WinHandler? = xServer.winHandler
-            wh?.mouseEvent(MouseEventFlags.MOVE, dx, dy, 0)
-                ?: xServer.injectPointerMoveDelta(dx, dy)
-        } else {
-            xServer.injectPointerMoveDelta(dx, dy)
+    private fun notePadTap() {
+        handler.removeCallbacks(padTapCommit)
+        padTapCount += 1
+        if (padTapCount >= 3) {
+            padTapArmed = false
+            padTapCount = 0
+            clickRightAtCursor()
+            stampCursor("down", "right")
+            stampCursor("up", "right")
+            return
         }
+        padTapArmed = true
+        handler.postDelayed(padTapCommit, PAD_MULTI_TAP_MS)
+    }
+
+    private fun moveRelative(dx: Int, dy: Int) {
+        // P1-Y: never WinHandler.mouseEvent / isRelativeMouseMovement.
+        xServer.injectPointerMoveDelta(dx, dy)
     }
 
     private fun pressLeft(finger: Finger) {
         if (xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT)) return
-        if (xServer.isRelativeMouseMovement) {
-            xServer.winHandler?.mouseEvent(MouseEventFlags.LEFTDOWN, 0, 0, 0)
-                ?: xServer.injectPointerButtonPress(Pointer.Button.BUTTON_LEFT)
-        } else {
-            xServer.injectPointerButtonPress(Pointer.Button.BUTTON_LEFT)
-        }
+        xServer.injectPointerButtonPress(Pointer.Button.BUTTON_LEFT)
         fingerLeft = finger
     }
 
     private fun pressRight(finger: Finger) {
         if (xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_RIGHT)) return
-        if (xServer.isRelativeMouseMovement) {
-            xServer.winHandler?.mouseEvent(MouseEventFlags.RIGHTDOWN, 0, 0, 0)
-                ?: xServer.injectPointerButtonPress(Pointer.Button.BUTTON_RIGHT)
-        } else {
-            xServer.injectPointerButtonPress(Pointer.Button.BUTTON_RIGHT)
-        }
+        xServer.injectPointerButtonPress(Pointer.Button.BUTTON_RIGHT)
         fingerRight = finger
     }
 
-    private fun releaseLeft(finger: Finger? = fingerLeft) {
-        if (finger == null || finger !== fingerLeft) return
-        if (!xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT)) {
-            fingerLeft = null
-            return
+    private fun releaseLeftImmediate() {
+        fingerLeft = null
+        if (xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT)) {
+            xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_LEFT)
         }
-        handler.postDelayed({
-            if (xServer.isRelativeMouseMovement) {
-                xServer.winHandler?.mouseEvent(MouseEventFlags.LEFTUP, 0, 0, 0)
-                    ?: xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_LEFT)
-            } else {
-                xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_LEFT)
-            }
-            if (fingerLeft === finger) fingerLeft = null
-        }, 30)
     }
 
-    private fun releaseRight(finger: Finger? = fingerRight) {
-        if (finger == null || finger !== fingerRight) return
-        if (!xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_RIGHT)) {
-            fingerRight = null
-            return
+    private fun releaseRightImmediate() {
+        fingerRight = null
+        if (xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_RIGHT)) {
+            xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_RIGHT)
         }
-        handler.postDelayed({
-            if (xServer.isRelativeMouseMovement) {
-                xServer.winHandler?.mouseEvent(MouseEventFlags.RIGHTUP, 0, 0, 0)
-                    ?: xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_RIGHT)
-            } else {
-                xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_RIGHT)
-            }
-            if (fingerRight === finger) fingerRight = null
-        }, 30)
+    }
+
+    private fun injectLeftDown() {
+        if (!xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT)) {
+            xServer.injectPointerButtonPress(Pointer.Button.BUTTON_LEFT)
+        }
+    }
+
+    private fun injectLeftUp() {
+        if (xServer.pointer.isButtonPressed(Pointer.Button.BUTTON_LEFT)) {
+            xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_LEFT)
+        }
+    }
+
+    private fun clickLeftAtCursor() {
+        xServer.injectPointerButtonPress(Pointer.Button.BUTTON_LEFT)
+        xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_LEFT)
+    }
+
+    private fun clickRightAtCursor() {
+        xServer.injectPointerButtonPress(Pointer.Button.BUTTON_RIGHT)
+        xServer.injectPointerButtonRelease(Pointer.Button.BUTTON_RIGHT)
     }
 
     private fun clickScroll(btn: Pointer.Button) {
@@ -510,7 +631,54 @@ class InProcessXInput(
     private fun cancelLongPressKeepRight() {
         handler.removeCallbacks(longPressRunnable)
         longPressFinger = null
-        // longPressFired 保留至 finger up 以免誤觸左鍵 tap
+    }
+
+    private fun styleTag(): String = if (style == Style.TOUCHPAD) "pad" else "direct"
+
+    private fun hwndAt(deskX: Int, deskY: Int): Long {
+        return try {
+            val w: Window? = xServer.windowManager.findPointWindow(
+                deskX.toShort(),
+                deskY.toShort(),
+            )
+            w?.getHandleOrXid() ?: 0L
+        } catch (_: Throwable) {
+            0L
+        }
+    }
+
+    private fun stamp(action: String, viewX: Float, viewY: Float, btn: String) {
+        val mapped = mapDesktop(viewX, viewY)
+        val dx = mapped?.first ?: -1
+        val dy = mapped?.second ?: -1
+        val hwnd = if (dx >= 0) hwndAt(dx, dy) else 0L
+        val btnPart = if (btn.isEmpty()) "" else " btn=$btn"
+        onStamp?.invoke(
+            "INPUT_TOUCH action=$action style=${styleTag()} " +
+                "view=${viewX.toInt()},${viewY.toInt()} desk=$dx,$dy " +
+                "hwnd=0x${java.lang.Long.toHexString(hwnd)}$btnPart",
+        )
+    }
+
+    private fun stampCursor(action: String, btn: String) {
+        val dx = xServer.pointer.clampedX.toInt()
+        val dy = xServer.pointer.clampedY.toInt()
+        val hwnd = hwndAt(dx, dy)
+        onStamp?.invoke(
+            "INPUT_TOUCH action=$action style=${styleTag()} " +
+                "view=-1,-1 desk=$dx,$dy hwnd=0x${java.lang.Long.toHexString(hwnd)} btn=$btn",
+        )
+    }
+
+    private fun isDuplicateDispatch(event: MotionEvent): Boolean {
+        val key = (event.eventTime shl 16) xor
+            (event.action.toLong() shl 8) xor
+            event.pointerCount.toLong() xor
+            event.x.toRawBits().toLong() xor
+            (event.y.toRawBits().toLong() shl 32)
+        if (key == lastDispatchKey) return true
+        lastDispatchKey = key
+        return false
     }
 
     private inner class Finger(viewX0: Float, viewY0: Float) {
@@ -564,11 +732,9 @@ class InProcessXInput(
             hypot((x - startX).toDouble(), (y - startY).toDouble()).toFloat()
 
         private fun transform(vx: Float, vy: Float): Pair<Int, Int> {
-            // 觸控板座標：相對桌面比例（對齊 letterbox）
             val mapped = DesktopLayout.viewToDesktop(vx, vy, blitRect, desktopW, desktopH)
             return if (mapped != null) mapped
             else {
-                // 落在 letterbox 外：仍用線性比例，供 delta 計算
                 val bw = blitRect.width().coerceAtLeast(1)
                 val bh = blitRect.height().coerceAtLeast(1)
                 val nx = ((vx - blitRect.left) / bw * desktopW).toInt()
@@ -581,9 +747,12 @@ class InProcessXInput(
     companion object {
         private const val MAX_FINGERS = 4
         private const val MAX_TAP_TRAVEL = 10f
-        private const val MAX_TAP_MS = 200L
+        private const val MAX_TAP_MS = 250L
         private const val MAX_TWO_FINGER_SCROLL_DIST = 350f
         private const val LONG_PRESS_MS = 450L
+        private const val PAD_MULTI_TAP_MS = 320L
+        private const val WHEEL_STEP = 48f
+        private const val MOVE_STAMP_MIN = 8
         private const val CURSOR_ACCEL = 1.5f
         private const val CURSOR_ACCEL_THRESHOLD = 6
         private const val DEAD = 0.35f

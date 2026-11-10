@@ -133,6 +133,10 @@ android {
         compose = true
         buildConfig = true
     }
+    androidResources {
+        // Keep the 19MB Noto CJK TTC streamable via AssetManager.openFd
+        noCompress += listOf("ttc", "otf", "ttf")
+    }
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

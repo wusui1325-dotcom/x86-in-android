@@ -99,3 +99,12 @@
 - 授權：**LGPL-2.1**（隨 Winlator；見 `third_party/winlator/LICENSE`）
 - 宿主播放：**AAudio**（Android NDK；非 AudioTrack）；native：`app/src/main/cpp/aaudio/`
 - 客體 plugin asset：`engine/audio/alsa-lib/libasound_module_pcm_android_aserver.so`（自 Winlator rootfs_patches 抽取）
+
+## Noto Sans CJK (0.1.117)
+
+- 來源：https://github.com/notofonts/noto-cjk （`NotoSansCJK-Regular.ttc`）
+- 授權：**SIL Open Font License 1.1**
+- 用途：Wine／WinRAR CJK 字形（先繁體 `Noto Sans CJK TC`，簡體 `Noto Sans CJK SC` 同包）
+- 路徑：APK `assets/engine/fonts/` → rootfs `/usr/share/fonts/opentype/noto/` 與 `$WINEPREFIX/drive_c/windows/Fonts/`；fontconfig `59-x86-cjk.conf` ＋ Wine FontSubstitutes／Fonts\\Replacements（SimSun、Microsoft YaHei、微軟正黑體 等）
+- **未**打包商業／專有字型（無 MingLiU／微軟正黑體原版／SimSun 原版）
+

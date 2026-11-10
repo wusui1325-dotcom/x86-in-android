@@ -441,7 +441,38 @@ object ComponentInstaller {
         scriptStamp.writeText("$want\n")
         File(rootfs, "usr/bin/Xvfb").let { if (it.exists()) ExecBits.force(it) }
         File(rootfs, "usr/bin/xdotool").let { if (it.exists()) ExecBits.force(it) }
+        ensureCjkFont(ctx, rootfs)
         ensureInputAgent(ctx)
+    }
+
+    /** 0.1.117 P1-Z: open-source Noto Sans CJK into imagefs/rootfs + fontconfig aliases. */
+    fun ensureCjkFont(ctx: Context, rootfs: File) {
+        runCatching {
+            val fontDest = File(rootfs, "usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc")
+            fontDest.parentFile?.mkdirs()
+            copyAsset(ctx, "engine/fonts/NotoSansCJK-Regular.ttc", fontDest, executable = false)
+            val confDest = File(rootfs, "etc/fonts/conf.d/59-x86-cjk.conf")
+            confDest.parentFile?.mkdirs()
+            copyAsset(ctx, "engine/fonts/59-x86-cjk.conf", confDest, executable = false)
+            val notice = File(rootfs, "usr/share/doc/fonts-noto-cjk/NOTICE")
+            notice.parentFile?.mkdirs()
+            runCatching { copyAsset(ctx, "engine/fonts/NOTICE", notice, executable = false) }
+            // Also drop a copy under imagefs so the host-side tree has the font.
+            val imageFs = File(ctx.filesDir, "engine/imagefs/usr/share/fonts/opentype/noto")
+            imageFs.mkdirs()
+            val imageFont = File(imageFs, "NotoSansCJK-Regular.ttc")
+            if (!imageFont.exists() || imageFont.length() != fontDest.length()) {
+                fontDest.inputStream().use { inp ->
+                    imageFont.outputStream().use { out -> inp.copyTo(out) }
+                }
+            }
+            android.util.Log.i(
+                "ComponentInstaller",
+                "FONT_CJK installed path=${fontDest.absolutePath} size=${fontDest.length()}",
+            )
+        }.onFailure {
+            android.util.Log.w("ComponentInstaller", "FONT_CJK install failed: $it")
+        }
     }
 
     fun ensureInputAgent(ctx: Context) {

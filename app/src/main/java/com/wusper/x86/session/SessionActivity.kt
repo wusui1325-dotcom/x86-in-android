@@ -71,6 +71,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.pointerInteropFilter
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import com.wusper.x86.WorkspaceStore
@@ -96,7 +98,7 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicReference
 
 class SessionActivity : ComponentActivity() {
-    @OptIn(ExperimentalMaterial3Api::class)
+    @OptIn(ExperimentalMaterial3Api::class, ExperimentalComposeUiApi::class)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -128,6 +130,7 @@ class SessionActivity : ComponentActivity() {
                 var logExpanded by remember { mutableStateOf(false) }
                 // 0.1.106: user hide must win — never let !running force-open log over Present
                 var logForceHidden by remember { mutableStateOf(false) }
+                var inputStyleDirect by remember { mutableStateOf(true) }
                 fun annotatedLog(src: String) = buildAnnotatedString {
                     if (src.isEmpty()) { append(""); return@buildAnnotatedString }
                     val lower = src.lowercase()
@@ -738,10 +741,16 @@ class SessionActivity : ComponentActivity() {
                         appendSticky("音訊：ALSA→AAudio socket=${audio.socketPath()}")
                         val xs = x.xServer
                         if (xs != null) {
-                            val xin = InProcessXInput(xs)
-                            xin.updateBlitFromSurface(1280, 720)
+                            val xin = InProcessXInput(xs, style = InProcessXInput.Style.TOUCHSCREEN)
+                            xin.onStamp = { line -> appendSticky(line) }
+                            val holder = surfaceHolderRef.get()
+                            val sw = holder?.surfaceFrame?.width() ?: 0
+                            val sh = holder?.surfaceFrame?.height() ?: 0
+                            if (sw > 0 && sh > 0) xin.updateBlitFromSurface(sw, sh)
+                            else xin.updateBlitFromSurface(1280, 720)
                             inProcessInputRef.set(xin)
-                            appendSticky("輸入橋：WinHandler 級（相對滑鼠／雙指右鍵／長按右鍵／滾輪／可選手把）")
+                            x.getFramePump()?.setCursorOverlayEnabled(false)
+                            appendSticky("輸入橋：預設直接觸控（按哪點哪／拖=滾輪／長按=右鍵；頂欄可切觸控板）")
                         }
                         appendSticky("InProcessX imagefs=${x.imageFsRoot.absolutePath}")
                     }
@@ -1154,6 +1163,32 @@ class SessionActivity : ComponentActivity() {
                             },
                             actions = {
                                 TextButton(
+                                    onClick = {
+                                        val next = !inputStyleDirect
+                                        inputStyleDirect = next
+                                        val xin = inProcessInputRef.get()
+                                        if (xin != null) {
+                                            xin.style = if (next) {
+                                                InProcessXInput.Style.TOUCHSCREEN
+                                            } else {
+                                                InProcessXInput.Style.TOUCHPAD
+                                            }
+                                        }
+                                        inProcessX?.getFramePump()?.setCursorOverlayEnabled(!next)
+                                        appendSticky(
+                                            if (next) "INPUT_STYLE style=direct"
+                                            else "INPUT_STYLE style=pad cursor=on",
+                                        )
+                                    },
+                                ) {
+                                    Text(
+                                        getString(
+                                            if (inputStyleDirect) com.wusper.x86.R.string.btn_input_direct
+                                            else com.wusper.x86.R.string.btn_input_pad,
+                                        ),
+                                    )
+                                }
+                                TextButton(
                                     onClick = { runSurfaceTest() },
                                     enabled = !surfaceTestBusy,
                                 ) {
@@ -1248,7 +1283,23 @@ class SessionActivity : ComponentActivity() {
                                         }
                                     }
                                 },
-                                modifier = Modifier.fillMaxSize(),
+                                update = { view ->
+                                    // P1-X: rebind letterbox on size change (e.g. log collapse)
+                                    if (view.width > 0 && view.height > 0) {
+                                        inProcessInputRef.get()?.updateBlitFromSurface(view.width, view.height)
+                                        inputBridgeRef.get()?.blitRect =
+                                            com.wusper.x86.graphics.DesktopLayout.fitRect(
+                                                1280, 720, view.width, view.height,
+                                            )
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .pointerInteropFilter { ev ->
+                                        inProcessInputRef.get()?.onTouch(ev)
+                                            ?: inputBridgeRef.get()?.onTouch(ev)
+                                            ?: false
+                                    },
                             )
                             // 0.1.106: wine-init from log stamps (status lines no longer start with 正在初始化/RpcSs)
                             val wineInitPhase = (("WINEBOOT_INIT" in logText || "RPCSS_PRESTART" in logText) &&
@@ -1607,6 +1658,9 @@ class SessionActivity : ComponentActivity() {
             "PRESENT_DIAG_LAST",
             "SURFACE_SHOT",
             "SURFACE_TEST",
+            "INPUT_TOUCH",
+            "INPUT_STYLE",
+            "FONT_CJK",
             "x11_render",
             "guestPresented",
             "stub-fallback",

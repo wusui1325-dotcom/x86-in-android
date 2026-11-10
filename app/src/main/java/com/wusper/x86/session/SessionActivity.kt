@@ -758,6 +758,7 @@ class SessionActivity : ComponentActivity() {
                             inProcessInputRef.set(xin)
                             x.getFramePump()?.setCursorOverlayEnabled(false)
                             appendSticky("輸入橋：預設直接觸控（按哪點哪／拖=滾輪／長按=右鍵；頂欄可切觸控板）")
+                            appendSticky("INPUT_STYLE style=direct cursor=off")
                         }
                         appendSticky("InProcessX imagefs=${x.imageFsRoot.absolutePath}")
                         ws?.let { w -> runCatching { appendSticky(com.wusper.x86.WorkspaceApps.stampLine(w)) } }
@@ -1673,6 +1674,8 @@ class SessionActivity : ComponentActivity() {
             "THEME_LIGHT",
             "WS_APPS",
             "WS_LAUNCH",
+            "COMCTL32",
+            "SXS_COMCTL",
             "x11_render",
             "guestPresented",
             "stub-fallback",

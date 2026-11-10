@@ -14,7 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
   # 0.1.91 K0c: durable APP_LOAD/WINE_START stamps — survive GRAPHICS_BACKEND wipe
   case "$*" in
-    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|WS_LAUNCH*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
+    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|WS_LAUNCH*|COMCTL32*|SXS_COMCTL*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
       printf '%s\n' "$*" >> /mnt/data/app-load.stamp 2>/dev/null || true
       ;;
   esac
@@ -300,8 +300,16 @@ path_is_mounted() {
 #   P0-B skip WINE_PE_SMOKE + 225MB seed recopy + post-gate sleep when prefix already ready.
 #   P1 seed dedup; Uninstall-registry apps stamped/labelled installed. KEEP 116/117/118.
 # 0.1.116 Dig115: P0-P RENDER/x11_render; P0-Q present App composite; P0-R no HUD after live hwnd; P1-S DIAG_LAST; P1-T surface test. No argv/ladder change.
-WINE_LAUNCH_STAMP=0.1.119
+# 0.1.120 Dig119: P0-A seed Wine builtin comctl32 v6 into winsxs (Electron SxS path;
+#   system32 comctl32 is not enough). P0-B live App HWND / Present follows Grok Bot.
+#   P1: ELECTRON_DISABLE_SANDBOX=1 (defense). KEEP 119 in-place / smoke skip, 116–118.
+#   No Microsoft official comctl32. No APP_LOAD rewrite. No 藍屏 / explorer-desktop.
+WINE_LAUNCH_STAMP=0.1.120
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
+# 0.1.120 P1: Electron looked up electron_disable_sandbox (unset in 119). Defense
+# only — not the proven COMCTL32 root cause. Inherited by in-place Grok Bot.exe.
+export ELECTRON_DISABLE_SANDBOX=1
+export electron_disable_sandbox=1
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
 : > /mnt/data/app-load.stamp
@@ -1364,6 +1372,168 @@ ensure_wow64_seed() {
 
 # 0.1.112 P0-C: NSIS StdUtils/nsDialogs need syswow64 crypt32 + comdlg32 (Dig111 c0000135).
 # 0.1.114 P0-E Dig113: crypt32 imports ncrypt — missing ncrypt → CRYPT32 fail → StdUtils fail → no App HWND.
+
+# 0.1.120: Electron (and other manifest-aware apps) load comctl32 v6 via
+# winsxs, not system32\comctl32.dll. Dig 0.1.119: find_dll_file resolved
+#   C:\windows\winsxs\amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef\COMCTL32.dll
+# then load_dll status=c0000135 — path was computed, file was not mappable.
+# Seed Wine builtin comctl32_v6.dll (PE version 6.0.2600.2982 + embedded
+# Microsoft.Windows.Common-Controls manifest) as COMCTL32.dll into that
+# exact assembly dir, plus x86 / 6.0.0.0 adjacent names, winsxs manifests,
+# and a 6.0.0.0→6.0.2600.2982 publisher policy. Also drop comctl32_v6.dll
+# into system32/syswow64 (wine.inf FakeDlls). Never bundle Microsoft official
+# comctl32. Idempotent; called from ensure_prefix_exec on every launch
+# (already-init prefixes skip wineboot but still need the files).
+_sxs_pe_ok() {
+  _sxs_sz=0
+  _sxs_mz=no
+  [ -f "$1" ] || return 1
+  _sxs_sz=$(wc -c < "$1" 2>/dev/null | tr -d ' ')
+  _sxs_sz=${_sxs_sz:-0}
+  [ "$_sxs_sz" -gt 64 ] || return 1
+  _sxs_magic=$(dd if="$1" bs=1 count=2 2>/dev/null || true)
+  if [ "$_sxs_magic" = "MZ" ]; then
+    _sxs_mz=yes
+    return 0
+  fi
+  return 1
+}
+
+_sxs_write_assembly_manifest() {
+  # $1=out $2=arch $3=version $4=token
+  printf '%s\n' \
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' \
+    '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">' \
+    "  <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" version=\"$3\" processorArchitecture=\"$2\" publicKeyToken=\"$4\"/>" \
+    '  <file name="COMCTL32.dll"/>' \
+    '</assembly>' > "$1" || return 1
+}
+
+_sxs_write_policy_manifest() {
+  # $1=out $2=arch $3=version $4=token
+  printf '%s\n' \
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' \
+    '<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">' \
+    "  <assemblyIdentity type=\"win32-policy\" name=\"policy.6.0.Microsoft.Windows.Common-Controls\" version=\"$3\" processorArchitecture=\"$2\" publicKeyToken=\"$4\"/>" \
+    '  <dependency>' \
+    '    <dependentAssembly>' \
+    "      <assemblyIdentity type=\"win32\" name=\"Microsoft.Windows.Common-Controls\" processorArchitecture=\"$2\" publicKeyToken=\"$4\"/>" \
+    "      <bindingRedirect oldVersion=\"6.0.0.0-$3\" newVersion=\"$3\"/>" \
+    '    </dependentAssembly>' \
+    '  </dependency>' \
+    '</assembly>' > "$1" || return 1
+}
+
+_sxs_seed_asm() {
+  # $1=arch (amd64|x86) $2=version $3=src_pe $4=winsxs $5=token
+  _sa_arch="$1"
+  _sa_ver="$2"
+  _sa_src="$3"
+  _sa_winsxs="$4"
+  _sa_tok="$5"
+  _sa_leaf="${_sa_arch}_microsoft.windows.common-controls_${_sa_tok}_${_sa_ver}_none_deadbeef"
+  _sa_dir="$_sa_winsxs/$_sa_leaf"
+  mkdir -p "$_sa_dir" 2>/dev/null || true
+  if ! cp -f "$_sa_src" "$_sa_dir/COMCTL32.dll" 2>/dev/null; then
+    printf '%s\n' "$_sa_leaf:cp_fail"
+    unset _sa_arch _sa_ver _sa_src _sa_winsxs _sa_tok _sa_leaf _sa_dir
+    return 1
+  fi
+  chmod a+r "$_sa_dir/COMCTL32.dll" 2>/dev/null || true
+  # Case-sensitive prefix: manifest file name is comctl32.dll; find_dll_file used COMCTL32.dll
+  if [ ! -f "$_sa_dir/comctl32.dll" ]; then
+    ln "$_sa_dir/COMCTL32.dll" "$_sa_dir/comctl32.dll" 2>/dev/null \
+      || cp -f "$_sa_dir/COMCTL32.dll" "$_sa_dir/comctl32.dll" 2>/dev/null \
+      || true
+  fi
+  if ! _sxs_pe_ok "$_sa_dir/COMCTL32.dll"; then
+    printf '%s\n' "$_sa_leaf:not_mappable"
+    unset _sa_arch _sa_ver _sa_src _sa_winsxs _sa_tok _sa_leaf _sa_dir
+    return 1
+  fi
+  _sxs_write_assembly_manifest "$_sa_winsxs/manifests/${_sa_leaf}.manifest" "$_sa_arch" "$_sa_ver" "$_sa_tok" || true
+  _sxs_write_policy_manifest "$_sa_winsxs/manifests/${_sa_arch}_policy.6.0.microsoft.windows.common-controls_${_sa_tok}_${_sa_ver}_none_deadbeef.manifest" "$_sa_arch" "$_sa_ver" "$_sa_tok" || true
+  mkdir -p "$_sa_winsxs/policies/${_sa_arch}_policy.6.0.microsoft.windows.common-controls_${_sa_tok}_none_deadbeef" 2>/dev/null || true
+  _sxs_write_policy_manifest "$_sa_winsxs/policies/${_sa_arch}_policy.6.0.microsoft.windows.common-controls_${_sa_tok}_none_deadbeef/${_sa_ver}.policy" "$_sa_arch" "$_sa_ver" "$_sa_tok" || true
+  chmod a+r "$_sa_winsxs/manifests/${_sa_leaf}.manifest" 2>/dev/null || true
+  printf '%s\n' "ok"
+  unset _sa_arch _sa_ver _sa_src _sa_winsxs _sa_tok _sa_leaf _sa_dir
+  return 0
+}
+
+ensure_sxs_comctl32() {
+  local pe64=/opt/wine/lib/wine/x86_64-windows
+  local pe32=/opt/wine/lib/wine/i386-windows
+  local win="${WINEPREFIX:-/home/xuser/.wine}/drive_c/windows"
+  local winsxs="$win/winsxs"
+  local sys32="$win/system32"
+  local wow64="$win/syswow64"
+  local ver="6.0.2600.2982"
+  local tok="6595b64144ccf1df"
+  local src64="" src32="" src64name="" src32name=""
+  local miss="" amd64_st="" x86_st="" sys_st=no wow_st=no
+  local primary="$winsxs/amd64_microsoft.windows.common-controls_${tok}_${ver}_none_deadbeef/COMCTL32.dll"
+  mkdir -p "$winsxs/manifests" "$winsxs/policies" "$sys32" "$wow64" 2>/dev/null || true
+
+  # Prefer Wine's SxS v6 builtin (version 6.0.2600.2982). Fall back to the
+  # system32-seeded comctl32.dll builtin if the v6 PE is missing from this runtime.
+  if [ -f "$pe64/comctl32_v6.dll" ]; then
+    src64="$pe64/comctl32_v6.dll"; src64name="comctl32_v6.dll"
+  elif [ -f "$pe64/comctl32.dll" ]; then
+    src64="$pe64/comctl32.dll"; src64name="comctl32.dll"
+    miss="$miss pe64:comctl32_v6"
+  else
+    miss="$miss pe64:comctl32_v6+comctl32"
+  fi
+  if [ -f "$pe32/comctl32_v6.dll" ]; then
+    src32="$pe32/comctl32_v6.dll"; src32name="comctl32_v6.dll"
+  elif [ -f "$pe32/comctl32.dll" ]; then
+    src32="$pe32/comctl32.dll"; src32name="comctl32.dll"
+    miss="$miss pe32:comctl32_v6"
+  else
+    miss="$miss pe32:comctl32_v6+comctl32"
+  fi
+
+  if [ -n "$src64" ]; then
+    amd64_st=$(_sxs_seed_asm amd64 "$ver" "$src64" "$winsxs" "$tok" || true)
+    # Adjacent 6.0.0.0 dir so a lookup that skips publisher policy still hits a file
+    _sxs_seed_asm amd64 "6.0.0.0" "$src64" "$winsxs" "$tok" >/dev/null || true
+    if cp -f "$src64" "$sys32/comctl32_v6.dll" 2>/dev/null; then
+      chmod a+r "$sys32/comctl32_v6.dll" 2>/dev/null || true
+      sys_st=yes
+    fi
+  else
+    amd64_st="no_src"
+  fi
+  if [ -n "$src32" ]; then
+    x86_st=$(_sxs_seed_asm x86 "$ver" "$src32" "$winsxs" "$tok" || true)
+    _sxs_seed_asm x86 "6.0.0.0" "$src32" "$winsxs" "$tok" >/dev/null || true
+    if cp -f "$src32" "$wow64/comctl32_v6.dll" 2>/dev/null; then
+      chmod a+r "$wow64/comctl32_v6.dll" 2>/dev/null || true
+      wow_st=yes
+    fi
+  else
+    x86_st="no_src"
+  fi
+
+  local ok=fail psz=0 pmz=no
+  if [ "$amd64_st" = "ok" ] && _sxs_pe_ok "$primary"; then
+    ok=ok
+    psz=$_sxs_sz
+    pmz=$_sxs_mz
+  fi
+  # Windows path as find_dll_file logged it (export must show this exact leaf)
+  local winpath="C:\\windows\\winsxs\\amd64_microsoft.windows.common-controls_${tok}_${ver}_none_deadbeef\\COMCTL32.dll"
+  log "SXS_COMCTL path=$winpath size=$psz mz=$pmz src=${src64name:-missing} amd64=$amd64_st x86=$x86_st sys32_v6=$sys_st wow64_v6=$wow_st miss=${miss:-none} $ok"
+  log "COMCTL32 path=$winpath src=${src64name:-missing} size=$psz mz=$pmz $ok"
+  stamp_wine_run "SXS_COMCTL path=$winpath src=${src64name:-missing} size=$psz mz=$pmz $ok"
+  if [ "$ok" != "ok" ]; then
+    log "SXS_COMCTL WARN winsxs comctl32 v6 not mappable — Electron manifest will c0000135"
+  fi
+  unset _sxs_sz _sxs_mz _sxs_magic
+  return 0
+}
+
 ensure_nsis_seed() {
   local pe64=/opt/wine/lib/wine/x86_64-windows
   local pe32=/opt/wine/lib/wine/i386-windows
@@ -1553,6 +1723,8 @@ ensure_prefix_exec() {
   # 0.1.87: wow64 thunk + core i386 SysWOW64 (idempotent; needed for 0x014c)
   ensure_wow64_seed
   ensure_nsis_seed
+  # 0.1.120: SxS comctl32 v6 (Electron manifest); not covered by system32 seed
+  ensure_sxs_comctl32
 
   # pe mmap RX probe is informational only — NTDLL_ANON_PE makes Wine use anon/pread
   local pe_state=no

@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.119",
-  "versionCode": 121,
-  "notes": "0.1.119: KEEP 118 THEME_LIGHT/FONT_SMOOTH/WS_APPS scan, KEEP 117 direct touch + pad cursor + INPUT_TOUCH + CJK Noto TC/SC, KEEP 116 visual BGRA. Knives: (A) in-place launch of already-installed apps (Windows path + install-dir cwd); never copy onto exe/app.exe or C:\\App\\app.exe; once prefix has an installed app, entering the workspace defaults to that/last-used (do not re-run Setup); stamp WS_LAUNCH path=… in_place=1. Simple seed exes (WinRAR) keep the existing /mnt/app/app.exe ladder. (B) fast first frame: skip WINE_PE_SMOKE and the 3s APP_LOAD settle when the prefix is already initialized; skip 225MB seed recopy when sizes match; Present as soon as a real frame exists. (C) seed listed once; Uninstall-registry apps labelled installed not uninstall. No explorer-shell desktop this tip. No argv/ladder rewrite for simple seeds. No 藍屏 change. vc121.",
+  "versionName": "0.1.120",
+  "versionCode": 122,
+  "notes": "0.1.120: KEEP 119 in-place launch (WS_LAUNCH in_place=1, no copy onto C:\\App\\app.exe, WINE_PE_SMOKE/settle skip on ready prefix), KEEP 118 THEME_LIGHT/FONT_SMOOTH/WS_APPS, KEEP 117 direct touch + pad cursor + INPUT_TOUCH + CJK Noto TC/SC, KEEP 116 visual BGRA. Knives: (A) seed Wine builtin comctl32_v6.dll as COMCTL32.dll into winsxs\\amd64_microsoft.windows.common-controls_6595b64144ccf1df_6.0.2600.2982_none_deadbeef (plus x86 and 6.0.0.0 adjacent names, assembly manifests, 6.0.0.0→6.0.2600.2982 policy, system32/syswow64 comctl32_v6.dll). Stamp COMCTL32 / SXS_COMCTL path + ok/fail. Never bundle Microsoft official comctl32. (B) after COMCTL32 loads, Electron must create a live App HWND; Present follows Grok Bot not explorer. (C) P1 ELECTRON_DISABLE_SANDBOX=1 defense; INPUT_STYLE stamped at session start (default remains direct; 119 pad stamp was a mid-session toggle). No MAP_WAIT/desk-ready gate change (113 KEEP). No argv/ladder rewrite. No 藍屏 change. No explorer-shell desktop. vc122.",
   "tipSha": "0173b9d"
 }

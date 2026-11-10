@@ -14,7 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
   # 0.1.91 K0c: durable APP_LOAD/WINE_START stamps — survive GRAPHICS_BACKEND wipe
   case "$*" in
-    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|WS_LAUNCH*|COMCTL32*|SXS_COMCTL*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
+    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|WS_LAUNCH*|COMCTL32*|SXS_COMCTL*|NTDLL_VA_RESERVE*|VA_RESERVE*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
       printf '%s\n' "$*" >> /mnt/data/app-load.stamp 2>/dev/null || true
       ;;
   esac
@@ -304,7 +304,13 @@ path_is_mounted() {
 #   system32 comctl32 is not enough). P0-B live App HWND / Present follows Grok Bot.
 #   P1: ELECTRON_DISABLE_SANDBOX=1 (defense). KEEP 119 in-place / smoke skip, 116–118.
 #   No Microsoft official comctl32. No APP_LOAD rewrite. No 藍屏 / explorer-desktop.
-WINE_LAUNCH_STAMP=0.1.120
+# 0.1.121 Dig120: P0 Chromium/Electron huge MEM_RESERVE (1.34TB/512GB/256GB) on
+#   39-bit Box64. Wine ntdll.so on-device patch (same file as ANON_PE/GRAN_ALIGN):
+#   map_anon_area mmap flags += MAP_NORESERVE; cap 1TB (4GB-multiple) VirtualAlloc
+#   alignment to 64KB so the 256GB V8-sandbox fallback can actually mmap inside
+#   39-bit VA. Do NOT assume 48-bit (Box64 already reported 39bits). KEEP 116–120.
+#   No Box64 rebuild, no APP_LOAD rewrite, no 藍屏 / explorer-desktop.
+WINE_LAUNCH_STAMP=0.1.121
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.120 P1: Electron looked up electron_disable_sandbox (unset in 119). Defense
 # only — not the proven COMCTL32 root cause. Inherited by in-place Grok Bot.exe.
@@ -1162,6 +1168,82 @@ PY
   return 0
 }
 
+# 0.1.121 P0: V8/Electron huge MEM_RESERVE on 39-bit Box64 (do not assume 48-bit).
+# Dig120: map_anon_area failed at 0x15800000000 / 0x8000000000 / 0x4000000000
+# (unix_prot 0). 1.34TB and 512GB cannot exist in 39-bit VA; the 256GB fallback
+# can, but Wine 11.21 over-allocates mmap by kSandboxAlignment (1TB) and omits
+# MAP_NORESERVE, so even 256GB fails. Official Electron only DCHECKs alignment,
+# so a 64KB-aligned 256GB PROT_NONE mapping is enough for a partial sandbox.
+# Same Kron4ek wine-11.21 ntdll.so as ANON_PE / GRAN_ALIGN (x86_64 bytes).
+# (A) map_anon_area @0x76f16: flags 0x22 → 0x4022 (MAP_PRIVATE|MAP_ANON|MAP_NORESERVE).
+# (B) allocate_virtual_memory @0x7cf4b: sub rax,1; cmovb rax,rdx → sub eax,1;
+#     cmovb eax,edx so a 4GB-multiple alignment (1TB) underflows the low 32 bits
+#     and falls back to the 64KB default. Ordinary 64KB/2MB alignments unchanged.
+patch_ntdll_va_reserve() {
+  local ntdll=/opt/wine/lib/wine/x86_64-unix/ntdll.so
+  local marker=/opt/wine/lib/wine/x86_64-unix/.ntdll-va-reserve-0.1.121
+  local off_flags=487190
+  local off_align=511819
+  # map_anon_area: mov ecx, 0x22
+  local orig_flags=b922000000
+  local new_flags=b922400000
+  # allocate_virtual_memory align_mask: sub rax,1 / cmovb rax,rdx
+  local orig_align=4883e801480f42c2
+  # sub eax,1 / cmovb eax,edx / nop nop  (4GB-multiple align → 64KB default)
+  local new_align=83e8010f42c29090
+  if [ ! -f "$ntdll" ]; then
+    log "FATAL: NTDLL_VA_RESERVE missing $ntdll"
+    exit 1
+  fi
+  if ! command -v python3 >/dev/null 2>&1; then
+    log "FATAL: NTDLL_VA_RESERVE needs python3"
+    exit 1
+  fi
+  local result
+  result=$(python3 - "$ntdll" "$off_flags" "$orig_flags" "$new_flags" "$off_align" "$orig_align" "$new_align" "$marker" <<'PY'
+import sys, os
+from pathlib import Path
+path = Path(sys.argv[1])
+off_f = int(sys.argv[2]); orig_f = bytes.fromhex(sys.argv[3]); new_f = bytes.fromhex(sys.argv[4])
+off_a = int(sys.argv[5]); orig_a = bytes.fromhex(sys.argv[6]); new_a = bytes.fromhex(sys.argv[7])
+marker = Path(sys.argv[8])
+data = bytearray(path.read_bytes())
+cf = bytes(data[off_f:off_f + len(orig_f)])
+ca = bytes(data[off_a:off_a + len(orig_a)])
+if cf == new_f and ca == new_a:
+    marker.write_text("va-reserve=1 stamp=0.1.121 already\n")
+    print("already")
+    sys.exit(0)
+if cf != orig_f and cf != new_f:
+    sys.stderr.write("unexpected flags bytes at 0x%x got=%s\n" % (off_f, cf.hex()))
+    sys.exit(2)
+if ca != orig_a and ca != new_a:
+    sys.stderr.write("unexpected align bytes at 0x%x got=%s\n" % (off_a, ca.hex()))
+    sys.exit(2)
+bak = path.with_suffix(".so.pre-va-reserve")
+if not bak.exists():
+    bak.write_bytes(path.read_bytes())
+data[off_f:off_f + len(new_f)] = new_f
+data[off_a:off_a + len(new_a)] = new_a
+tmp = path.with_suffix(".so.va-reserve-tmp")
+tmp.write_bytes(data)
+os.replace(str(tmp), str(path))
+marker.write_text("va-reserve=1 stamp=0.1.121 flags=0x%x align=0x%x\n" % (off_f, off_a))
+print("patched")
+sys.exit(0)
+PY
+) || {
+    log "FATAL: NTDLL_VA_RESERVE patch failed path=$ntdll"
+    exit 1
+  }
+  log "NTDLL_VA_RESERVE ok mode=$result path=$ntdll flags=0x76f16,0x4022 align=0x7cf4b,cap64k stamp=0.1.121 (39-bit: no 48-bit assumed)"
+  stamp_wine_run "NTDLL_VA_RESERVE=$result flags=0x76f16,0x4022 align=0x7cf4b,cap64k stamp=0.1.121"
+  stamp_wine_run "VA_RESERVE layer=ntdll_patch noreserve=1 align_cap=64k_for_4g_multiple host_va=39bit (1.34TB/512GB still cannot fit; 256GB PROT_NONE can)"
+  log "VA_RESERVE layer=ntdll_patch noreserve=1 align_cap=64k_for_4g_multiple host_va=39bit"
+  return 0
+}
+
+
 
 # Parallel directory copy (nproc workers). Falls back to cp -a.
 parallel_dir_copy() {
@@ -1736,6 +1818,7 @@ ensure_prefix_exec() {
 
 patch_ntdll_anon_pe
 patch_ntdll_granularity_align
+patch_ntdll_va_reserve
 
 ensure_prefix_exec
 

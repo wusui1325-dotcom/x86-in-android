@@ -1676,6 +1676,8 @@ class SessionActivity : ComponentActivity() {
             "WS_LAUNCH",
             "COMCTL32",
             "SXS_COMCTL",
+            "NTDLL_VA_RESERVE",
+            "VA_RESERVE",
             "x11_render",
             "guestPresented",
             "stub-fallback",

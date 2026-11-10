@@ -3,5 +3,5 @@
   "versionName": "0.1.118",
   "versionCode": 120,
   "notes": "0.1.118: KEEP 117 direct touch + pad cursor + INPUT_TOUCH + CJK Noto TC/SC; KEEP 116 visual BGRA. Knives: (A) force Wine built-in Light (Aero-Light) visual style — window chrome/buttons/scrollbars modern, no Win2000 classic gray, no Microsoft theme files; full Win11 mica/rounded corners not 100%. (B) ban bitmap/pixel UI fonts; force ClearType/fontsmoothing + fontconfig antialias/embeddedbitmap=false; FONT_SMOOTH ok; CJK still Noto TC-first. (C) workspace is a mini-Windows: scan same prefix Start Menu shortcuts, Uninstall registry, Program Files so newly installed apps appear in that workspace list; WS_APPS count=…; launch selected app via exe/app.exe slot (seed backed up as seed.exe); argv/ladder unchanged. No explorer-shell desktop this tip. No argv/ladder/BSOD change. vc120.",
-  "tipSha": "d0ea3fe"
+  "tipSha": "92c956e"
 }

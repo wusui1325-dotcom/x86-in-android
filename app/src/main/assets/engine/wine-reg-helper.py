@@ -1073,11 +1073,13 @@ def scan_prefix_apps(prefix, seed_host=None, seed_name=None):
             "seed": bool(is_seed),
         })
 
+    have_seed = False
     if seed_host and os.path.isfile(seed_host):
         add(seed_name or os.path.splitext(os.path.basename(seed_host))[0], seed_host, "seed", True)
-    # Guest seed slot
+        have_seed = True
+    # Guest seed slot — 0.1.119: do not list C:\App\app.exe as a second seed
     slot = os.path.join(prefix, "drive_c", "App", "app.exe")
-    if os.path.isfile(slot):
+    if (not have_seed) and os.path.isfile(slot):
         add(seed_name or "app", slot, "seed", True)
 
     for name, host, source in _walk_start_menu_lnks(prefix):
@@ -1110,7 +1112,14 @@ def cmd_scan_ws_apps(prefix):
     except OSError as e:
         path = "-"
         print("wsapps write_fail=%s" % e)
-    names = ",".join("%s:%s" % (a["name"].replace(",", " "), a["source"]) for a in apps) or "-"
+    def _tag(a):
+        if a.get("seed"):
+            return "seed"
+        src = a.get("source") or ""
+        if src == "uninstall":
+            return "installed"
+        return src
+    names = ",".join("%s:%s" % (a["name"].replace(",", " "), _tag(a)) for a in apps) or "-"
     print("WS_APPS count=%d list=%s out=%s" % (len(apps), names, path))
     sys.exit(0)
 

@@ -188,7 +188,11 @@ object LaunchPipeline {
         logFile: File,
     ): Plan {
         val staged = File(ws.exeDir, "app.exe")
-        if (pe.absolutePath != staged.absolutePath) {
+        val inPlace = File(ws.dataDir, "ws-launch.env").takeIf { it.isFile }?.let { f ->
+            runCatching { f.readText() }.getOrNull()?.contains("X86_LAUNCH_IN_PLACE=1") == true
+        } == true
+        // 0.1.119: never copy an installed exe onto the seed slot (Electron needs its install dir).
+        if (!inPlace && pe.absolutePath != staged.absolutePath) {
             pe.copyTo(staged, overwrite = true)
         }
         val ready = ComponentInstaller.isReady(ctx)
@@ -309,8 +313,12 @@ object LaunchPipeline {
         File(ws.dataDir, "xfb").mkdirs()
         ws.exeDir.mkdirs()
         // 確保綁定源存在（缺目錄會導致 chdir /mnt/app 失敗）
-        if (!File(ws.exeDir, "app.exe").exists() && pe.exists()) {
-            pe.copyTo(File(ws.exeDir, "app.exe"), overwrite = true)
+        val launchSlot = File(ws.exeDir, "app.exe")
+        val skipSlotCopy = File(ws.dataDir, "ws-launch.env").takeIf { it.isFile }?.let { f ->
+            runCatching { f.readText() }.getOrNull()?.contains("X86_LAUNCH_IN_PLACE=1") == true
+        } == true
+        if (!skipSlotCopy && !launchSlot.exists() && pe.exists()) {
+            pe.copyTo(launchSlot, overwrite = true)
         }
         val guestExe = "/mnt/app/app.exe"
 
@@ -400,6 +408,16 @@ object LaunchPipeline {
         )
         env += prootBundle.envVars()
         env += Box64Preset.performance.toList()
+        // 0.1.119: in-place launch target (written by WorkspaceApps.prepareLaunch)
+        val launchEnv = File(ws.dataDir, "ws-launch.env")
+        if (launchEnv.isFile) {
+            launchEnv.readLines().forEach { raw ->
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("#") || '=' !in line) return@forEach
+                val k = line.substringBefore('=')
+                if (k.startsWith("X86_LAUNCH_")) env += line
+            }
+        }
 
         val kindMessage: String
         when (backend) {

@@ -1672,6 +1672,7 @@ class SessionActivity : ComponentActivity() {
             "FONT_SMOOTH",
             "THEME_LIGHT",
             "WS_APPS",
+            "WS_LAUNCH",
             "x11_render",
             "guestPresented",
             "stub-fallback",

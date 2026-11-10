@@ -14,7 +14,7 @@ log() {
   printf '%s\n' "$*" >> /mnt/data/gpu-stack.log
   # 0.1.91 K0c: durable APP_LOAD/WINE_START stamps — survive GRAPHICS_BACKEND wipe
   case "$*" in
-    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
+    WINE_LAUNCH_STAMP*|WINE_START*|WINE_RUN_OUT*|APP_*|FONT_CJK*|FONT_SMOOTH*|THEME_LIGHT*|WS_APPS*|WS_LAUNCH*|*decide=*|*ladder*|MAP_WAIT*|"RPCSS_PRESTART done"*|"RPCSS_PRESTART heartbeat"*|"RPCSS_PRESTART soft-continue"*)
       printf '%s\n' "$*" >> /mnt/data/app-load.stamp 2>/dev/null || true
       ;;
   esac
@@ -295,8 +295,12 @@ path_is_mounted() {
 # 0.1.115 Dig114: P0-J status metric no-feedback; P0-K HWND/xid + exclude rundll32
 #   + clear stale .x86-x11-ready on WINE_START; P0-L PutImage/CopyArea/SHM dig + Expose;
 #   P0-M present_black/guestPresented require hwnd!=0; P1-N MAP_WAIT desk=1; P1-O canary=skip pe_amd64.
+# 0.1.119: P0-A in-place launch of installed apps (no copy onto C:\\App\\app.exe; WS_LAUNCH path=… in_place=1);
+#   default enter uses installed/last-used, not Setup seed; simple seed (WinRAR) ladder kept.
+#   P0-B skip WINE_PE_SMOKE + 225MB seed recopy + post-gate sleep when prefix already ready.
+#   P1 seed dedup; Uninstall-registry apps stamped/labelled installed. KEEP 116/117/118.
 # 0.1.116 Dig115: P0-P RENDER/x11_render; P0-Q present App composite; P0-R no HUD after live hwnd; P1-S DIAG_LAST; P1-T surface test. No argv/ladder change.
-WINE_LAUNCH_STAMP=0.1.118
+WINE_LAUNCH_STAMP=0.1.119
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out
@@ -1907,6 +1911,24 @@ else
   log "WARN: wine.inf version probe failed — will require PE --version output"
 fi
 
+# 0.1.119 P0-B: if the real prefix is already initialized, skip the temp-prefix
+# WINE_PE_SMOKE wineboot (Boss 0.1.118: every enter ran /tmp/wine-smoke-$$ + 2s+).
+PREFIX_ALREADY_READY=0
+_pr="${WINEPREFIX:-/home/xuser/.wine}"
+_pr_sz=0
+if [ -f "$_pr/system.reg" ] && [ -f "$_pr/drive_c/windows/system32/kernel32.dll" ]; then
+  _pr_sz=$(wc -c < "$_pr/system.reg" 2>/dev/null | tr -d ' \n')
+  _pr_sz=${_pr_sz:-0}
+  if [ "$_pr_sz" -ge 20000 ]; then
+    PREFIX_ALREADY_READY=1
+  fi
+fi
+if [ "$PREFIX_ALREADY_READY" = "1" ]; then
+  log "WINE_PE_SMOKE skip (prefix ready system.reg=${_pr_sz}B) — fast first frame 0.1.119"
+  SMOKE_OK=1
+  PE_OK=1
+  PE_BOOT_OK=1
+else
 # PE 短探測：驗證 prereserve + 能否走過 loader（空 prefix 仍可能 wineboot）
 # 0.1.41: WINEDEBUG must NOT be -all — that hid wineboot/err (c0000018 etc.) behind exit=1
 log "WINE_PE_SMOKE begin timeout=${SMOKE_TIMEOUT}s dynarec=$BOX64_DYNAREC prefix=$SMOKE_PREFIX (expect prereserve mid holefit=${HOLEFIT_ADDR:-0x100000}:${HOLEFIT_SIZE:-?})"
@@ -2145,6 +2167,8 @@ else
   [ -n "$IPID" ] && kill $IPID 2>/dev/null || true
   [ -n "$XPID" ] && kill $XPID 2>/dev/null || true
   exit 1
+fi
+
 fi
 
 # 0.1.52: complete-prefix — wipe half-init; seed PE; FATAL on c0000135 / incomplete
@@ -3449,22 +3473,70 @@ for _a in "$@"; do
     *.exe|*.EXE|*.com|*.COM|*.bat|*.BAT) APP_UNIX="$_a"; break ;;
   esac
 done
+# 0.1.119: host-written /mnt/data/ws-launch.env (and X86_LAUNCH_* env) select in-place
+if [ -f /mnt/data/ws-launch.env ]; then
+  while IFS= read -r _ln || [ -n "${_ln:-}" ]; do
+    case "$_ln" in
+      X86_LAUNCH_IN_PLACE=*) X86_LAUNCH_IN_PLACE=${_ln#*=} ;;
+      X86_LAUNCH_WIN=*) X86_LAUNCH_WIN=${_ln#*=} ;;
+      X86_LAUNCH_UNIX=*) X86_LAUNCH_UNIX=${_ln#*=} ;;
+      X86_LAUNCH_CWD=*) X86_LAUNCH_CWD=${_ln#*=} ;;
+    esac
+  done < /mnt/data/ws-launch.env
+  unset _ln
+fi
 APP_WIN=""
 APP_MODE="none"
-if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
+APP_IN_PLACE=0
+# In-place: launch the scanned Windows path from its install directory. Never copy
+# onto C:\App\app.exe (that stomps the seed installer and breaks Electron).
+if [ "${X86_LAUNCH_IN_PLACE:-0}" = "1" ] && [ -n "${X86_LAUNCH_WIN:-}" ]; then
+  _lu="${X86_LAUNCH_UNIX:-}"
+  if [ -z "$_lu" ]; then
+    _rel=$(printf '%s' "$X86_LAUNCH_WIN" | sed 's#^[A-Za-z]:[\\/]##; s#\\#/#g')
+    _lu="$WINEPREFIX/drive_c/$_rel"
+  fi
+  if [ -f "$_lu" ]; then
+    APP_UNIX="$_lu"
+    APP_WIN="$X86_LAUNCH_WIN"
+    APP_MODE="in-place"
+    APP_IN_PLACE=1
+    if [ -z "${X86_LAUNCH_CWD:-}" ]; then
+      X86_LAUNCH_CWD=$(dirname "$_lu")
+    fi
+    log "WINE_START app_map mode=in-place unix=$APP_UNIX win=$APP_WIN cwd=${X86_LAUNCH_CWD:-} (no seed-copy; seed slot kept)"
+    log "WS_LAUNCH path=$APP_WIN in_place=1"
+    stamp_wine_run "WS_LAUNCH path=$APP_WIN in_place=1"
+  else
+    log "WINE_START WARN in-place target missing unix=$_lu win=$X86_LAUNCH_WIN — not inventing WS_LAUNCH; fall back to seed ladder"
+  fi
+  unset _lu _rel
+fi
+if [ "$APP_IN_PLACE" != "1" ] && [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   mkdir -p "$WINEPREFIX/drive_c/App" 2>/dev/null || true
-  if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
+  _dest="$WINEPREFIX/drive_c/App/app.exe"
+  _src_sz=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')
+  _dst_sz=0
+  [ -f "$_dest" ] && _dst_sz=$(wc -c < "$_dest" 2>/dev/null | tr -d ' ')
+  if [ -f "$_dest" ] && [ -n "$_src_sz" ] && [ "$_src_sz" = "$_dst_sz" ] && [ "$_src_sz" -gt 0 ]; then
+    APP_WIN='C:\App\app.exe'
+    APP_MODE="seed-reuse"
+    log "WINE_START app_map mode=seed-reuse unix=$APP_UNIX win=$APP_WIN bytes=$_src_sz (skip recopy)"
+  elif cp -f "$APP_UNIX" "$_dest" 2>/dev/null; then
     APP_WIN='C:\App\app.exe'
     APP_MODE="seed-copy"
-  elif ln -sfn "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
+    log "WINE_START app_map mode=$APP_MODE unix=$APP_UNIX win=${APP_WIN:-none} bytes=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')"
+  elif ln -sfn "$APP_UNIX" "$_dest" 2>/dev/null; then
     APP_WIN='C:\App\app.exe'
     APP_MODE="seed-symlink"
+    log "WINE_START app_map mode=$APP_MODE unix=$APP_UNIX win=${APP_WIN:-none} bytes=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')"
   else
     APP_WIN=""
     APP_MODE="unix-fallback"
+    log "WINE_START app_map mode=$APP_MODE unix=$APP_UNIX win=${APP_WIN:-none} bytes=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')"
   fi
-  log "WINE_START app_map mode=$APP_MODE unix=$APP_UNIX win=${APP_WIN:-none} bytes=$(wc -c < "$APP_UNIX" 2>/dev/null | tr -d ' ')"
-else
+  unset _dest _src_sz _dst_sz
+elif [ "$APP_IN_PLACE" != "1" ]; then
   log "WINE_START WARN no .exe arg or missing file (argv=$*)"
 fi
 
@@ -3555,7 +3627,24 @@ APP_MODE_T0=0
 # 0.1.87: i386 (0x014c) exception — WoW64 via wine start C:/App/app.exe; unix absolute known-fail.
 # 0.1.77: strict Loaded = loaddll "Loaded L"…app.exe""; bare path mention is NOT Loaded.
 app_load_has_loaded() {
-  grep -qE 'Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null
+  # 0.1.119: match the real basename (Grok Bot.exe etc.), not only app.exe
+  _bn="${APP_BASE_NAME:-}"
+  if [ -z "$_bn" ] && [ -n "${APP_TARGET:-}" ]; then
+    _bn=$(basename "$APP_TARGET")
+  fi
+  [ -n "$_bn" ] || _bn="app.exe"
+  _esc=$(printf '%s' "$_bn" | sed 's/[.[\*^$()+?{|]/\\&/g')
+  if grep -qE "Loaded L\".*${_esc}\"" /mnt/data/wine-run.out 2>/dev/null; then
+    unset _bn _esc
+    return 0
+  fi
+  # seed-ladder fallback (keep set -e safe)
+  if grep -qE 'Loaded L".*app\.exe' /mnt/data/wine-run.out 2>/dev/null; then
+    unset _bn _esc
+    return 0
+  fi
+  unset _bn _esc
+  return 1
 }
 # 0.1.114 P0-F: Dig113 — loaddll Loaded only in wine-run.out; Boss binder stuck on
 # 「檢查映像機型 0x014c」(APP_LOAD index8). Mirror binder-visible fingerprint into
@@ -3572,7 +3661,11 @@ app_load_stamp_loaded_session() {
   APP_LOADED_STRICT=1
   # Exact fingerprints LaunchStatusLines + smoke dig want
   log "Loaded App"
-  log 'Loaded L"C:\App\app.exe"'
+  if [ "${APP_IN_PLACE:-0}" = "1" ] && [ -n "${APP_WIN:-}" ]; then
+    log "Loaded L\"$APP_WIN\""
+  else
+    log 'Loaded L"C:\App\app.exe"'
+  fi
   stamp_wine_run 'Loaded App stamp=session (0.1.114 P0-F binder leave 0x014c; HWND not required)'
   return 0
 }
@@ -4059,7 +4152,7 @@ app_load_seed_gate() {
   mkdir -p "$WINEPREFIX/drive_c/App" "$WINEPREFIX/dosdevices" 2>/dev/null || true
   ln -sfn ../drive_c "$WINEPREFIX/dosdevices/c:" 2>/dev/null || true
   ln -sfn / "$WINEPREFIX/dosdevices/z:" 2>/dev/null || true
-  if [ ! -s "$SEED" ] && [ -n "${APP_UNIX:-}" ] && [ -f "$APP_UNIX" ]; then
+  if [ "${APP_IN_PLACE:-0}" != "1" ] && [ ! -s "$SEED" ] && [ -n "${APP_UNIX:-}" ] && [ -f "$APP_UNIX" ]; then
     cp -f "$APP_UNIX" "$SEED" 2>/dev/null && log "APP_SEED gate=re-cp path=$SEED bytes=$(wc -c < "$SEED" 2>/dev/null | tr -d ' ')" || true
   fi
   _c=$(readlink "$WINEPREFIX/dosdevices/c:" 2>/dev/null || echo missing)
@@ -4092,9 +4185,9 @@ app_load_spawn() {
       "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "$APP_TARGET" >>/mnt/data/wine-run.out 2>&1 &
       ;;
     relative)
-      APP_DIR=$(dirname "$APP_TARGET")
+      APP_DIR="${X86_LAUNCH_CWD:-$(dirname "$APP_TARGET")}"
       APP_BASE=$(basename "$APP_TARGET")
-      log "APP_LOAD retry: cd $APP_DIR && wine ./$APP_BASE (unix relative; no C:/)"
+      log "APP_LOAD cmdline: cd $APP_DIR && wine ./$APP_BASE (unix relative; cwd=install dir; no C:/App copy)"
       (
         cd "$APP_DIR" || exit 1
         "$BOX64" /opt/wine/lib/wine/x86_64-unix/wine "./$APP_BASE" >>/mnt/data/wine-run.out 2>&1
@@ -4377,8 +4470,15 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
   else
     log "APP_SEED MISSING path=$SEED — will try unix=$APP_UNIX (i386 needs seed for WoW64)"
   fi
-  sleep 3
+  # 0.1.119 P0-B: prefix already ready + desktop mapped — skip the 3s settle wait
+  if [ "${PREFIX_ALREADY_READY:-0}" = "1" ] && [ "${DESKTOP_READY:-0}" = "1" ]; then
+    log "APP_LOAD settle skip (prefix ready, desktop ready) — fast first frame"
+  else
+    sleep 3
+  fi
   APP_TARGET="$APP_UNIX"
+  APP_BASE_NAME=$(basename "$APP_TARGET")
+  APP_BASE_NAME=${APP_BASE_NAME:-app.exe}
   # PE machine + subsystem (0.1.77): 0x8664=amd64, 0x14c/0x014c=i386; subsystem 2=GUI 3=CUI
   PE_OFF=$(od -An -t u4 -N 4 -j 60 "$APP_TARGET" 2>/dev/null | tr -d ' \n' || echo 0)
   PE_OFF=${PE_OFF:-0}
@@ -4437,7 +4537,7 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     ensure_wow64_seed
     ensure_nsis_seed
     # Seed repair: always try re-cp if missing or empty
-    if [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; then
+    if [ "${APP_IN_PLACE:-0}" != "1" ] && { [ -z "${APP_WIN:-}" ] || [ ! -f "$SEED" ] || [ ! -s "$SEED" ]; }; then
       if cp -f "$APP_UNIX" "$WINEPREFIX/drive_c/App/app.exe" 2>/dev/null; then
         APP_WIN='C:\App\app.exe'
         SEED="$WINEPREFIX/drive_c/App/app.exe"
@@ -4468,7 +4568,9 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
         case "$_wp" in
           *"/drive_c/App/app.exe"*|*/App/app.exe) ;;
           *)
-            cp -f "$APP_UNIX" "$SEED" 2>/dev/null && log "APP_SEED repair=winepath-mismatch re-copy" || true
+            if [ "${APP_IN_PLACE:-0}" != "1" ]; then
+              cp -f "$APP_UNIX" "$SEED" 2>/dev/null && log "APP_SEED repair=winepath-mismatch re-copy" || true
+            fi
             ;;
         esac
       fi
@@ -4497,7 +4599,12 @@ if [ -n "$APP_UNIX" ] && [ -f "$APP_UNIX" ]; then
     # 0.1.115 P1-O Dig114: amd64 (0x8664) absolute ladder — no i386 canary; stamp skip
     log "APP_LOAD canary=skip reason=pe_amd64 machine=0x${PE_MACH:-?} (0.1.115 P1-O absolute ladder)"
     stamp_wine_run "canary=skip reason=pe_amd64 machine=0x${PE_MACH:-?}"
-    APP_SPAWN_MODE=absolute
+    if [ "${APP_IN_PLACE:-0}" = "1" ]; then
+      APP_SPAWN_MODE=relative
+      log "APP_LOAD in_place=1 spawn=relative cwd=${X86_LAUNCH_CWD:-$(dirname "$APP_TARGET")} (install dir; no C:\\App\\app.exe copy)"
+    else
+      APP_SPAWN_MODE=absolute
+    fi
   fi
   _cui_wrap_mode="${X86_CUI_WRAP:-auto}"
   case "$_cui_wrap_mode" in

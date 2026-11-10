@@ -19,8 +19,9 @@ data class WorkspaceApp(
 )
 
 /**
- * 0.1.118 P1-C: discover programs installed into the same Wine prefix
+ * Discover programs installed into the same Wine prefix
  * (Start Menu shortcuts, Uninstall registry, Program Files). Never invents entries.
+ * 0.1.119: in-place launch of installed apps; seed listed once; uninstall=discovery only.
  */
 object WorkspaceApps {
     private val skipDirs = setOf(
@@ -55,35 +56,145 @@ object WorkspaceApps {
         }
     }
 
+    /** Last launched Windows path for this workspace (installed app preferred on re-entry). */
+    fun lastAppFile(ws: Workspace): File = File(ws.dir, "last-app.txt")
+
+    fun rememberLastApp(ws: Workspace, app: WorkspaceApp) {
+        runCatching { lastAppFile(ws).writeText(app.windowsPath.ifBlank { app.hostPath }) }
+    }
+
+    fun readLastWindowsPath(ws: Workspace): String? =
+        lastAppFile(ws).takeIf { it.isFile }?.let { f ->
+            runCatching { f.readText().trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+        }
+
+    /** Display/stamp tag: Uninstall registry is discovery only — never label the app "uninstall". */
+    fun sourceTag(app: WorkspaceApp): String = when {
+        app.isSeed -> "seed"
+        app.source == "uninstall" -> "installed"
+        else -> app.source
+    }
+
+    fun launchEnvFile(ws: Workspace): File = File(ws.dataDir, "ws-launch.env")
+
+    /** Guest unix path for a Windows path under the bound Wine prefix. */
+    fun guestUnixPath(windowsPath: String): String {
+        var s = windowsPath.trim().trim('"').replace('/', '\\')
+        if (s.length >= 2 && s[1] == ':' && s[0].isLetter()) {
+            s = s.substring(2)
+        }
+        s = s.trimStart('\\', '/').replace('\\', '/')
+        return "/home/xuser/.wine/drive_c/$s"
+    }
+
+    data class LaunchPrep(
+        val app: WorkspaceApp?,
+        val inPlace: Boolean,
+        val windowsPath: String,
+        val hostFile: File?,
+    )
+
     /**
-     * Stage [app] (or the seed) into exe/app.exe so the existing C:\App\app.exe
-     * argv/ladder is unchanged. Returns the launch slot.
+     * Restore the installer into exe/app.exe from seed.exe when the slot is empty
+     * or was previously overwritten by a copy of an installed exe. Never copies an
+     * installed app onto the seed slot.
      */
-    fun prepareLaunchExe(ws: Workspace, app: WorkspaceApp?): File {
+    fun restoreSeedSlot(ws: Workspace) {
         ensureSeedBackup(ws)
+        val seed = seedFile(ws)
         val slot = launchSlot(ws)
-        val source: File = when {
-            app == null || app.isSeed -> {
-                val seed = seedFile(ws)
-                if (seed.exists() && seed.length() > 0L) seed else slot
-            }
-            else -> {
-                val f = File(app.hostPath)
-                if (f.exists() && f.isFile && f.length() > 0L) f
-                else throw IllegalStateException("找不到已安裝程式：${app.name}（${app.hostPath}）")
-            }
+        if (!seed.exists() || seed.length() <= 0L) return
+        // seed.exe and app.exe are different paths; skip recopy when sizes already match.
+        if (!slot.exists() || slot.length() != seed.length()) {
+            seed.copyTo(slot, overwrite = true)
         }
-        if (source.canonicalPath != slot.canonicalPath) {
-            source.copyTo(slot, overwrite = true)
+    }
+
+    /**
+     * Default launch target: requested app if given; else last-used installed app
+     * if still present; else first installed app; else the seed.
+     */
+    fun resolveLaunchApp(ws: Workspace, requested: WorkspaceApp?): WorkspaceApp? {
+        if (requested != null) return requested
+        val apps = scan(ws)
+        val installed = apps.filterNot { it.isSeed }
+        if (installed.isEmpty()) return apps.firstOrNull { it.isSeed }
+        val last = readLastWindowsPath(ws)?.lowercase(Locale.US)
+        if (!last.isNullOrBlank()) {
+            installed.firstOrNull {
+                it.windowsPath.lowercase(Locale.US) == last ||
+                    it.hostPath.lowercase(Locale.US) == last
+            }?.let { return it }
         }
-        return slot
+        return installed.first()
+    }
+
+    fun writeLaunchEnv(ws: Workspace, prep: LaunchPrep) {
+        ws.dataDir.mkdirs()
+        val f = launchEnvFile(ws)
+        if (prep.inPlace && prep.windowsPath.isNotBlank() &&
+            !prep.windowsPath.replace('/', '\\').equals("C:\\App\\app.exe", ignoreCase = true)
+        ) {
+            val unix = guestUnixPath(prep.windowsPath)
+            val cwdUnix = unix.substringBeforeLast('/', unix)
+            f.writeText(
+                buildString {
+                    appendLine("X86_LAUNCH_IN_PLACE=1")
+                    appendLine("X86_LAUNCH_WIN=${prep.windowsPath}")
+                    appendLine("X86_LAUNCH_UNIX=$unix")
+                    appendLine("X86_LAUNCH_CWD=$cwdUnix")
+                },
+            )
+        } else {
+            f.writeText("X86_LAUNCH_IN_PLACE=0\n")
+        }
+    }
+
+    /**
+     * 0.1.119: already-installed apps launch in-place (Windows path + that dir as cwd).
+     * Forbidden: copying the installed exe onto exe/app.exe / C:\App\app.exe.
+     * Simple seed exes (WinRAR) keep the existing /mnt/app/app.exe ladder.
+     */
+    fun prepareLaunch(ws: Workspace, requested: WorkspaceApp?): LaunchPrep {
+        restoreSeedSlot(ws)
+        val app = resolveLaunchApp(ws, requested)
+        if (app != null && !app.isSeed) {
+            val host = File(app.hostPath)
+            if (!host.isFile || host.length() <= 0L) {
+                throw IllegalStateException("找不到已安裝程式：${app.name}（${app.hostPath}）")
+            }
+            rememberLastApp(ws, app)
+            val prep = LaunchPrep(
+                app = app,
+                inPlace = true,
+                windowsPath = app.windowsPath,
+                hostFile = host,
+            )
+            writeLaunchEnv(ws, prep)
+            return prep
+        }
+        if (app != null) rememberLastApp(ws, app)
+        val slot = launchSlot(ws)
+        val prep = LaunchPrep(
+            app = app,
+            inPlace = false,
+            windowsPath = "C:\\App\\app.exe",
+            hostFile = if (slot.exists()) slot else seedFile(ws).takeIf { it.exists() },
+        )
+        writeLaunchEnv(ws, prep)
+        return prep
+    }
+
+    /** @deprecated 0.1.118 copy-to-slot; kept as a thin wrapper that no longer copies installed apps. */
+    fun prepareLaunchExe(ws: Workspace, app: WorkspaceApp?): File {
+        val prep = prepareLaunch(ws, app)
+        return prep.hostFile ?: launchSlot(ws)
     }
 
     fun stampLine(ws: Workspace): String {
         val apps = scan(ws)
         val list = apps.joinToString(",") { a ->
-            val tag = if (a.isSeed) "seed" else a.source
-            "${a.name.replace(",", " ")}:$tag"
+            "${a.name.replace(",", " ")}:${sourceTag(a)}"
         }.ifBlank { "-" }
         return "WS_APPS count=${apps.size} list=$list"
     }
@@ -127,12 +238,20 @@ object WorkspaceApps {
         val seedName = ws.displayName.ifBlank {
             ws.sourceExeName.removeSuffix(".exe").ifBlank { "app" }
         }
+        var haveSeed = false
         when {
-            seed.exists() && seed.length() > 0L -> add(seedName, seed, "seed", true)
-            slot.exists() && slot.length() > 0L -> add(seedName, slot, "seed", true)
+            seed.exists() && seed.length() > 0L -> {
+                add(seedName, seed, "seed", true)
+                haveSeed = true
+            }
+            slot.exists() && slot.length() > 0L -> {
+                add(seedName, slot, "seed", true)
+                haveSeed = true
+            }
         }
+        // 0.1.119 P1: do not list the prefix C:\App\app.exe copy as a second seed.
         val prefixSlot = File(prefix, "drive_c/App/app.exe")
-        if (prefixSlot.exists() && prefixSlot.length() > 0L) {
+        if (!haveSeed && prefixSlot.exists() && prefixSlot.length() > 0L) {
             add(seedName, prefixSlot, "seed", true)
         }
 

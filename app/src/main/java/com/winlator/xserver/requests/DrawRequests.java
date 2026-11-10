@@ -27,9 +27,14 @@ public abstract class DrawRequests {
     /** 0.1.115 P0-L: dig stamps for Boss XPutImage/XCopyArea hard-require. */
     public static final AtomicLong x11PutImageCount = new AtomicLong();
     public static final AtomicLong x11CopyAreaCount = new AtomicLong();
+    /** 0.1.116: all opcode arrivals, including width/height ≤1 filtered from dig counters. */
+    public static final AtomicLong x11PutImageAll = new AtomicLong();
+    public static final AtomicLong x11CopyAreaAll = new AtomicLong();
 
     public static long putImageCount() { return x11PutImageCount.get(); }
     public static long copyAreaCount() { return x11CopyAreaCount.get(); }
+    public static long putImageAllCount() { return x11PutImageAll.get(); }
+    public static long copyAreaAllCount() { return x11CopyAreaAll.get(); }
 
     public static void putImage(XClient client, XInputStream inputStream, XOutputStream outputStream) throws XRequestError {
         Format format = Format.values()[client.getRequestData()];
@@ -44,6 +49,7 @@ public abstract class DrawRequests {
         inputStream.skip(2);
         int length = client.getRemainingRequestLength();
         ByteBuffer data = inputStream.readByteBuffer(length);
+        x11PutImageAll.incrementAndGet();
 
         Drawable drawable = client.xServer.drawableManager.getDrawable(drawableId);
         if (drawable == null) throw new BadDrawable(drawableId);
@@ -133,6 +139,7 @@ public abstract class DrawRequests {
         short dstY = inputStream.readShort();
         short width = inputStream.readShort();
         short height = inputStream.readShort();
+        x11CopyAreaAll.incrementAndGet();
 
         Drawable srcDrawable =  client.xServer.drawableManager.getDrawable(srcDrawableId);
         if (srcDrawable == null) throw new BadDrawable(srcDrawableId);

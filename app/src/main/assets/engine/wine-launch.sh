@@ -295,7 +295,8 @@ path_is_mounted() {
 # 0.1.115 Dig114: P0-J status metric no-feedback; P0-K HWND/xid + exclude rundll32
 #   + clear stale .x86-x11-ready on WINE_START; P0-L PutImage/CopyArea/SHM dig + Expose;
 #   P0-M present_black/guestPresented require hwnd!=0; P1-N MAP_WAIT desk=1; P1-O canary=skip pe_amd64.
-WINE_LAUNCH_STAMP=0.1.115
+# 0.1.116 Dig115: P0-P RENDER/x11_render; P0-Q present App composite; P0-R no HUD after live hwnd; P1-S DIAG_LAST; P1-T surface test. No argv/ladder change.
+WINE_LAUNCH_STAMP=0.1.116
 log "WINE_LAUNCH_STAMP=$WINE_LAUNCH_STAMP"
 # 0.1.91 K1a: clear stale wine-run / durable stamp at script entry (before WINE_START)
 : > /mnt/data/wine-run.out

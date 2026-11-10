@@ -10,6 +10,7 @@ import com.winlator.xserver.XLock;
 import com.winlator.xserver.XServer;
 import com.winlator.xserver.events.Expose;
 import com.winlator.xserver.extensions.MITSHMExtension;
+import com.winlator.xserver.extensions.RenderExtension;
 import com.winlator.xserver.requests.DrawRequests;
 import com.wusper.x86.engine.NativeEngine;
 import com.wusper.x86.graphics.DesktopLayout;
@@ -51,6 +52,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * 0.1.115 Dig114: exclude rundll32; hwnd←xid fallback; forceMap+Expose so Wine
  * x11drv GDI blit (PutImage/CopyArea/SHM) hits Present-sampled drawable; DIAG
  * x11_putimage=/x11_copyarea=/x11_shm_putimage=.
+ * 0.1.116 Dig115: RENDER stamp x11_render=; after live hwnd composite App tree
+ * onto 1280×720 BGRA (never child=0x3 empty root ahb_gpu); ban presentHudBar
+ * after live hwnd; surface test pattern (not HUD) for P1-T.
  */
 public final class PresentXFramePump extends Thread {
     private static final String TAG = "PresentXFramePump";
@@ -102,6 +106,13 @@ public final class PresentXFramePump extends Thread {
     private int lastAhbCpuAccess = -1;
     /** 0.1.85: once-log when forceGpu fires for ahbCpuAccess==0. */
     private boolean loggedAhbCpuAccess0Force;
+    /** 0.1.116 P0-Q: last live App xid so we can refuse a later empty-root present. */
+    private int latchedAppId;
+    private long latchedHwnd;
+    private ByteBuffer deskCanvas;
+    /** 0.1.116 P1-T: shader test pattern until uptime millis (0 = off). */
+    private volatile long surfaceTestUntilMs;
+    private ByteBuffer surfaceTestBuf;
     /** DXVK_HUD top band + bottom-left corner to ignore when sampling. */
     private static final int HUD_EXCLUDE_TOP = 64;
     private static final int HUD_EXCLUDE_BL_W = 180;
@@ -161,6 +172,12 @@ public final class PresentXFramePump extends Thread {
             return;
         }
 
+        // 0.1.116 P1-T: hold shader test pattern on the Present Surface, then auto-restore.
+        if (isSurfaceTestActive()) {
+            presentSurfaceTestPattern(frameIndex);
+            return;
+        }
+
         Drawable drawable = null;
         int width = DesktopLayout.WIDTH;
         int height = DesktopLayout.HEIGHT;
@@ -170,6 +187,8 @@ public final class PresentXFramePump extends Thread {
         int strideBytes = width * 4;
         int childId = 0;
         int kids = 0;
+        ByteBuffer deskSnapshot = null;
+        boolean liveAppFrame = false;
 
         try (XLock lock = xServer.lock(XServer.Lockable.WINDOW_MANAGER, XServer.Lockable.DRAWABLE_MANAGER)) {
             Window root = xServer.windowManager.rootWindow;
@@ -226,11 +245,70 @@ public final class PresentXFramePump extends Thread {
                 }
                 data = drawable.getData();
             }
+
+            // 0.1.116 P0-Q: after live App hwnd, composite the App window tree onto a
+            // 1280×720 BGRA canvas and drop empty root AHB (child=0x3 path=ahb_gpu).
+            liveAppFrame = lastHwnd != 0 && lastDesktopOnly == 0 && !isHelperClassName(lastWmClass);
+            if (!liveAppFrame && latchedAppId != 0) {
+                Window lw = xServer.windowManager.getWindow(latchedAppId);
+                if (lw != null && !isHelper(lw)) {
+                    Pick lp = pickFromWindow(lw);
+                    if (lp == null) lp = pickFromWindowAllowUnmapped(lw);
+                    if (lp != null) {
+                        drawable = lp.drawable;
+                        childId = lp.id;
+                        width = lp.width;
+                        height = lp.height;
+                        lastHwnd = hwndOf(lw);
+                        lastWmClass = classOf(lw);
+                        lastDesktopOnly = 0;
+                        lastMapState = mapStateName(lw);
+                        liveAppFrame = true;
+                    }
+                }
+            }
+            if (liveAppFrame && childId != 0) {
+                latchedAppId = childId;
+                latchedHwnd = lastHwnd;
+                Window appWin = xServer.windowManager.getWindow(childId);
+                deskSnapshot = obtainDeskCanvas();
+                blitWindowTree(appWin, deskSnapshot, DesktopLayout.WIDTH, DesktopLayout.HEIGHT);
+                ahbPtr = 0;
+                lastAhbCpuAccess = -1;
+                width = DesktopLayout.WIDTH;
+                height = DesktopLayout.HEIGHT;
+                strideBytes = width * 4;
+                data = deskSnapshot;
+            }
         }
 
         lastW = width;
         lastH = height;
         lastChildId = childId;
+
+        if (liveAppFrame && deskSnapshot != null) {
+            lastGuestSample = "bgra";
+            boolean black = isNearlyBlack(deskSnapshot, width, height, strideBytes);
+            if (!black) {
+                nonBlackHits++;
+                nonBlackGuestHits++;
+                noteGuestContent(true, frameIndex);
+            } else {
+                // P0-R: do not overlay presentHudBar after live hwnd.
+                noteGuestContent(false, frameIndex);
+            }
+            NativeEngine.nativePresentMarkPath("bgra");
+            int rc = NativeEngine.nativePresentBgra(deskSnapshot, width, height, strideBytes);
+            if (rc == 0) {
+                bgraHits++;
+                presentOk++;
+                emptyAfterReady = 0;
+            } else {
+                presentFail++;
+            }
+            maybeLog(frameIndex, kids);
+            return;
+        }
 
         // 0.1.66 P0: GPUImage keeps AHB permanently locked → presentAhbCpu double-lock
         // always fails. True CPU path = BGRA(virtualData).
@@ -288,7 +366,7 @@ public final class PresentXFramePump extends Thread {
                         noteGuestContent(true, frameIndex);
                     }
                 } else {
-                    presentHudBar(width, height, frameIndex);
+                    maybePresentHudBar(width, height, frameIndex);
                     noteGuestContent(false, frameIndex);
                 }
                 maybeLog(frameIndex, kids);
@@ -313,7 +391,7 @@ public final class PresentXFramePump extends Thread {
             } else {
                 // 0.1.66 P1: NEVER paint HUD into guest SHM (duplicate shares backing).
                 // Use independent hudScratch via presentHudBar instead.
-                if (presentHudBar(width, height, frameIndex)) {
+                if (maybePresentHudBar(width, height, frameIndex)) {
                     presentOk++;
                     emptyAfterReady = 0;
                     noteGuestContent(false, frameIndex);
@@ -358,7 +436,7 @@ public final class PresentXFramePump extends Thread {
         emptyAfterReady++;
         if (emptyAfterReady >= 60 || (kids > 0 && emptyAfterReady >= 15)) {
             // Prefer HUD bar over full stub rainbow when we have a size
-            if (presentHudBar(width > 1 ? width : DesktopLayout.WIDTH,
+            if (maybePresentHudBar(width > 1 ? width : DesktopLayout.WIDTH,
                     height > 1 ? height : DesktopLayout.HEIGHT, frameIndex)) {
                 stubHits++;
                 presentOk++;
@@ -377,6 +455,161 @@ public final class PresentXFramePump extends Thread {
             return;
         }
         maybeLog(frameIndex, kids);
+    }
+
+    /**
+     * 0.1.116 P0-R: HUD bar only when there is no live App hwnd.
+     * After live hwnd the 8px cyan/magenta bar must not steal the guest frame.
+     */
+    private boolean hudAllowed() {
+        return lastHwnd == 0 || lastDesktopOnly == 1 || isHelperClassName(lastWmClass);
+    }
+
+    private boolean maybePresentHudBar(int width, int height, int frameIndex) {
+        if (!hudAllowed()) return false;
+        return presentHudBar(width, height, frameIndex);
+    }
+
+    /** 0.1.116 P1-T: show a full-surface shader test pattern for durationMs, then auto-restore. */
+    public void showSurfaceTest(long durationMs) {
+        long now = android.os.SystemClock.uptimeMillis();
+        surfaceTestUntilMs = now + Math.max(0L, durationMs);
+        requestPulse();
+    }
+
+    public boolean isSurfaceTestActive() {
+        return surfaceTestUntilMs != 0 && android.os.SystemClock.uptimeMillis() < surfaceTestUntilMs;
+    }
+
+    /**
+     * Distinct full-frame test pattern (color bars + grid). Not presentHudBar.
+     * Pump holds this until {@link #surfaceTestUntilMs}, then resumes guest frames.
+     */
+    private void presentSurfaceTestPattern(int frameIndex) {
+        int width = DesktopLayout.WIDTH;
+        int height = DesktopLayout.HEIGHT;
+        int need = width * height * 4;
+        if (surfaceTestBuf == null || surfaceTestBuf.capacity() < need) {
+            surfaceTestBuf = ByteBuffer.allocateDirect(need);
+        }
+        surfaceTestBuf.clear();
+        // BGRA bars: blue, green, red, yellow, magenta, cyan, white, gray
+        int[] bars = {
+                0xFFFF0000, 0xFF00FF00, 0xFF0000FF, 0xFF00FFFF,
+                0xFFFF00FF, 0xFFFFFF00, 0xFFFFFFFF, 0xFF808080
+        };
+        byte[] row = new byte[width * 4];
+        int barW = Math.max(1, width / bars.length);
+        for (int x = 0; x < width; x++) {
+            int b = Math.min(x / barW, bars.length - 1);
+            int c = bars[b];
+            int i = x * 4;
+            row[i] = (byte) (c & 0xff);
+            row[i + 1] = (byte) ((c >>> 8) & 0xff);
+            row[i + 2] = (byte) ((c >>> 16) & 0xff);
+            row[i + 3] = (byte) 0xFF;
+        }
+        for (int y = 0; y < height; y++) {
+            if ((y & 16) == 0 && (y / 16) % 2 == 0) {
+                // light grid line every 32px
+                byte[] grid = row.clone();
+                for (int x = 0; x < width; x++) {
+                    if ((x & 31) == 0) {
+                        int i = x * 4;
+                        grid[i] = 0;
+                        grid[i + 1] = 0;
+                        grid[i + 2] = 0;
+                        grid[i + 3] = (byte) 0xFF;
+                    }
+                }
+                surfaceTestBuf.put(grid);
+            } else {
+                surfaceTestBuf.put(row);
+            }
+        }
+        surfaceTestBuf.flip();
+        NativeEngine.nativePresentMarkPath("surface_test");
+        int rc = NativeEngine.nativePresentBgra(surfaceTestBuf, width, height, width * 4);
+        if (rc == 0) {
+            presentOk++;
+            emptyAfterReady = 0;
+            lastW = width;
+            lastH = height;
+        }
+        if ((frameIndex % 15) == 0) {
+            logDiag(frameIndex, "surface_test remain=" + Math.max(0, surfaceTestUntilMs - android.os.SystemClock.uptimeMillis()) + "ms");
+        }
+    }
+
+    private ByteBuffer obtainDeskCanvas() {
+        int need = DesktopLayout.WIDTH * DesktopLayout.HEIGHT * 4;
+        if (deskCanvas == null || deskCanvas.capacity() < need) {
+            deskCanvas = ByteBuffer.allocateDirect(need);
+        }
+        deskCanvas.clear();
+        byte[] z = new byte[DesktopLayout.WIDTH * 4];
+        for (int y = 0; y < DesktopLayout.HEIGHT; y++) deskCanvas.put(z);
+        deskCanvas.rewind();
+        return deskCanvas;
+    }
+
+    private void blitWindowTree(Window w, ByteBuffer dest, int destW, int destH) {
+        if (w == null || dest == null) return;
+        try {
+            if (w.attributes != null && w.attributes.isMapped()) {
+                Drawable d = w.getContent();
+                if (d != null && d.getData() != null) {
+                    blitBgra(d.getData(), d.width & 0xffff, d.height & 0xffff,
+                            dest, destW, destH, w.getRootX(), w.getRootY());
+                }
+                java.util.List<Window> kids = w.getChildren();
+                if (kids != null) {
+                    for (Window c : kids) blitWindowTree(c, dest, destW, destH);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void blitBgra(ByteBuffer src, int srcW, int srcH,
+                                 ByteBuffer dst, int dstW, int dstH, int dstX, int dstY) {
+        if (src == null || dst == null || srcW <= 0 || srcH <= 0) return;
+        ByteBuffer s = src.duplicate();
+        int srcStride = srcW * 4;
+        int dstStride = dstW * 4;
+        for (int y = 0; y < srcH; y++) {
+            int dy = dstY + y;
+            if (dy < 0 || dy >= dstH) continue;
+            int sx0 = 0;
+            int dx0 = dstX;
+            int copyW = srcW;
+            if (dx0 < 0) {
+                sx0 = -dx0;
+                copyW -= sx0;
+                dx0 = 0;
+            }
+            if (dx0 + copyW > dstW) copyW = dstW - dx0;
+            if (copyW <= 0) continue;
+            int soff = y * srcStride + sx0 * 4;
+            int doff = dy * dstStride + dx0 * 4;
+            int bytes = copyW * 4;
+            if (soff < 0 || soff + bytes > s.capacity()) continue;
+            if (doff < 0 || doff + bytes > dst.capacity()) continue;
+            ByteBuffer slice = s.duplicate();
+            slice.position(soff);
+            slice.limit(soff + bytes);
+            dst.position(doff);
+            dst.put(slice);
+        }
+        dst.rewind();
+        src.rewind();
+    }
+
+    private static boolean isHelperClassName(String c) {
+        if (c == null || c.isEmpty() || "-".equals(c)) return false;
+        String s = c.toLowerCase();
+        return s.contains("rundll") || s.contains("wineboot") || s.contains("services.exe")
+                || s.contains("plugplay") || s.contains("explorer");
     }
 
     /** Bright 8px bar at top — proves ANativeWindow post works even if guest is black. */
@@ -1043,7 +1276,10 @@ public final class PresentXFramePump extends Thread {
                 + " ahbCpuAccess=" + lastAhbCpuAccess
                 + " x11_putimage=" + DrawRequests.putImageCount()
                 + " x11_copyarea=" + DrawRequests.copyAreaCount()
-                + " x11_shm_putimage=" + MITSHMExtension.shmPutImageCount();
+                + " x11_shm_putimage=" + MITSHMExtension.shmPutImageCount()
+                + " x11_render=" + RenderExtension.renderCount()
+                + " x11_putimage_all=" + DrawRequests.putImageAllCount()
+                + " x11_copyarea_all=" + DrawRequests.copyAreaAllCount();
     }
 
     public int presentOkCount() {

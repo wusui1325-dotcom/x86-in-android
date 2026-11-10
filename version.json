@@ -1,7 +1,7 @@
 {
   "minSdk": 28,
-  "versionName": "0.1.115",
-  "versionCode": 117,
-  "notes": "0.1.115: Dig114 FAIL — ncrypt+Loaded+HWND30s OK but WinRAR dialog exists while marker/Present hwnd forever 0 (stuck rundll32); 0× PutImage/CopyArea; status Present nest spam; present_black clear on mappedKids without hwnd; MAP_WAIT accepted rundll32 desk=0 @0ms; amd64 ladder silent 0× canary. Knives: (J) status metric never from status body; (K) HWND/xid fallback + exclude rundll32 + clear stale .x86-x11-ready + forceMap retarget; (L) host PutImage/CopyArea/SHM counters + Expose nudge for Wine GDI→Present; (M) guestPresented/present_black require hwnd≠0; (N) MAP_WAIT desk=1/explorer; (O) canary=skip reason=pe_amd64. KEEP ncrypt/Loaded/HWND30s/desk-split/GRAN_ALIGN/amd64_wow64/mmap32=0/NOEXEC. No soft Xvfb/hot/FF/Coolify. vc117.",
-  "tipSha": "acbd41c"
+  "versionName": "0.1.116",
+  "versionCode": 118,
+  "notes": "0.1.116: Dig115 visual FAIL — Loaded/HWND KEEP (hwnd=0x1c00001) but x11_putimage=copyarea=shm=0, Host X had no RENDER, Present early child=0x3 ahb_gpu empty root, presentHudBar 8px flash, logText dropped last pathStats, nonBlackGuest not visual success. Knives: (P) in-process RENDER / XRender Composite + x11_render= stamp (core blit 0 because Wine GDI prefers XRender; all-count kept); (Q) after live hwnd composite App tree onto 1280x720 BGRA, never post empty root AHB; (R) ban presentHudBar after live hwnd; (S) PRESENT_DIAG_LAST keeps last pathStats; (T) Surface test button — shader pattern 3s then restore, SURFACE_SHOT + SURFACE_TEST stamps, shot in workspace logs/. KEEP 115 J/K/M, desk=1, seeds, GRAN_ALIGN, amd64_wow64, mmap32=0, no argv/ladder/UX-touch/BSOD. No soft Xvfb/hot/FF/Coolify. vc118.",
+  "tipSha": ""
 }

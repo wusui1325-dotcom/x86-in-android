@@ -223,6 +223,18 @@ class SessionActivity : ComponentActivity() {
                             appendFile("wineboot-init.out", dataDir?.let { File(it, "wineboot-init.out") })
                             appendFile("box64-selftest.out", dataDir?.let { File(it, "box64-selftest.out") })
                             appendFile("wine-prereserve-probe.out", dataDir?.let { File(it, "wine-prereserve-probe.out") })
+                            os.write("\n===== surface-shot (P1-T, files stay in logs/) =====\n".toByteArray())
+                            val shotDir = ws?.dir?.let { File(it, "logs") }
+                            val shots = shotDir?.listFiles { f ->
+                                f.isFile && f.name.startsWith("surface-shot") && f.name.endsWith(".png")
+                            }
+                            if (shots.isNullOrEmpty()) {
+                                os.write("(none)\n".toByteArray())
+                            } else {
+                                shots.sortedBy { it.name }.forEach { f ->
+                                    os.write("path=${f.absolutePath} size=${f.length()}\n".toByteArray())
+                                }
+                            }
                         }
                         val uri = FileProvider.getUriForFile(
                             this@SessionActivity,
@@ -293,6 +305,111 @@ class SessionActivity : ComponentActivity() {
                     logText += l
                 }
                 val surfaceHolderRef = remember { AtomicReference<SurfaceHolder?>(null) }
+                fun upsertStickyLastDiag(stats: String) {
+                    val l = "PRESENT_DIAG_LAST $stats\n"
+                    val re = Regex("(?m)^PRESENT_DIAG_LAST .*\n?")
+                    uiStickyLog = if (uiStickyLog.contains("PRESENT_DIAG_LAST ")) {
+                        uiStickyLog.replace(re, l)
+                    } else {
+                        uiStickyLog + l
+                    }
+                    logText = if (logText.contains("PRESENT_DIAG_LAST ")) {
+                        logText.replace(re, l)
+                    } else {
+                        logText + l
+                    }
+                }
+                var surfaceTestBusy by remember { mutableStateOf(false) }
+                fun captureSurfaceShot(): Triple<File, Int, Int>? {
+                    val holder = surfaceHolderRef.get() ?: return null
+                    val surface = holder.surface ?: return null
+                    if (!surface.isValid) return null
+                    val frame = holder.surfaceFrame
+                    val w = frame.width().coerceAtLeast(1)
+                    val h = frame.height().coerceAtLeast(1)
+                    val bmp = android.graphics.Bitmap.createBitmap(
+                        w, h, android.graphics.Bitmap.Config.ARGB_8888,
+                    )
+                    val latch = java.util.concurrent.CountDownLatch(1)
+                    val rcBox = intArrayOf(-1)
+                    try {
+                        android.view.PixelCopy.request(
+                            surface,
+                            bmp,
+                            { rc ->
+                                rcBox[0] = rc
+                                latch.countDown()
+                            },
+                            android.os.Handler(android.os.Looper.getMainLooper()),
+                        )
+                    } catch (t: Throwable) {
+                        bmp.recycle()
+                        android.util.Log.e("SessionActivity", "PixelCopy.request", t)
+                        return null
+                    }
+                    if (!latch.await(3, java.util.concurrent.TimeUnit.SECONDS)) {
+                        bmp.recycle()
+                        return null
+                    }
+                    if (rcBox[0] != android.view.PixelCopy.SUCCESS) {
+                        bmp.recycle()
+                        return null
+                    }
+                    val ts = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                        .format(java.util.Date())
+                    val logsDir = (ws?.dir?.let { File(it, "logs") } ?: File(filesDir, "logs"))
+                        .also { it.mkdirs() }
+                    val out = File(logsDir, "surface-shot-$ts.png")
+                    out.outputStream().use { os ->
+                        bmp.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, os)
+                    }
+                    try {
+                        val exp = File(cacheDir, "log-export").also { it.mkdirs() }
+                        out.copyTo(File(exp, out.name), overwrite = true)
+                    } catch (_: Throwable) {
+                    }
+                    bmp.recycle()
+                    return Triple(out, w, h)
+                }
+                fun runSurfaceTest() {
+                    if (surfaceTestBusy) return
+                    surfaceTestBusy = true
+                    scope.launch {
+                        val t0 = android.os.SystemClock.uptimeMillis()
+                        var shotPath = "-"
+                        var shotSize = 0L
+                        try {
+                            val pump = inProcessX?.framePump
+                            if (pump == null || !NativeEngine.nativePresentReady()) {
+                                appendSticky("SURFACE_SHOT path=- size=0 fail=no_surface")
+                                appendSticky("SURFACE_TEST show→hide dt=0 path=- size=0 fail=no_surface")
+                                return@launch
+                            }
+                            pump.showSurfaceTest(3000L)
+                            delay(280)
+                            val shot = withContext(Dispatchers.IO) { captureSurfaceShot() }
+                            if (shot != null) {
+                                val (f, w, h) = shot
+                                shotPath = f.absolutePath
+                                shotSize = f.length()
+                                appendSticky("SURFACE_SHOT path=$shotPath size=$shotSize ${w}x${h} during=test_pattern")
+                            } else {
+                                appendSticky("SURFACE_SHOT path=- size=0 fail=pixelcopy")
+                            }
+                            val remain = 3000L - (android.os.SystemClock.uptimeMillis() - t0)
+                            if (remain > 0) delay(remain)
+                            delay(40)
+                            val dt = android.os.SystemClock.uptimeMillis() - t0
+                            appendSticky("SURFACE_TEST show→hide dt=$dt path=$shotPath size=$shotSize")
+                        } catch (t: Throwable) {
+                            android.util.Log.e("SessionActivity", "runSurfaceTest", t)
+                            val dt = android.os.SystemClock.uptimeMillis() - t0
+                            appendSticky("SURFACE_TEST show→hide dt=$dt path=$shotPath size=$shotSize fail=${t.message}")
+                        } finally {
+                            surfaceTestBusy = false
+                        }
+                    }
+                }
                 val inputBridgeRef = remember { AtomicReference<X11InputBridge?>(null) }
                 val inProcessInputRef = remember { AtomicReference<InProcessXInput?>(null) }
 
@@ -798,13 +915,16 @@ class SessionActivity : ComponentActivity() {
                         if (!runningNow) break
                         val stats = try { x.pathStats() } catch (_: Throwable) { "pathStats-error" }
                         val line = "PRESENT_DIAG $stats"
-                        if (line != lastPresentDiag && presentDiagLines < 15) {
+                        // 0.1.116 P1-S: keep first 14 unique DIAG lines AND always
+                        // upsert PRESENT_DIAG_LAST with the latest full pathStats.
+                        if (line != lastPresentDiag && presentDiagLines < 14) {
                             lastPresentDiag = line
                             presentDiagLines++
                             appendSticky(line)
                         } else if (line != lastPresentDiag) {
                             lastPresentDiag = line
                         }
+                        upsertStickyLastDiag(stats)
                         // 0.1.64: ready=true means window_ attached; only then honor presentOk
                         // 0.1.90: do NOT clear overlay on explorer desktopOnly (masks missing-Loaded)
                         // 0.1.93: require nonBlackGuest>0 OR strict Loaded fingerprint
@@ -1033,6 +1153,12 @@ class SessionActivity : ComponentActivity() {
                                 }
                             },
                             actions = {
+                                TextButton(
+                                    onClick = { runSurfaceTest() },
+                                    enabled = !surfaceTestBusy,
+                                ) {
+                                    Text(getString(com.wusper.x86.R.string.btn_surface_test))
+                                }
                                 IconButton(onClick = { menuExpanded = true }) {
                                     Icon(
                                         Icons.Default.MoreVert,
@@ -1478,6 +1604,10 @@ class SessionActivity : ComponentActivity() {
             "WINE_EXIT=",
             "WINE_START",
             "PRESENT_DIAG",
+            "PRESENT_DIAG_LAST",
+            "SURFACE_SHOT",
+            "SURFACE_TEST",
+            "x11_render",
             "guestPresented",
             "stub-fallback",
             "APP_LOAD",

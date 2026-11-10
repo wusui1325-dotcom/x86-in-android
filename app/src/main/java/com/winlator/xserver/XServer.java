@@ -12,6 +12,7 @@ import com.winlator.xserver.extensions.GLXExtension;
 import com.winlator.xserver.extensions.GenericEventExtension;
 import com.winlator.xserver.extensions.MITSHMExtension;
 import com.winlator.xserver.extensions.PresentExtension;
+import com.winlator.xserver.extensions.RenderExtension;
 import com.winlator.xserver.extensions.SyncExtension;
 import com.winlator.xserver.extensions.XComposite;
 import com.winlator.xserver.extensions.XInputExtension;
@@ -206,7 +207,9 @@ public class XServer {
             new XComposite(this, opcode--),
             new GLXExtension(this, opcode--),
             new GenericEventExtension(this, opcode--),
-            new XInputExtension(this, opcode--)
+            new XInputExtension(this, opcode--),
+            // 0.1.116 P0-P: RENDER must be last so existing opcodes keep their index.
+            new RenderExtension(this, opcode--)
         };
 
         short nextEventId = 64;
